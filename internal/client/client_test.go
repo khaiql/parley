@@ -135,6 +135,64 @@ func TestClientSendsAndReceives(t *testing.T) {
 	}
 }
 
+// TestClientConcurrentClose verifies that calling Close() from two goroutines
+// simultaneously does not panic.
+func TestClientConcurrentClose(t *testing.T) {
+	srv, err := server.New("127.0.0.1:0", "test-room")
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	defer srv.Close()
+	go srv.Serve()
+
+	c, err := client.New(srv.Addr())
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	// Call Close() concurrently from two goroutines — must not panic.
+	done := make(chan struct{})
+	go func() {
+		c.Close()
+		close(done)
+	}()
+	c.Close()
+	<-done
+}
+
+// TestClientIncomingClosesAfterDisconnect verifies that ranging over Incoming()
+// terminates (does not hang) after Close() is called.
+func TestClientIncomingClosesAfterDisconnect(t *testing.T) {
+	srv, err := server.New("127.0.0.1:0", "test-room")
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	defer srv.Close()
+	go srv.Serve()
+
+	c, err := client.New(srv.Addr())
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	rangeFinished := make(chan struct{})
+	go func() {
+		// range should unblock once incoming is closed.
+		for range c.Incoming() {
+		}
+		close(rangeFinished)
+	}()
+
+	c.Close()
+
+	select {
+	case <-rangeFinished:
+		// success — range terminated
+	case <-time.After(3 * time.Second):
+		t.Fatal("range c.Incoming() did not terminate after Close()")
+	}
+}
+
 // methodsOf extracts method names from a slice of RawMessages for error output.
 func methodsOf(msgs []*protocol.RawMessage) []string {
 	out := make([]string, len(msgs))

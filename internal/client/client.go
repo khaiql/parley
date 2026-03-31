@@ -4,15 +4,17 @@ package client
 import (
 	"bufio"
 	"net"
+	"sync"
 
 	"github.com/khaiql/parley/internal/protocol"
 )
 
 // Client manages a single TCP connection to a Parley server.
 type Client struct {
-	conn     net.Conn
-	incoming chan *protocol.RawMessage
-	done     chan struct{}
+	conn      net.Conn
+	incoming  chan *protocol.RawMessage
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // New dials the server at addr, starts the read loop goroutine, and returns
@@ -63,20 +65,18 @@ func (c *Client) Send(content protocol.Content, mentions []string) error {
 }
 
 // Close signals the read loop to stop and closes the underlying connection.
+// It is safe to call Close concurrently or more than once.
 func (c *Client) Close() error {
-	select {
-	case <-c.done:
-		// already closed
-	default:
-		close(c.done)
-	}
+	c.closeOnce.Do(func() { close(c.done) })
 	return c.conn.Close()
 }
 
 // readLoop reads NDJSON lines from the connection, decodes each as a RawMessage,
 // and sends it to the incoming channel. It exits when the connection is closed
-// or the done channel is closed.
+// or the done channel is closed. It closes the incoming channel on exit so that
+// consumers using range will unblock.
 func (c *Client) readLoop() {
+	defer close(c.incoming)
 	sc := bufio.NewScanner(c.conn)
 	for sc.Scan() {
 		line := sc.Bytes()
