@@ -89,7 +89,11 @@ func (s Sidebar) View() string {
 
 		// Show per-participant status when non-empty.
 		if status := s.statuses[p.Name]; status != "" {
-			lines = append(lines, participantStatusStyle.Render("  "+status))
+			if status == "listening" {
+				lines = append(lines, listeningStatusStyle.Render("  👂 listening"))
+			} else {
+				lines = append(lines, participantStatusStyle.Render("  "+status))
+			}
 		}
 
 		if p.AgentType != "" {

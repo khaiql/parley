@@ -61,4 +61,8 @@ var (
 	participantStatusStyle = lipgloss.NewStyle().
 				Foreground(colorSystem).
 				Italic(true)
+
+	listeningStatusStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#3fb950")).
+				Italic(true)
 )

@@ -145,6 +145,18 @@ func TestSidebarViewShowsStatus(t *testing.T) {
 	}
 }
 
+func TestSidebarViewListeningStatus(t *testing.T) {
+	s := NewSidebar()
+	s.SetSize(30, 20)
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent"})
+	s.SetParticipantStatus("bot1", "listening")
+
+	view := s.View()
+	if !contains(view, "listening") {
+		t.Errorf("sidebar view should contain 'listening' status, got: %q", view)
+	}
+}
+
 func TestSidebarViewNoStatusForIdle(t *testing.T) {
 	s := NewSidebar()
 	s.SetSize(30, 20)

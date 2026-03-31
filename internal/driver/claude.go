@@ -307,10 +307,23 @@ func BuildSystemPrompt(config AgentConfig) string {
 - If unsure whether to respond, default to staying silent
 - Keep responses focused and concise — this is a chat, not a monologue
 - You can @-mention other participants to ask them questions
+- If you decide not to respond to a message, output exactly [LISTENING] on a line by itself and nothing else
 
 When you respond, just write your message directly. Do not prefix it with your name.`)
 
 	return sb.String()
+}
+
+// ---------------------------------------------------------------------------
+// IsListeningSignal
+// ---------------------------------------------------------------------------
+
+// IsListeningSignal reports whether the agent's accumulated response text
+// should be treated as a silence signal rather than a chat message.
+// An agent outputs exactly "[LISTENING]" (on its own, possibly surrounded by
+// whitespace) when it decides not to respond to a message.
+func IsListeningSignal(text string) bool {
+	return strings.TrimSpace(text) == "[LISTENING]"
 }
 
 // ---------------------------------------------------------------------------
