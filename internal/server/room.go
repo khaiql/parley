@@ -144,6 +144,29 @@ func (r *Room) BroadcastJoined(jp protocol.JoinedParams) {
 	}
 }
 
+// BroadcastStatus sends a room.status notification to all participants except
+// the sender (identified by sp.Name).
+func (r *Room) BroadcastStatus(sp protocol.StatusParams) {
+	notif := protocol.NewNotification("room.status", sp)
+	data, _ := protocol.EncodeLine(notif)
+
+	r.mu.RLock()
+	targets := make([]chan []byte, 0, len(r.Participants))
+	for name, cc := range r.Participants {
+		if name != sp.Name {
+			targets = append(targets, cc.Send)
+		}
+	}
+	r.mu.RUnlock()
+
+	for _, ch := range targets {
+		select {
+		case ch <- data:
+		default:
+		}
+	}
+}
+
 // BroadcastLeft sends a room.left notification to all remaining participants.
 func (r *Room) BroadcastLeft(lp protocol.LeftParams) {
 	notif := protocol.NewNotification("room.left", lp)

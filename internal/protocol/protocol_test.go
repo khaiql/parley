@@ -142,6 +142,58 @@ func TestParseMentions_ExtractsAtMentions(t *testing.T) {
 	}
 }
 
+func TestStatusParamsEncodeDecodeRoundTrip(t *testing.T) {
+	params := protocol.StatusParams{
+		Name:   "bot1",
+		Status: "thinking…",
+	}
+
+	n := protocol.NewNotification("room.status", params)
+	data, err := protocol.EncodeLine(n)
+	if err != nil {
+		t.Fatalf("EncodeLine error: %v", err)
+	}
+
+	msg, err := protocol.DecodeLine(data)
+	if err != nil {
+		t.Fatalf("DecodeLine error: %v", err)
+	}
+	if msg.Method != "room.status" {
+		t.Errorf("method mismatch: got %q", msg.Method)
+	}
+
+	var decoded protocol.StatusParams
+	if err := json.Unmarshal(msg.Params, &decoded); err != nil {
+		t.Fatalf("Unmarshal StatusParams error: %v", err)
+	}
+	if decoded.Name != "bot1" {
+		t.Errorf("Name mismatch: got %q", decoded.Name)
+	}
+	if decoded.Status != "thinking…" {
+		t.Errorf("Status mismatch: got %q", decoded.Status)
+	}
+}
+
+func TestStatusParamsEmptyStatus(t *testing.T) {
+	params := protocol.StatusParams{Name: "bot1", Status: ""}
+	n := protocol.NewNotification("room.status", params)
+	data, err := protocol.EncodeLine(n)
+	if err != nil {
+		t.Fatalf("EncodeLine error: %v", err)
+	}
+	msg, err := protocol.DecodeLine(data)
+	if err != nil {
+		t.Fatalf("DecodeLine error: %v", err)
+	}
+	var decoded protocol.StatusParams
+	if err := json.Unmarshal(msg.Params, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if decoded.Status != "" {
+		t.Errorf("expected empty status, got %q", decoded.Status)
+	}
+}
+
 func TestJoinParamsEncodeDecodeRoundTrip(t *testing.T) {
 	params := protocol.JoinParams{
 		Name:      "agent-x",

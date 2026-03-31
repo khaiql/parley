@@ -22,23 +22,7 @@ func TestInputAgentMode_EmptyShowsWaiting(t *testing.T) {
 
 // TestInputAgentMode_StatusTakesPriority verifies that a status message is shown
 // when both agentStatus and agentText are set.
-func TestInputAgentMode_StatusTakesPriority(t *testing.T) {
-	inp := NewInput()
-	inp.SetMode(InputModeAgent)
-	inp.SetWidth(80)
-	inp.SetAgentText("some streaming text")
-	inp.SetAgentStatus("thinking...")
-
-	view := inp.View()
-	plain := stripANSI(view)
-
-	if !strings.Contains(plain, "thinking...") {
-		t.Errorf("expected status 'thinking...' in view, got:\n%s", plain)
-	}
-	if strings.Contains(plain, "some streaming text") {
-		t.Errorf("streaming text should NOT appear when status is set, got:\n%s", plain)
-	}
-}
+// Status display moved to sidebar (issue #4) — no status tests in input
 
 // TestInputAgentMode_LongTextWraps verifies that text longer than the input
 // width is wrapped so that no rendered line exceeds the total width.
@@ -104,22 +88,4 @@ func TestInputHumanMode_PlaceholderVisible(t *testing.T) {
 	}
 }
 
-// TestInputAgentMode_SetAgentTextClearsStatus verifies that calling SetAgentText
-// with a non-empty value clears the status.
-func TestInputAgentMode_SetAgentTextClearsStatus(t *testing.T) {
-	inp := NewInput()
-	inp.SetMode(InputModeAgent)
-	inp.SetWidth(80)
-	inp.SetAgentStatus("thinking...")
-	inp.SetAgentText("new text")
-
-	view := inp.View()
-	plain := stripANSI(view)
-
-	if strings.Contains(plain, "thinking...") {
-		t.Errorf("status should be cleared after SetAgentText with text, got:\n%s", plain)
-	}
-	if !strings.Contains(plain, "new text") {
-		t.Errorf("expected 'new text' in view, got:\n%s", plain)
-	}
-}
+// SetAgentTextClearsStatus test removed — status moved to sidebar (issue #4)

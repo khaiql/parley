@@ -106,6 +106,58 @@ func TestSidebarViewSmallWidth(t *testing.T) {
 	_ = s.View()
 }
 
+func TestSidebarSetParticipantStatus(t *testing.T) {
+	s := NewSidebar()
+	s.AddParticipant(protocol.Participant{Name: "alice", Role: "human"})
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder"})
+
+	s.SetParticipantStatus("bot1", "thinking…")
+
+	if s.statuses["bot1"] != "thinking…" {
+		t.Errorf("expected status 'thinking…' for bot1, got %q", s.statuses["bot1"])
+	}
+	// Alice's status should be unaffected
+	if s.statuses["alice"] != "" {
+		t.Errorf("expected empty status for alice, got %q", s.statuses["alice"])
+	}
+}
+
+func TestSidebarSetParticipantStatusClear(t *testing.T) {
+	s := NewSidebar()
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder"})
+	s.SetParticipantStatus("bot1", "thinking…")
+	s.SetParticipantStatus("bot1", "")
+
+	if s.statuses["bot1"] != "" {
+		t.Errorf("expected empty status after clear, got %q", s.statuses["bot1"])
+	}
+}
+
+func TestSidebarViewShowsStatus(t *testing.T) {
+	s := NewSidebar()
+	s.SetSize(30, 20)
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent"})
+	s.SetParticipantStatus("bot1", "thinking…")
+
+	view := s.View()
+	if !contains(view, "thinking…") {
+		t.Errorf("sidebar view should contain status 'thinking…', got: %q", view)
+	}
+}
+
+func TestSidebarViewNoStatusForIdle(t *testing.T) {
+	s := NewSidebar()
+	s.SetSize(30, 20)
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent"})
+	// No status set — idle
+
+	view := s.View()
+	// Should not contain any status indicator
+	if contains(view, "thinking") || contains(view, "using") {
+		t.Errorf("sidebar view should not show status for idle participant, got: %q", view)
+	}
+}
+
 func TestSidebarViewContainsNames(t *testing.T) {
 	s := NewSidebar()
 	s.SetSize(30, 20)

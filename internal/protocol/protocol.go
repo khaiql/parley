@@ -101,6 +101,14 @@ type LeftParams struct {
 	Name string `json:"name"`
 }
 
+// StatusParams is the params payload for a "room.status" notification.
+// Status is a short description of what the participant is doing, e.g.
+// "thinking…", "using: Read", or "" to indicate idle.
+type StatusParams struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
 // Participant describes a single participant in a room.
 type Participant struct {
 	Name      string `json:"name"`

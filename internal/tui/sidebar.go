@@ -10,13 +10,14 @@ import (
 // Sidebar renders the participant list panel.
 type Sidebar struct {
 	participants []protocol.Participant
+	statuses     map[string]string // per-participant status text
 	width        int
 	height       int
 }
 
 // NewSidebar creates an empty Sidebar.
 func NewSidebar() Sidebar {
-	return Sidebar{}
+	return Sidebar{statuses: make(map[string]string)}
 }
 
 // SetSize updates the sidebar dimensions.
@@ -40,6 +41,15 @@ func (s *Sidebar) AddParticipant(p protocol.Participant) {
 		}
 	}
 	s.participants = append(s.participants, p)
+}
+
+// SetParticipantStatus updates the activity status for a named participant.
+// An empty status string means the participant is idle (nothing is shown).
+func (s *Sidebar) SetParticipantStatus(name, status string) {
+	if s.statuses == nil {
+		s.statuses = make(map[string]string)
+	}
+	s.statuses[name] = status
 }
 
 // RemoveParticipant removes a participant by name.
@@ -76,6 +86,11 @@ func (s Sidebar) View() string {
 			nameLine = lipgloss.JoinHorizontal(lipgloss.Top, nameLine, " ", badge)
 		}
 		lines = append(lines, nameLine)
+
+		// Show per-participant status when non-empty.
+		if status := s.statuses[p.Name]; status != "" {
+			lines = append(lines, participantStatusStyle.Render("  "+status))
+		}
 
 		if p.AgentType != "" {
 			lines = append(lines, systemMsgStyle.Render("  "+p.AgentType))

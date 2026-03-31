@@ -135,6 +135,65 @@ func TestClientSendsAndReceives(t *testing.T) {
 	}
 }
 
+// TestClientSendStatus verifies that sending a room.status notification results
+// in other participants receiving it.
+func TestClientSendStatus(t *testing.T) {
+	srv, err := server.New("127.0.0.1:0", "test-room")
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	defer srv.Close()
+	go srv.Serve()
+
+	addr := srv.Addr()
+
+	// Connect alice.
+	alice, err := client.New(addr)
+	if err != nil {
+		t.Fatalf("client.New alice: %v", err)
+	}
+	defer alice.Close()
+	if err := alice.Join(protocol.JoinParams{Name: "alice", Role: "human"}); err != nil {
+		t.Fatalf("alice.Join: %v", err)
+	}
+	drain(alice.Incoming(), 1) // consume room.state
+
+	// Connect bot.
+	bot, err := client.New(addr)
+	if err != nil {
+		t.Fatalf("client.New bot: %v", err)
+	}
+	defer bot.Close()
+	if err := bot.Join(protocol.JoinParams{Name: "bot", Role: "agent", AgentType: "claude"}); err != nil {
+		t.Fatalf("bot.Join: %v", err)
+	}
+	drain(bot.Incoming(), 1) // consume room.state
+
+	// Bot sends a status update.
+	if err := bot.SendStatus("bot", "thinking…"); err != nil {
+		t.Fatalf("bot.SendStatus: %v", err)
+	}
+
+	// Alice should receive a room.status notification.
+	msgs := drain(alice.Incoming(), 5) // allow for join notifications too
+	found := false
+	for _, m := range msgs {
+		if m.Method == "room.status" {
+			var params protocol.StatusParams
+			if err := json.Unmarshal(m.Params, &params); err != nil {
+				t.Fatalf("unmarshal room.status params: %v", err)
+			}
+			if params.Name == "bot" && params.Status == "thinking…" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Errorf("alice did not receive bot's status; got methods: %v", methodsOf(msgs))
+	}
+}
+
 // TestClientConcurrentClose verifies that calling Close() from two goroutines
 // simultaneously does not panic.
 func TestClientConcurrentClose(t *testing.T) {

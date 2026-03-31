@@ -57,4 +57,8 @@ var (
 
 	timestampStyle = lipgloss.NewStyle().
 			Foreground(colorDimText)
+
+	participantStatusStyle = lipgloss.NewStyle().
+				Foreground(colorSystem).
+				Italic(true)
 )

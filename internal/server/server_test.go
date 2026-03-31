@@ -231,6 +231,79 @@ func TestDuplicateNameRejected(t *testing.T) {
 	}
 }
 
+// TestServerBroadcastsRoomStatus verifies that when one client sends room.status,
+// the other client receives a room.status notification.
+func TestServerBroadcastsRoomStatus(t *testing.T) {
+	s := newTestServer(t)
+
+	// Connect alice
+	connAlice := dialServer(t, s.Addr())
+	scAlice := newScanner(connAlice)
+
+	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name: "alice",
+		Role: "user",
+	}))
+	readLine(t, scAlice) // consume room.state
+
+	// Connect bot1
+	connBot := dialServer(t, s.Addr())
+	scBot := newScanner(connBot)
+
+	sendLine(t, connBot, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name:      "bot1",
+		Role:      "agent",
+		AgentType: "claude",
+	}))
+	readLine(t, scBot) // consume room.state for bot1
+
+	// Give the server time to deliver join notifications to alice.
+	time.Sleep(50 * time.Millisecond)
+
+	// Bot sends room.status
+	sendLine(t, connBot, protocol.NewNotification("room.status", protocol.StatusParams{
+		Name:   "bot1",
+		Status: "thinking…",
+	}))
+
+	// Alice should eventually receive a room.status notification.
+	// She may first receive room.joined and system messages from bot joining.
+	deadline := time.Now().Add(2 * time.Second)
+	var foundStatus *protocol.StatusParams
+	for time.Now().Before(deadline) {
+		connAlice.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		if !scAlice.Scan() {
+			break
+		}
+		connAlice.SetReadDeadline(time.Time{})
+
+		var raw protocol.RawMessage
+		if err := json.Unmarshal(scAlice.Bytes(), &raw); err != nil {
+			continue
+		}
+		if raw.Method != "room.status" {
+			continue
+		}
+		var sp protocol.StatusParams
+		if err := json.Unmarshal(raw.Params, &sp); err != nil {
+			continue
+		}
+		foundStatus = &sp
+		break
+	}
+	connAlice.SetReadDeadline(time.Time{})
+
+	if foundStatus == nil {
+		t.Fatal("alice never received room.status notification from bot1")
+	}
+	if foundStatus.Name != "bot1" {
+		t.Errorf("expected status Name %q, got %q", "bot1", foundStatus.Name)
+	}
+	if foundStatus.Status != "thinking…" {
+		t.Errorf("expected status %q, got %q", "thinking…", foundStatus.Status)
+	}
+}
+
 // TestRoomLeftBroadcast verifies that when B disconnects, A receives a
 // room.left notification with B's name.
 func TestRoomLeftBroadcast(t *testing.T) {

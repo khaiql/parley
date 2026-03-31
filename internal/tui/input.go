@@ -21,11 +21,10 @@ const (
 
 // Input is the bottom input component.
 type Input struct {
-	ta          textarea.Model
-	mode        InputMode
-	agentText   string
-	agentStatus string
-	width       int
+	ta        textarea.Model
+	mode      InputMode
+	agentText string
+	width     int
 }
 
 // NewInput creates an Input component in human mode.
@@ -56,18 +55,8 @@ func (i *Input) SetMode(m InputMode) {
 }
 
 // SetAgentText updates the streaming text shown in agent mode.
-// Setting text also clears the status indicator.
 func (i *Input) SetAgentText(text string) {
 	i.agentText = text
-	if text != "" {
-		i.agentStatus = ""
-	}
-}
-
-// SetAgentStatus sets an activity status message (e.g. "thinking...",
-// "using tool: Read"). Takes priority over streaming text.
-func (i *Input) SetAgentStatus(status string) {
-	i.agentStatus = status
 }
 
 // Value returns the current textarea content (human mode only).
@@ -107,15 +96,10 @@ func (i Input) View() string {
 	cw := i.contentWidth()
 	switch i.mode {
 	case InputModeAgent:
-		if i.agentStatus != "" {
-			// Status (thinking, tool use) takes priority — shows what agent is doing
-			content = systemMsgStyle.Width(cw).Render(i.agentStatus)
-		} else if i.agentText != "" {
-			// Wrap the streaming text to the content width, then show the last
-			// visible line(s) with a blinking cursor indicator at the end.
+		if i.agentText != "" {
+			// Wrap the streaming text to the content width, then show the last line
 			wrapped := lipgloss.NewStyle().Width(cw).Render(i.agentText)
 			lines := strings.Split(wrapped, "\n")
-			// Keep only the last line for the single-row input display.
 			lastLine := lines[len(lines)-1]
 			content = lipgloss.NewStyle().Foreground(colorAgent).Render(lastLine) +
 				systemMsgStyle.Render(" ▊")

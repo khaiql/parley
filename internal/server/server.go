@@ -155,6 +155,18 @@ func (s *Server) handleConn(conn net.Conn) {
 				continue
 			}
 			s.room.Broadcast(cc.Name, cc.Source, cc.Role, params.Content[0], params.Mentions)
+
+		case "room.status":
+			if cc == nil {
+				continue
+			}
+			var params protocol.StatusParams
+			if err := json.Unmarshal(raw.Params, &params); err != nil {
+				continue
+			}
+			// Override name with the authenticated connection name for safety.
+			params.Name = cc.Name
+			s.room.BroadcastStatus(params)
 		}
 	}
 
