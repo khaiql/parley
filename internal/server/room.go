@@ -38,7 +38,8 @@ func NewRoom(topic string) *Room {
 	}
 }
 
-// Join adds cc to the room and returns a snapshot of the current room state.
+// Join adds cc to the room and returns a snapshot of the current room state,
+// including recent message history (up to 50 messages).
 // If cc.Send or cc.Done are nil they are initialized here.
 // Returns an error if a participant with the same name already exists.
 func (r *Room) Join(cc *ClientConn) (protocol.RoomStateParams, error) {
@@ -57,12 +58,35 @@ func (r *Room) Join(cc *ClientConn) (protocol.RoomStateParams, error) {
 	r.Participants[cc.Name] = cc
 	participants := r.snapshot()
 	topic := r.Topic
+	recent := r.recentMessages(50)
 	r.mu.Unlock()
 
 	return protocol.RoomStateParams{
 		Topic:        topic,
 		Participants: participants,
+		Messages:     recent,
 	}, nil
+}
+
+// recentMessages returns up to n most recent messages. Must be called with r.mu held.
+func (r *Room) recentMessages(n int) []protocol.MessageParams {
+	msgs := r.Messages
+	if len(msgs) > n {
+		msgs = msgs[len(msgs)-n:]
+	}
+	if len(msgs) == 0 {
+		return nil
+	}
+	out := make([]protocol.MessageParams, len(msgs))
+	copy(out, msgs)
+	return out
+}
+
+// RecentMessages returns a copy of the last n messages, safe for concurrent use.
+func (r *Room) RecentMessages(n int) []protocol.MessageParams {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.recentMessages(n)
 }
 
 // Leave removes the named participant from the room and closes their Done channel.

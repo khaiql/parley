@@ -157,6 +157,37 @@ func TestHandleServerMsg_RoomStatusClear_ClearsSidebarStatus(t *testing.T) {
 	}
 }
 
+func TestHandleServerMsg_RoomState_ReplayesMessageHistory(t *testing.T) {
+	a := makeApp()
+
+	state := protocol.RoomStateParams{
+		Topic: "test-topic",
+		Participants: []protocol.Participant{
+			{Name: "alice", Role: "human"},
+		},
+		Messages: []protocol.MessageParams{
+			{ID: "msg-1", From: "alice", Role: "human", Content: []protocol.Content{{Type: "text", Text: "hello"}}},
+			{ID: "msg-2", From: "alice", Role: "human", Content: []protocol.Content{{Type: "text", Text: "world"}}},
+		},
+	}
+	raw := &protocol.RawMessage{
+		Method: "room.state",
+		Params: rawParams(t, state),
+	}
+
+	a.handleServerMsg(raw)
+
+	if len(a.chat.messages) != 2 {
+		t.Fatalf("expected 2 messages in chat after history replay, got %d", len(a.chat.messages))
+	}
+	if a.chat.messages[0].From != "alice" {
+		t.Errorf("unexpected first message From: %s", a.chat.messages[0].From)
+	}
+	if a.chat.messages[1].Content[0].Text != "world" {
+		t.Errorf("unexpected second message text: %s", a.chat.messages[1].Content[0].Text)
+	}
+}
+
 func TestHandleServerMsg_NilRaw_NoOp(t *testing.T) {
 	a := makeApp()
 	// Should not panic.

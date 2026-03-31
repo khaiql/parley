@@ -3,6 +3,7 @@ package server_test
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -301,6 +302,128 @@ func TestServerBroadcastsRoomStatus(t *testing.T) {
 	}
 	if foundStatus.Status != "thinking…" {
 		t.Errorf("expected status %q, got %q", "thinking…", foundStatus.Status)
+	}
+}
+
+// TestJoinReceivesMessageHistory verifies that when a client joins after
+// messages have been sent, the room.state includes those messages.
+func TestJoinReceivesMessageHistory(t *testing.T) {
+	s := newTestServer(t)
+
+	// Connect alice and send 5 messages.
+	connAlice := dialServer(t, s.Addr())
+	scAlice := newScanner(connAlice)
+
+	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name: "alice",
+		Role: "user",
+	}))
+	readLine(t, scAlice) // consume room.state
+
+	for i := 0; i < 5; i++ {
+		sendLine(t, connAlice, protocol.NewNotification("room.send", protocol.SendParams{
+			Content: []protocol.Content{{Type: "text", Text: fmt.Sprintf("message %d", i+1)}},
+		}))
+	}
+
+	// Give the server time to process the messages.
+	time.Sleep(100 * time.Millisecond)
+
+	// Connect bob (new joiner).
+	connBob := dialServer(t, s.Addr())
+	scBob := newScanner(connBob)
+
+	sendLine(t, connBob, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name: "bob",
+		Role: "user",
+	}))
+
+	// Bob should receive room.state with the message history.
+	connBob.SetReadDeadline(time.Now().Add(2 * time.Second))
+	line := readLine(t, scBob)
+	connBob.SetReadDeadline(time.Time{})
+
+	var raw protocol.RawMessage
+	if err := json.Unmarshal(line, &raw); err != nil {
+		t.Fatalf("unmarshal room.state: %v", err)
+	}
+	if raw.Method != "room.state" {
+		t.Fatalf("expected room.state, got %q", raw.Method)
+	}
+
+	var state protocol.RoomStateParams
+	if err := json.Unmarshal(raw.Params, &state); err != nil {
+		t.Fatalf("unmarshal state params: %v", err)
+	}
+
+	// The room broadcasts system messages too (alice joined), so we need at
+	// least 5 user messages among the history. Filter to alice's messages.
+	var aliceMsgs []protocol.MessageParams
+	for _, m := range state.Messages {
+		if m.From == "alice" {
+			aliceMsgs = append(aliceMsgs, m)
+		}
+	}
+	if len(aliceMsgs) != 5 {
+		t.Fatalf("expected 5 messages from alice in history, got %d (total: %d)", len(aliceMsgs), len(state.Messages))
+	}
+}
+
+// TestJoinReceivesAtMost50Messages verifies that when a room has more than 50
+// messages, only the last 50 are included in the room.state sent to a new joiner.
+func TestJoinReceivesAtMost50Messages(t *testing.T) {
+	s := newTestServer(t)
+
+	// Connect alice and send 60 messages.
+	connAlice := dialServer(t, s.Addr())
+	scAlice := newScanner(connAlice)
+
+	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name: "alice",
+		Role: "user",
+	}))
+	readLine(t, scAlice) // consume room.state
+
+	for i := 0; i < 60; i++ {
+		sendLine(t, connAlice, protocol.NewNotification("room.send", protocol.SendParams{
+			Content: []protocol.Content{{Type: "text", Text: fmt.Sprintf("message %d", i+1)}},
+		}))
+	}
+
+	// Give the server time to process all messages.
+	time.Sleep(200 * time.Millisecond)
+
+	// Connect bob (new joiner).
+	connBob := dialServer(t, s.Addr())
+	scBob := newScanner(connBob)
+
+	sendLine(t, connBob, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name: "bob",
+		Role: "user",
+	}))
+
+	connBob.SetReadDeadline(time.Now().Add(2 * time.Second))
+	line := readLine(t, scBob)
+	connBob.SetReadDeadline(time.Time{})
+
+	var raw protocol.RawMessage
+	if err := json.Unmarshal(line, &raw); err != nil {
+		t.Fatalf("unmarshal room.state: %v", err)
+	}
+	if raw.Method != "room.state" {
+		t.Fatalf("expected room.state, got %q", raw.Method)
+	}
+
+	var state protocol.RoomStateParams
+	if err := json.Unmarshal(raw.Params, &state); err != nil {
+		t.Fatalf("unmarshal state params: %v", err)
+	}
+
+	if len(state.Messages) > 50 {
+		t.Fatalf("expected at most 50 messages in history, got %d", len(state.Messages))
+	}
+	if len(state.Messages) == 0 {
+		t.Fatal("expected messages in history, got 0")
 	}
 }
 
