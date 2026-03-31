@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/rand"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 
 // Room holds the shared state for a single chat room.
 type Room struct {
+	ID           string
 	Topic        string
 	Participants map[string]*ClientConn
 	Messages     []protocol.MessageParams
@@ -30,12 +32,22 @@ type ClientConn struct {
 	Done      chan struct{}
 }
 
-// NewRoom creates a new Room with the given topic.
+// NewRoom creates a new Room with the given topic and a fresh UUID as its ID.
 func NewRoom(topic string) *Room {
 	return &Room{
+		ID:           newUUID(),
 		Topic:        topic,
 		Participants: make(map[string]*ClientConn),
 	}
+}
+
+// newUUID generates a random UUID v4.
+func newUUID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // Join adds cc to the room and returns a snapshot of the current room state,

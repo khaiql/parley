@@ -88,3 +88,45 @@ func TestRoomDir(t *testing.T) {
 		t.Errorf("expected path to end with /rooms/abc123, got %q", dir)
 	}
 }
+
+func TestSaveLoadRoomPreservesID(t *testing.T) {
+	dir := t.TempDir()
+
+	room := NewRoom("id-topic")
+	originalID := room.ID
+	if originalID == "" {
+		t.Fatal("NewRoom() must set a non-empty ID before this test is meaningful")
+	}
+
+	if err := SaveRoom(dir, room); err != nil {
+		t.Fatalf("SaveRoom: %v", err)
+	}
+
+	loaded, err := LoadRoom(dir)
+	if err != nil {
+		t.Fatalf("LoadRoom: %v", err)
+	}
+
+	if loaded.ID != originalID {
+		t.Errorf("LoadRoom restored ID %q, want %q", loaded.ID, originalID)
+	}
+}
+
+func TestSaveRoomUsesRoomID(t *testing.T) {
+	dir := t.TempDir()
+	room := NewRoom("topic")
+
+	if err := SaveRoom(dir, room); err != nil {
+		t.Fatalf("SaveRoom: %v", err)
+	}
+
+	// Read the saved room.json and verify the id field matches room.ID.
+	var rd RoomData
+	if err := readJSON(filepath.Join(dir, "room.json"), &rd); err != nil {
+		t.Fatalf("readJSON: %v", err)
+	}
+
+	if rd.ID != room.ID {
+		t.Errorf("room.json ID = %q, want room.ID = %q", rd.ID, room.ID)
+	}
+}
