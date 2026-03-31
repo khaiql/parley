@@ -65,7 +65,7 @@ func (i *Input) SetAgentText(text string) {
 }
 
 // SetAgentStatus sets an activity status message (e.g. "thinking...",
-// "using tool: ls"). Only shown when agentText is empty.
+// "using tool: Read"). Takes priority over streaming text.
 func (i *Input) SetAgentStatus(status string) {
 	i.agentStatus = status
 }
@@ -95,7 +95,10 @@ func (i Input) View() string {
 	var content string
 	switch i.mode {
 	case InputModeAgent:
-		if i.agentText != "" {
+		if i.agentStatus != "" {
+			// Status (thinking, tool use) takes priority — shows what agent is doing
+			content = systemMsgStyle.Render(i.agentStatus)
+		} else if i.agentText != "" {
 			// Show the last 2 lines of streaming text
 			lines := strings.Split(i.agentText, "\n")
 			start := len(lines) - 2
@@ -105,8 +108,6 @@ func (i Input) View() string {
 			visible := strings.Join(lines[start:], "\n")
 			content = lipgloss.NewStyle().Foreground(colorAgent).Render(visible) +
 				systemMsgStyle.Render(" ▊")
-		} else if i.agentStatus != "" {
-			content = systemMsgStyle.Render(i.agentStatus)
 		} else {
 			content = lipgloss.NewStyle().Foreground(colorDimText).Render("(waiting for messages…)")
 		}
