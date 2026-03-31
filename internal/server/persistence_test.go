@@ -112,6 +112,44 @@ func TestSaveLoadRoomPreservesID(t *testing.T) {
 	}
 }
 
+func TestLoadRoomRestoresTopicAndMessages(t *testing.T) {
+	dir := t.TempDir()
+
+	room := NewRoom("discussion")
+	cc := &ClientConn{Name: "alice", Role: "human", Source: "human", Send: make(chan []byte, 8), Done: make(chan struct{})}
+	room.Participants["alice"] = cc
+
+	room.Broadcast("alice", "human", "human", protocol.Content{Type: "text", Text: "hello"}, nil)
+	room.Broadcast("alice", "human", "human", protocol.Content{Type: "text", Text: "world"}, nil)
+
+	if err := SaveRoom(dir, room); err != nil {
+		t.Fatalf("SaveRoom: %v", err)
+	}
+
+	loaded, err := LoadRoom(dir)
+	if err != nil {
+		t.Fatalf("LoadRoom: %v", err)
+	}
+
+	if loaded.Topic != "discussion" {
+		t.Errorf("topic: got %q, want %q", loaded.Topic, "discussion")
+	}
+	msgs := loaded.GetMessages()
+	if len(msgs) != 2 {
+		t.Fatalf("messages: got %d, want 2", len(msgs))
+	}
+	if msgs[0].Content[0].Text != "hello" {
+		t.Errorf("first message text: got %q, want %q", msgs[0].Content[0].Text, "hello")
+	}
+	if msgs[1].Content[0].Text != "world" {
+		t.Errorf("second message text: got %q, want %q", msgs[1].Content[0].Text, "world")
+	}
+	// seq should be restored so next message gets seq 3
+	if loaded.seq != 2 {
+		t.Errorf("seq: got %d, want 2", loaded.seq)
+	}
+}
+
 func TestSaveRoomUsesRoomID(t *testing.T) {
 	dir := t.TempDir()
 	room := NewRoom("topic")

@@ -20,13 +20,19 @@ type Server struct {
 
 // New creates a new Server listening on addr with the given room topic.
 func New(addr string, topic string) (*Server, error) {
+	return NewWithRoom(addr, NewRoom(topic))
+}
+
+// NewWithRoom creates a new Server listening on addr using an existing Room.
+// Use this to resume a previously saved room (e.g. loaded via LoadRoom).
+func NewWithRoom(addr string, room *Room) (*Server, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 	return &Server{
 		listener: ln,
-		room:     NewRoom(topic),
+		room:     room,
 	}, nil
 }
 

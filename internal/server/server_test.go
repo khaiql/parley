@@ -427,6 +427,67 @@ func TestJoinReceivesAtMost50Messages(t *testing.T) {
 	}
 }
 
+// TestNewWithRoom verifies that NewWithRoom creates a server backed by the
+// provided room, preserving its topic and message history.
+func TestNewWithRoom(t *testing.T) {
+	// Build a room with some history.
+	room := server.NewRoom("resume-topic")
+	room.Broadcast("alice", "human", "human", protocol.Content{Type: "text", Text: "first message"}, nil)
+	room.Broadcast("alice", "human", "human", protocol.Content{Type: "text", Text: "second message"}, nil)
+
+	s, err := server.NewWithRoom("127.0.0.1:0", room)
+	if err != nil {
+		t.Fatalf("NewWithRoom: %v", err)
+	}
+	go s.Serve()
+	t.Cleanup(func() { s.Close() })
+
+	if s.Room().Topic != "resume-topic" {
+		t.Errorf("expected topic %q, got %q", "resume-topic", s.Room().Topic)
+	}
+	if len(s.Room().GetMessages()) != 2 {
+		t.Errorf("expected 2 messages, got %d", len(s.Room().GetMessages()))
+	}
+
+	// Connect bob and verify room.state includes history.
+	conn := dialServer(t, s.Addr())
+	sc := newScanner(conn)
+	sendLine(t, conn, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name: "bob",
+		Role: "user",
+	}))
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	line := readLine(t, sc)
+	conn.SetReadDeadline(time.Time{})
+
+	var raw protocol.RawMessage
+	if err := json.Unmarshal(line, &raw); err != nil {
+		t.Fatalf("unmarshal room.state: %v", err)
+	}
+	if raw.Method != "room.state" {
+		t.Fatalf("expected room.state, got %q", raw.Method)
+	}
+
+	var state protocol.RoomStateParams
+	if err := json.Unmarshal(raw.Params, &state); err != nil {
+		t.Fatalf("unmarshal state params: %v", err)
+	}
+	if state.Topic != "resume-topic" {
+		t.Errorf("expected topic %q, got %q", "resume-topic", state.Topic)
+	}
+	// History should include the 2 alice messages.
+	var aliceMsgs []protocol.MessageParams
+	for _, m := range state.Messages {
+		if m.From == "alice" {
+			aliceMsgs = append(aliceMsgs, m)
+		}
+	}
+	if len(aliceMsgs) != 2 {
+		t.Errorf("expected 2 alice messages in history, got %d (total: %d)", len(aliceMsgs), len(state.Messages))
+	}
+}
+
 // TestRoomLeftBroadcast verifies that when B disconnects, A receives a
 // room.left notification with B's name.
 func TestRoomLeftBroadcast(t *testing.T) {
