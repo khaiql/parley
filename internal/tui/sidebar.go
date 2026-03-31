@@ -82,8 +82,9 @@ func (s Sidebar) View() string {
 		}
 		if p.Directory != "" {
 			dir := p.Directory
-			if len(dir) > innerWidth-2 {
-				dir = "…" + dir[len(dir)-(innerWidth-3):]
+			maxLen := innerWidth - 2
+			if maxLen > 4 && len(dir) > maxLen {
+				dir = "…" + dir[len(dir)-(maxLen-1):]
 			}
 			lines = append(lines, timestampStyle.Render("  "+dir))
 		}

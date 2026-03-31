@@ -72,6 +72,40 @@ func TestSidebarSetParticipants(t *testing.T) {
 	}
 }
 
+func TestSidebarViewZeroWidth(t *testing.T) {
+	// Regression: sidebar.View() panicked with slice bounds out of range
+	// when width was 0 (before first WindowSizeMsg)
+	s := NewSidebar()
+	s.SetSize(0, 0)
+	s.AddParticipant(protocol.Participant{
+		Name:      "alice",
+		Role:      "human",
+		Source:    "human",
+		Directory: "/Users/sle/some/very/long/directory/path",
+	})
+
+	// Must not panic
+	view := s.View()
+	if !contains(view, "alice") {
+		t.Errorf("sidebar view should contain 'alice' even at zero width")
+	}
+}
+
+func TestSidebarViewSmallWidth(t *testing.T) {
+	// Regression: directory truncation caused panic with small widths
+	s := NewSidebar()
+	s.SetSize(5, 10)
+	s.AddParticipant(protocol.Participant{
+		Name:      "bot",
+		Role:      "coder",
+		Source:    "agent",
+		Directory: "/a/very/long/path/that/exceeds/width",
+	})
+
+	// Must not panic
+	_ = s.View()
+}
+
 func TestSidebarViewContainsNames(t *testing.T) {
 	s := NewSidebar()
 	s.SetSize(30, 20)
