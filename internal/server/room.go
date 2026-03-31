@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/khaiql/parley/internal/protocol"
@@ -174,7 +175,9 @@ func (r *Room) GetParticipants() []*ClientConn {
 	return out
 }
 
-// generateID returns a simple timestamp-based ID.
+var msgCounter uint64
+
+// generateID returns a unique message ID using an atomic counter.
 func generateID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	return fmt.Sprintf("msg-%d", atomic.AddUint64(&msgCounter, 1))
 }
