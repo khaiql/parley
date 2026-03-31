@@ -5,7 +5,7 @@ import (
 	"bufio"
 	"net"
 
-	"github.com/sle/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 // Client manages a single TCP connection to a Parley server.

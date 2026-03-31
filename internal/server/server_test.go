@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sle/parley/internal/protocol"
-	"github.com/sle/parley/internal/server"
+	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/server"
 )
 
 const bufSize = 1024 * 1024 // 1 MB

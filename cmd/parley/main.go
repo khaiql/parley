@@ -11,11 +11,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
-	"github.com/sle/parley/internal/client"
-	"github.com/sle/parley/internal/driver"
-	"github.com/sle/parley/internal/protocol"
-	"github.com/sle/parley/internal/server"
-	"github.com/sle/parley/internal/tui"
+	"github.com/khaiql/parley/internal/client"
+	"github.com/khaiql/parley/internal/driver"
+	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/server"
+	"github.com/khaiql/parley/internal/tui"
 )
 
 func main() {

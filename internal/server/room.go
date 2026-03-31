@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sle/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 // Room holds the shared state for a single chat room.
