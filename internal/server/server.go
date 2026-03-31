@@ -99,7 +99,18 @@ func (s *Server) handleConn(conn net.Conn) {
 				Source:    source,
 			}
 
-			state := s.room.Join(cc)
+			state, joinErr := s.room.Join(cc)
+			if joinErr != nil {
+				resp := protocol.Response{
+					JSONRPC: "2.0",
+					ID:      0,
+					Error:   &protocol.RPCError{Code: -1, Message: "name already taken"},
+				}
+				if data, err := protocol.EncodeLine(resp); err == nil {
+					conn.Write(data)
+				}
+				return
+			}
 
 			// Send room.state back to the joining client.
 			notif := protocol.NewNotification("room.state", state)
