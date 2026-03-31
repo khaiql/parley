@@ -222,7 +222,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 	defer d.Stop()
 
-	app := tui.NewApp(topic, joinPort, tui.InputModeAgent, joinName, nil)
+	app := tui.NewApp(topic, joinPort, tui.InputModeAgent, joinName, nil, roomState.Participants...)
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	// Bridge network → TUI + agent driver.
@@ -251,6 +251,14 @@ func runJoin(cmd *cobra.Command, args []string) error {
 			case driver.EventText:
 				accumulated.WriteString(event.Text)
 				p.Send(tui.AgentTypingMsg{Text: accumulated.String()})
+			case driver.EventThinking:
+				p.Send(tui.AgentStatusMsg{Status: "thinking…"})
+			case driver.EventToolUse:
+				status := "using tool…"
+				if event.ToolName != "" {
+					status = fmt.Sprintf("using tool: %s…", event.ToolName)
+				}
+				p.Send(tui.AgentStatusMsg{Status: status})
 			case driver.EventDone:
 				text := strings.TrimSpace(accumulated.String())
 				if text != "" {
@@ -259,6 +267,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 				}
 				accumulated.Reset()
 				p.Send(tui.AgentTypingMsg{Text: ""})
+				p.Send(tui.AgentStatusMsg{Status: ""})
 			}
 		}
 	}()

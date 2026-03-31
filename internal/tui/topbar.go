@@ -29,7 +29,7 @@ func (t TopBar) View() string {
 
 	right := ""
 	if t.port > 0 {
-		right = timestampStyle.Render(fmt.Sprintf(":%d", t.port))
+		right = lipgloss.NewStyle().Foreground(colorText).Render(fmt.Sprintf(":%d", t.port))
 	}
 
 	middle := ""

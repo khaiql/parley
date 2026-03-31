@@ -22,6 +22,12 @@ type AgentTypingMsg struct {
 	Text string
 }
 
+// AgentStatusMsg carries a status string (e.g. "thinking...", "using tool: ls")
+// to display in the agent input area when no text is being streamed.
+type AgentStatusMsg struct {
+	Status string
+}
+
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
 	topbar  TopBar
@@ -34,8 +40,8 @@ type App struct {
 }
 
 // NewApp creates an App with the given topic, port, input mode, display name,
-// and send callback.
-func NewApp(topic string, port int, mode InputMode, name string, sendFn func(string, []string)) App {
+// send callback, and optional initial participants (may be nil).
+func NewApp(topic string, port int, mode InputMode, name string, sendFn func(string, []string), participants ...protocol.Participant) App {
 	a := App{
 		topbar:  NewTopBar(topic, port),
 		chat:    NewChat(0, 0),
@@ -44,6 +50,9 @@ func NewApp(topic string, port int, mode InputMode, name string, sendFn func(str
 		sendFn:  sendFn,
 	}
 	a.input.SetMode(mode)
+	if len(participants) > 0 {
+		a.sidebar.SetParticipants(participants)
+	}
 	return a
 }
 
@@ -88,6 +97,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AgentTypingMsg:
 		a.input.SetAgentText(m.Text)
+		return a, nil
+
+	case AgentStatusMsg:
+		a.input.SetAgentStatus(m.Status)
 		return a, nil
 	}
 

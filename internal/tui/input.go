@@ -1,8 +1,10 @@
 package tui
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	"strings"
+
 	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -19,10 +21,11 @@ const (
 
 // Input is the bottom input component.
 type Input struct {
-	ta        textarea.Model
-	mode      InputMode
-	agentText string
-	width     int
+	ta          textarea.Model
+	mode        InputMode
+	agentText   string
+	agentStatus string
+	width       int
 }
 
 // NewInput creates an Input component in human mode.
@@ -52,9 +55,19 @@ func (i *Input) SetMode(m InputMode) {
 	}
 }
 
-// SetAgentText updates the text shown in agent mode.
+// SetAgentText updates the streaming text shown in agent mode.
+// Setting text also clears the status indicator.
 func (i *Input) SetAgentText(text string) {
 	i.agentText = text
+	if text != "" {
+		i.agentStatus = ""
+	}
+}
+
+// SetAgentStatus sets an activity status message (e.g. "thinking...",
+// "using tool: ls"). Only shown when agentText is empty.
+func (i *Input) SetAgentStatus(status string) {
+	i.agentStatus = status
 }
 
 // Value returns the current textarea content (human mode only).
@@ -82,9 +95,21 @@ func (i Input) View() string {
 	var content string
 	switch i.mode {
 	case InputModeAgent:
-		agentLine := lipgloss.NewStyle().Foreground(colorAgent).Render(i.agentText)
-		indicator := systemMsgStyle.Render("agent typing…")
-		content = agentLine + "\n" + indicator
+		if i.agentText != "" {
+			// Show the last two lines of streaming text so the user sees it arrive.
+			lines := strings.Split(i.agentText, "\n")
+			start := len(lines) - 2
+			if start < 0 {
+				start = 0
+			}
+			visible := strings.Join(lines[start:], "\n")
+			content = lipgloss.NewStyle().Foreground(colorAgent).Render(visible) +
+				"\n" + systemMsgStyle.Render("agent typing…")
+		} else if i.agentStatus != "" {
+			content = systemMsgStyle.Render(i.agentStatus)
+		} else {
+			content = lipgloss.NewStyle().Foreground(colorDimText).Render("(waiting for messages…)")
+		}
 	default:
 		content = i.ta.View()
 	}
