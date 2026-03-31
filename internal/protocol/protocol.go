@@ -1,0 +1,155 @@
+// Package protocol defines JSON-RPC 2.0 types and NDJSON helpers for the
+// Parley chat protocol.
+package protocol
+
+import (
+	"encoding/json"
+	"time"
+)
+
+// ---- JSON-RPC 2.0 base types ------------------------------------------------
+
+// Notification is a JSON-RPC 2.0 notification (no id, no reply expected).
+type Notification struct {
+	JSONRPC string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+// Request is a JSON-RPC 2.0 request (has id, expects a response).
+type Request struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      interface{}     `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+// Response is a JSON-RPC 2.0 response.
+type Response struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      interface{}     `json:"id"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *RPCError       `json:"error,omitempty"`
+}
+
+// RPCError holds a JSON-RPC 2.0 error object.
+type RPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// RawMessage is a generic decoded message used before the type is known.
+// It captures all possible fields; callers inspect Method/ID to determine
+// whether the message is a notification, request, or response.
+type RawMessage struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      interface{}     `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *RPCError       `json:"error,omitempty"`
+}
+
+// ---- Domain param types -----------------------------------------------------
+
+// Content is a single piece of message content.
+type Content struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// MessageParams is the params payload for a "chat/message" notification.
+type MessageParams struct {
+	ID        string    `json:"id"`
+	Seq       int       `json:"seq"`
+	From      string    `json:"from"`
+	Source    string    `json:"source,omitempty"`
+	Role      string    `json:"role"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
+	Mentions  []string  `json:"mentions,omitempty"`
+	Content   []Content `json:"content"`
+}
+
+// SendParams is the params payload for a "chat/send" request.
+type SendParams struct {
+	Content  []Content `json:"content"`
+	Mentions []string  `json:"mentions,omitempty"`
+}
+
+// JoinParams is the params payload for a "room/join" notification.
+type JoinParams struct {
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	Directory string `json:"directory,omitempty"`
+	Repo      string `json:"repo,omitempty"`
+	AgentType string `json:"agent_type,omitempty"`
+}
+
+// JoinedParams is the server-side confirmation payload for "room/joined".
+type JoinedParams struct {
+	Name      string    `json:"name"`
+	Role      string    `json:"role"`
+	Directory string    `json:"directory,omitempty"`
+	Repo      string    `json:"repo,omitempty"`
+	AgentType string    `json:"agent_type,omitempty"`
+	JoinedAt  time.Time `json:"joined_at"`
+}
+
+// LeftParams is the params payload for a "room/left" notification.
+type LeftParams struct {
+	Name string `json:"name"`
+}
+
+// Participant describes a single participant in a room.
+type Participant struct {
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	Directory string `json:"directory,omitempty"`
+	Repo      string `json:"repo,omitempty"`
+	AgentType string `json:"agent_type,omitempty"`
+	Source    string `json:"source,omitempty"`
+}
+
+// RoomStateParams is the params payload for a "room/state" notification.
+type RoomStateParams struct {
+	Topic        string        `json:"topic,omitempty"`
+	Participants []Participant `json:"participants"`
+}
+
+// ---- Helper functions -------------------------------------------------------
+
+// EncodeLine marshals v to JSON and appends a newline, returning the result.
+// This produces one NDJSON line suitable for writing to a TCP stream.
+func EncodeLine(v interface{}) ([]byte, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+// DecodeLine unmarshals a single JSON line (with or without trailing newline)
+// into a RawMessage so the caller can inspect the type before further decoding.
+func DecodeLine(line []byte) (*RawMessage, error) {
+	// Trim trailing whitespace/newline so json.Unmarshal doesn't complain.
+	trimmed := line
+	for len(trimmed) > 0 && (trimmed[len(trimmed)-1] == '\n' || trimmed[len(trimmed)-1] == '\r') {
+		trimmed = trimmed[:len(trimmed)-1]
+	}
+	var msg RawMessage
+	if err := json.Unmarshal(trimmed, &msg); err != nil {
+		return nil, err
+	}
+	return &msg, nil
+}
+
+// NewNotification is a convenience constructor that creates a Notification with
+// jsonrpc set to "2.0" and params marshalled from the provided value.
+func NewNotification(method string, params interface{}) Notification {
+	raw, _ := json.Marshal(params)
+	return Notification{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  json.RawMessage(raw),
+	}
+}
