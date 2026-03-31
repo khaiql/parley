@@ -1,11 +1,21 @@
 package tui
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/khaiql/parley/internal/protocol"
 )
+
+// ansiEscape strips ANSI escape sequences from a string so we can measure
+// visible character width.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string {
+	return ansiEscape.ReplaceAllString(s, "")
+}
 
 func TestExtractText(t *testing.T) {
 	tests := []struct {
@@ -166,4 +176,36 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+func TestRenderMessageWrapsLongText(t *testing.T) {
+	// Build a 200-character message body (no spaces within words longer than
+	// the limit, so we need a sentence with many shorter words).
+	longText := strings.Repeat("word ", 40) // 200 chars: "word word word ..."
+	longText = strings.TrimSpace(longText)
+
+	msg := protocol.MessageParams{
+		From:   "alice",
+		Source: "human",
+		Role:   "human",
+		Content: []protocol.Content{
+			{Type: "text", Text: longText},
+		},
+		Timestamp: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
+	}
+
+	const width = 80
+	rendered := renderMessage(msg, width)
+
+	lines := strings.Split(rendered, "\n")
+	if len(lines) <= 1 {
+		t.Errorf("expected multiple lines for 200-char message at width %d, got %d line(s)", width, len(lines))
+	}
+
+	for i, line := range lines {
+		visible := stripANSI(line)
+		if len(visible) > width {
+			t.Errorf("line %d exceeds width %d: len=%d %q", i, width, len(visible), visible)
+		}
+	}
 }
