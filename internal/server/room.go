@@ -40,7 +40,8 @@ func NewRoom(topic string) *Room {
 
 // Join adds cc to the room and returns a snapshot of the current room state.
 // If cc.Send or cc.Done are nil they are initialized here.
-func (r *Room) Join(cc *ClientConn) protocol.RoomStateParams {
+// Returns an error if a participant with the same name already exists.
+func (r *Room) Join(cc *ClientConn) (protocol.RoomStateParams, error) {
 	if cc.Send == nil {
 		cc.Send = make(chan []byte, 64)
 	}
@@ -49,6 +50,10 @@ func (r *Room) Join(cc *ClientConn) protocol.RoomStateParams {
 	}
 
 	r.mu.Lock()
+	if _, exists := r.Participants[cc.Name]; exists {
+		r.mu.Unlock()
+		return protocol.RoomStateParams{}, fmt.Errorf("name already taken: %q", cc.Name)
+	}
 	r.Participants[cc.Name] = cc
 	participants := r.snapshot()
 	topic := r.Topic
@@ -57,7 +62,7 @@ func (r *Room) Join(cc *ClientConn) protocol.RoomStateParams {
 	return protocol.RoomStateParams{
 		Topic:        topic,
 		Participants: participants,
-	}
+	}, nil
 }
 
 // Leave removes the named participant from the room and closes their Done channel.

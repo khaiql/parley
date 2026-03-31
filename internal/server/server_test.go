@@ -171,6 +171,66 @@ func TestBroadcastMessage(t *testing.T) {
 	}
 }
 
+// TestDuplicateNameRejected verifies that when B tries to join with the same
+// name as A, B receives an error response and the connection is closed, while A
+// remains unaffected in the room.
+func TestDuplicateNameRejected(t *testing.T) {
+	s := newTestServer(t)
+
+	// Connect Alice.
+	connAlice := dialServer(t, s.Addr())
+	scAlice := newScanner(connAlice)
+
+	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name: "Alice",
+		Role: "user",
+	}))
+	readLine(t, scAlice) // consume room.state
+
+	// Connect a second client that also tries to join as "Alice".
+	connAlice2 := dialServer(t, s.Addr())
+	scAlice2 := newScanner(connAlice2)
+
+	sendLine(t, connAlice2, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name: "Alice",
+		Role: "user",
+	}))
+
+	// The second client should receive an error response and the connection
+	// should be closed by the server shortly after.
+	connAlice2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	line := readLine(t, scAlice2)
+	connAlice2.SetReadDeadline(time.Time{})
+
+	var raw protocol.RawMessage
+	if err := json.Unmarshal(line, &raw); err != nil {
+		t.Fatalf("unmarshal response from duplicate join: %v", err)
+	}
+	if raw.Error == nil {
+		t.Fatalf("expected error response for duplicate name, got method=%q", raw.Method)
+	}
+	if raw.Error.Message != "name already taken" {
+		t.Errorf("unexpected error message: %q", raw.Error.Message)
+	}
+
+	// Wait for server to close the second connection.
+	connAlice2.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	if scAlice2.Scan() {
+		t.Error("expected connection to be closed after duplicate-name rejection")
+	}
+	connAlice2.SetReadDeadline(time.Time{})
+
+	// Original Alice must still be in the room.
+	time.Sleep(100 * time.Millisecond)
+	parts := s.Room().GetParticipants()
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 participant remaining, got %d", len(parts))
+	}
+	if parts[0].Name != "Alice" {
+		t.Errorf("expected participant 'Alice', got %q", parts[0].Name)
+	}
+}
+
 // TestRoomLeftBroadcast verifies that when B disconnects, A receives a
 // room.left notification with B's name.
 func TestRoomLeftBroadcast(t *testing.T) {

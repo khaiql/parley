@@ -22,7 +22,9 @@ func TestSaveAndLoadRoom(t *testing.T) {
 		AgentType: "",
 		Source:    "human",
 	}
-	room.Join(cc)
+	if _, err := room.Join(cc); err != nil {
+		t.Fatalf("room.Join: %v", err)
+	}
 
 	// Broadcast a message.
 	room.Broadcast("alice", "human", "human", protocol.Content{Type: "text", Text: "hello world"}, nil)
