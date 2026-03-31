@@ -28,9 +28,9 @@ type Input struct {
 // NewInput creates an Input component in human mode.
 func NewInput() Input {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message… (Enter to send, Shift+Enter for newline)"
+	ta.Placeholder = "Type a message… (Enter to send)"
 	ta.ShowLineNumbers = false
-	ta.SetHeight(3)
+	ta.SetHeight(1)
 	ta.Focus()
 
 	return Input{ta: ta, mode: InputModeHuman}

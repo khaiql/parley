@@ -118,7 +118,7 @@ func (a App) View() string {
 // terminal dimensions.
 func (a *App) layout() {
 	topbarHeight := 1
-	inputHeight := 3
+	inputHeight := 2 // 1 line text + 1 line border-top
 	chatHeight := a.height - topbarHeight - inputHeight
 	if chatHeight < 0 {
 		chatHeight = 0

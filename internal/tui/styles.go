@@ -15,9 +15,10 @@ var (
 
 var (
 	topBarStyle = lipgloss.NewStyle().
-			Background(colorBorder).
+			Background(lipgloss.Color("#161b22")).
 			Foreground(colorText).
-			Padding(0, 1)
+			Padding(0, 1).
+			Bold(true)
 
 	sidebarStyle = lipgloss.NewStyle().
 			BorderStyle(lipgloss.NormalBorder()).
