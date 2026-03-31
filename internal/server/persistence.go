@@ -45,7 +45,7 @@ func SaveRoom(dir string, room *Room) error {
 	// Write room.json.
 	rd := RoomData{
 		Topic: room.Topic,
-		ID:    dir,
+		ID:    room.ID,
 	}
 	if err := writeJSON(filepath.Join(dir, "room.json"), rd); err != nil {
 		return fmt.Errorf("write room.json: %w", err)
@@ -87,6 +87,7 @@ func LoadRoom(dir string) (*Room, error) {
 	}
 
 	room := NewRoom(rd.Topic)
+	room.ID = rd.ID
 
 	var msgs []protocol.MessageParams
 	if err := readJSON(filepath.Join(dir, "messages.json"), &msgs); err != nil {

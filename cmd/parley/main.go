@@ -89,10 +89,11 @@ func runHost(cmd *cobra.Command, args []string) error {
 	go srv.Serve()
 
 	port := srv.Port()
+	roomID := srv.Room().ID
 	fmt.Fprintf(os.Stderr, "Parley server listening on port %d\n", port)
+	fmt.Fprintf(os.Stderr, "Room ID: %s\n", roomID)
 
 	defer func() {
-		roomID := fmt.Sprintf("%d", srv.Port())
 		dir := server.RoomDir(roomID)
 		if err := server.SaveRoom(dir, srv.Room()); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to save room: %v\n", err)
