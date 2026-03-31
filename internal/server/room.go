@@ -139,6 +139,26 @@ func (r *Room) BroadcastJoined(jp protocol.JoinedParams) {
 	}
 }
 
+// BroadcastLeft sends a room.left notification to all remaining participants.
+func (r *Room) BroadcastLeft(lp protocol.LeftParams) {
+	notif := protocol.NewNotification("room.left", lp)
+	data, _ := protocol.EncodeLine(notif)
+
+	r.mu.RLock()
+	targets := make([]chan []byte, 0, len(r.Participants))
+	for _, cc := range r.Participants {
+		targets = append(targets, cc.Send)
+	}
+	r.mu.RUnlock()
+
+	for _, ch := range targets {
+		select {
+		case ch <- data:
+		default:
+		}
+	}
+}
+
 // snapshot returns the current participant list. Must be called with r.mu held (at least RLock).
 func (r *Room) snapshot() []protocol.Participant {
 	out := make([]protocol.Participant, 0, len(r.Participants))

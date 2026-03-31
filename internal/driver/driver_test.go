@@ -1,7 +1,9 @@
 package driver
 
 import (
+	"bufio"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 )
@@ -384,5 +386,96 @@ func TestParseStreamEvent_MessageStartSkipped(t *testing.T) {
 	_, ok := parseLine([]byte(line))
 	if ok {
 		t.Error("expected parseLine to return ok=false for message_start")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestReadLoop — scanner buffer size
+// ---------------------------------------------------------------------------
+
+// makeResultLine returns a valid NDJSON "result" line whose total length
+// exceeds targetLen bytes by padding the result field with extra data.
+func makeResultLine(targetLen int) []byte {
+	// Build a line of the form:
+	//   {"type":"result","result":"<padding...>"}
+	prefix := `{"type":"result","result":"`
+	suffix := `"}`
+	// How many padding bytes do we need?
+	padding := targetLen - len(prefix) - len(suffix)
+	if padding < 0 {
+		padding = 0
+	}
+	buf := make([]byte, len(prefix)+padding+len(suffix))
+	copy(buf, prefix)
+	for i := len(prefix); i < len(prefix)+padding; i++ {
+		buf[i] = 'x'
+	}
+	copy(buf[len(prefix)+padding:], suffix)
+	return append(buf, '\n')
+}
+
+// TestReadLoop_DefaultBufferFailsOnLargeLine verifies that the *default*
+// bufio.Scanner buffer (64 KB) cannot handle a line larger than 64 KB.
+// This documents the bug we are fixing.
+func TestReadLoop_DefaultBufferFailsOnLargeLine(t *testing.T) {
+	const lineSize = 128 * 1024 // 128 KB — larger than default 64 KB scanner buffer
+
+	pr, pw := io.Pipe()
+
+	// Write one oversized line then close the writer.
+	go func() {
+		pw.Write(makeResultLine(lineSize))
+		pw.Close()
+	}()
+
+	// Use a default-buffer scanner (no Buffer call) to confirm it fails.
+	scanner := bufio.NewScanner(pr)
+	// Read lines; on an oversized line the scanner reports an error.
+	scanned := false
+	for scanner.Scan() {
+		scanned = true
+	}
+	err := scanner.Err()
+	if scanned && err == nil {
+		// If it somehow succeeded with the default buffer, skip rather than fail:
+		// the test is documenting expected failure, not asserting a hard invariant
+		// of the standard library.
+		t.Skip("default scanner unexpectedly succeeded — skipping documentation test")
+	}
+	// Expected: either err != nil (token too long) or scanned == false.
+	// Either outcome confirms the default buffer is insufficient.
+	if err == nil && !scanned {
+		t.Log("default scanner produced no error but also scanned nothing — line was silently dropped")
+	}
+}
+
+// TestReadLoop_OneMBBufferHandlesLargeLine verifies that readLoop with a 1 MB
+// buffer correctly processes a >64 KB NDJSON line and emits an EventDone.
+func TestReadLoop_OneMBBufferHandlesLargeLine(t *testing.T) {
+	const lineSize = 128 * 1024 // 128 KB
+
+	pr, pw := io.Pipe()
+
+	d := &ClaudeDriver{}
+	d.events = make(chan AgentEvent, 8)
+
+	go func() {
+		pw.Write(makeResultLine(lineSize))
+		pw.Close()
+	}()
+
+	// readLoop closes d.events when done; drain it.
+	d.readLoop(pr)
+
+	var got []AgentEvent
+	for e := range d.events {
+		got = append(got, e)
+	}
+
+	if len(got) == 0 {
+		t.Fatal("expected at least one event from readLoop for a 128 KB result line, got none")
+	}
+	if got[0].Type != EventDone {
+		t.Errorf("expected EventDone, got %v", got[0].Type)
 	}
 }

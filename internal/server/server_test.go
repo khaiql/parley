@@ -170,3 +170,65 @@ func TestBroadcastMessage(t *testing.T) {
 		t.Errorf("unexpected content: %+v", foundMsg.Content)
 	}
 }
+
+// TestRoomLeftBroadcast verifies that when B disconnects, A receives a
+// room.left notification with B's name.
+func TestRoomLeftBroadcast(t *testing.T) {
+	s := newTestServer(t)
+
+	// Connect alice
+	connAlice := dialServer(t, s.Addr())
+	scAlice := newScanner(connAlice)
+
+	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name: "alice",
+		Role: "user",
+	}))
+	readLine(t, scAlice) // consume room.state
+
+	// Connect bob
+	connBob := dialServer(t, s.Addr())
+
+	sendLine(t, connBob, protocol.NewNotification("room.join", protocol.JoinParams{
+		Name: "bob",
+		Role: "user",
+	}))
+	// Give the server time to process bob's join and deliver notifications to alice.
+	time.Sleep(100 * time.Millisecond)
+
+	// Bob disconnects.
+	connBob.Close()
+
+	// Alice should receive a room.left notification with bob's name.
+	// She may also receive room.joined + system messages from bob's join first.
+	deadline := time.Now().Add(2 * time.Second)
+	var foundLeft *protocol.LeftParams
+	for time.Now().Before(deadline) {
+		connAlice.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		if !scAlice.Scan() {
+			break
+		}
+		connAlice.SetReadDeadline(time.Time{})
+
+		var raw protocol.RawMessage
+		if err := json.Unmarshal(scAlice.Bytes(), &raw); err != nil {
+			continue
+		}
+		if raw.Method != "room.left" {
+			continue
+		}
+		var lp protocol.LeftParams
+		if err := json.Unmarshal(raw.Params, &lp); err != nil {
+			continue
+		}
+		if lp.Name == "bob" {
+			foundLeft = &lp
+			break
+		}
+	}
+	connAlice.SetReadDeadline(time.Time{})
+
+	if foundLeft == nil {
+		t.Fatal("alice never received room.left notification for bob")
+	}
+}
