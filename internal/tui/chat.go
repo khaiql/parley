@@ -68,8 +68,8 @@ func (c Chat) View() string {
 func renderMessage(msg protocol.MessageParams, width int) string {
 	text := extractText(msg.Content)
 
-	// Leave at least 1 column for content; body is inset by 0 extra chars but
-	// we cap at the viewport width so long text wraps instead of overflowing.
+	// Leave at least 1 column for content; body is capped at the viewport
+	// width so long text wraps instead of overflowing.
 	bodyWidth := width
 	if bodyWidth < 1 {
 		bodyWidth = 1

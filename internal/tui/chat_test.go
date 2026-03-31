@@ -9,12 +9,12 @@ import (
 	"github.com/khaiql/parley/internal/protocol"
 )
 
-// ansiEscape strips ANSI escape sequences from a string so we can measure
+// ansiEscapeRegex strips ANSI escape sequences from a string so we can measure
 // visible character width.
-var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+var ansiEscapeRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripANSI(s string) string {
-	return ansiEscape.ReplaceAllString(s, "")
+	return ansiEscapeRegex.ReplaceAllString(s, "")
 }
 
 func TestExtractText(t *testing.T) {
@@ -179,9 +179,8 @@ func indexOf(s, sub string) int {
 }
 
 func TestRenderMessageWrapsLongText(t *testing.T) {
-	// Build a 200-character message body (no spaces within words longer than
-	// the limit, so we need a sentence with many shorter words).
-	longText := strings.Repeat("word ", 40) // 200 chars: "word word word ..."
+	// Build a 200-character message body (sentence with many short words).
+	longText := strings.Repeat("word ", 40) // "word word word ..." = 199 chars after TrimSpace
 	longText = strings.TrimSpace(longText)
 
 	msg := protocol.MessageParams{
