@@ -90,23 +90,34 @@ func (i *Input) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
+// contentWidth returns the usable text width inside the input box, accounting
+// for the border and padding applied by inputStyle.
+func (i Input) contentWidth() int {
+	// inputStyle has Padding(0,1) on each side = 2 chars, no left/right border.
+	w := i.width - 2
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
 // View renders the input area.
 func (i Input) View() string {
 	var content string
+	cw := i.contentWidth()
 	switch i.mode {
 	case InputModeAgent:
 		if i.agentStatus != "" {
 			// Status (thinking, tool use) takes priority — shows what agent is doing
-			content = systemMsgStyle.Render(i.agentStatus)
+			content = systemMsgStyle.Width(cw).Render(i.agentStatus)
 		} else if i.agentText != "" {
-			// Show the last 2 lines of streaming text
-			lines := strings.Split(i.agentText, "\n")
-			start := len(lines) - 2
-			if start < 0 {
-				start = 0
-			}
-			visible := strings.Join(lines[start:], "\n")
-			content = lipgloss.NewStyle().Foreground(colorAgent).Render(visible) +
+			// Wrap the streaming text to the content width, then show the last
+			// visible line(s) with a blinking cursor indicator at the end.
+			wrapped := lipgloss.NewStyle().Width(cw).Render(i.agentText)
+			lines := strings.Split(wrapped, "\n")
+			// Keep only the last line for the single-row input display.
+			lastLine := lines[len(lines)-1]
+			content = lipgloss.NewStyle().Foreground(colorAgent).Render(lastLine) +
 				systemMsgStyle.Render(" ▊")
 		} else {
 			content = lipgloss.NewStyle().Foreground(colorDimText).Render("(waiting for messages…)")
