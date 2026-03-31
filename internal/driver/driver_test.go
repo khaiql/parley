@@ -6,6 +6,9 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 // ---------------------------------------------------------------------------
@@ -579,5 +582,128 @@ func TestReadLoop_OneMBBufferHandlesLargeLine(t *testing.T) {
 	}
 	if got[0].Type != EventDone {
 		t.Errorf("expected EventDone, got %v", got[0].Type)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestFormatHistory
+// ---------------------------------------------------------------------------
+
+func makeMsg(from, source, text string) protocol.MessageParams {
+	return protocol.MessageParams{
+		From:   from,
+		Source: source,
+		Content: []protocol.Content{
+			{Type: "text", Text: text},
+		},
+		Timestamp: time.Now(),
+	}
+}
+
+func TestFormatHistory_EmptyForNoMessages(t *testing.T) {
+	result := FormatHistory(nil)
+	if result != "" {
+		t.Errorf("expected empty string for nil messages, got %q", result)
+	}
+	result = FormatHistory([]protocol.MessageParams{})
+	if result != "" {
+		t.Errorf("expected empty string for empty messages, got %q", result)
+	}
+}
+
+func TestFormatHistory_BasicFormat(t *testing.T) {
+	msgs := []protocol.MessageParams{
+		makeMsg("sle", "human", "I think we need a message queue"),
+		makeMsg("Alice", "agent", "Agreed, Redis Streams would work"),
+		makeMsg("sle", "human", "What about NATS?"),
+	}
+	result := FormatHistory(msgs)
+
+	if !strings.Contains(result, "Here is the conversation so far:") {
+		t.Errorf("expected header line, got:\n%s", result)
+	}
+	if !strings.Contains(result, "[sle]: I think we need a message queue") {
+		t.Errorf("expected sle's first message, got:\n%s", result)
+	}
+	if !strings.Contains(result, "[Alice]: Agreed, Redis Streams would work") {
+		t.Errorf("expected Alice's message, got:\n%s", result)
+	}
+	if !strings.Contains(result, "[sle]: What about NATS?") {
+		t.Errorf("expected sle's second message, got:\n%s", result)
+	}
+	if !strings.Contains(result, "You are joining this conversation now.") {
+		t.Errorf("expected closing context line, got:\n%s", result)
+	}
+}
+
+func TestFormatHistory_SkipsSystemMessages(t *testing.T) {
+	msgs := []protocol.MessageParams{
+		makeMsg("sle", "human", "Hello everyone"),
+		makeMsg("system", "system", "Alice has joined the room"),
+		makeMsg("Alice", "agent", "Hi!"),
+	}
+	result := FormatHistory(msgs)
+
+	if strings.Contains(result, "[system]") {
+		t.Errorf("expected system messages to be skipped, got:\n%s", result)
+	}
+	if strings.Contains(result, "Alice has joined the room") {
+		t.Errorf("expected system message text to be skipped, got:\n%s", result)
+	}
+	if !strings.Contains(result, "[sle]: Hello everyone") {
+		t.Errorf("expected human message to be present, got:\n%s", result)
+	}
+	if !strings.Contains(result, "[Alice]: Hi!") {
+		t.Errorf("expected agent message to be present, got:\n%s", result)
+	}
+}
+
+func TestFormatHistory_LimitsToLast20Messages(t *testing.T) {
+	// Create 25 messages
+	msgs := make([]protocol.MessageParams, 25)
+	for i := 0; i < 25; i++ {
+		msgs[i] = makeMsg("user", "human", strings.Repeat("x", i+1))
+	}
+	result := FormatHistory(msgs)
+
+	// The first 5 messages should NOT appear (messages 0-4 have text "x", "xx", ..., "xxxxx")
+	// The last 20 messages (indices 5-24) should appear
+	// Message at index 4 has text "xxxxx" (5 x's)
+	if strings.Contains(result, "[user]: xxxxx\n") {
+		// Check it's not in there as a standalone line (the 5th msg, index 4)
+		// But "xxxxx" is a prefix of longer ones, so we check precisely
+		lines := strings.Split(result, "\n")
+		for _, line := range lines {
+			if line == "[user]: xxxxx" {
+				t.Errorf("expected message index 4 (5 x's) to be excluded as it's outside last 20, got line: %q", line)
+			}
+		}
+	}
+
+	// Message at index 5 has 6 x's — should be present
+	if !strings.Contains(result, "[user]: xxxxxx") {
+		t.Errorf("expected message index 5 (6 x's) to be present as it's within last 20, got:\n%s", result)
+	}
+
+	// Count non-header/footer lines to verify we have at most 20
+	lines := strings.Split(strings.TrimSpace(result), "\n")
+	msgLines := 0
+	for _, line := range lines {
+		if strings.HasPrefix(line, "[") {
+			msgLines++
+		}
+	}
+	if msgLines > 20 {
+		t.Errorf("expected at most 20 message lines, got %d", msgLines)
+	}
+}
+
+func TestFormatHistory_SeparatorPresent(t *testing.T) {
+	msgs := []protocol.MessageParams{
+		makeMsg("Alice", "agent", "Hello"),
+	}
+	result := FormatHistory(msgs)
+	if !strings.Contains(result, "---") {
+		t.Errorf("expected separator '---' in output, got:\n%s", result)
 	}
 }
