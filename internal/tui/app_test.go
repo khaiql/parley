@@ -118,6 +118,45 @@ func TestHandleServerMsg_RoomLeft_RemovesParticipant(t *testing.T) {
 	}
 }
 
+func TestHandleServerMsg_RoomStatus_UpdatesSidebarStatus(t *testing.T) {
+	a := makeApp()
+	a.sidebar.SetParticipants([]protocol.Participant{
+		{Name: "bot1", Role: "agent"},
+	})
+
+	sp := protocol.StatusParams{Name: "bot1", Status: "thinking…"}
+	raw := &protocol.RawMessage{
+		Method: "room.status",
+		Params: rawParams(t, sp),
+	}
+
+	a.handleServerMsg(raw)
+
+	if a.sidebar.statuses["bot1"] != "thinking…" {
+		t.Errorf("expected sidebar status 'thinking…' for bot1, got %q", a.sidebar.statuses["bot1"])
+	}
+}
+
+func TestHandleServerMsg_RoomStatusClear_ClearsSidebarStatus(t *testing.T) {
+	a := makeApp()
+	a.sidebar.SetParticipants([]protocol.Participant{
+		{Name: "bot1", Role: "agent"},
+	})
+	a.sidebar.SetParticipantStatus("bot1", "thinking…")
+
+	sp := protocol.StatusParams{Name: "bot1", Status: ""}
+	raw := &protocol.RawMessage{
+		Method: "room.status",
+		Params: rawParams(t, sp),
+	}
+
+	a.handleServerMsg(raw)
+
+	if a.sidebar.statuses["bot1"] != "" {
+		t.Errorf("expected empty status after clear, got %q", a.sidebar.statuses["bot1"])
+	}
+}
+
 func TestHandleServerMsg_NilRaw_NoOp(t *testing.T) {
 	a := makeApp()
 	// Should not panic.

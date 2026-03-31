@@ -263,13 +263,13 @@ func runJoin(cmd *cobra.Command, args []string) error {
 				accumulated.WriteString(event.Text)
 				p.Send(tui.AgentTypingMsg{Text: accumulated.String()})
 			case driver.EventThinking:
-				p.Send(tui.AgentStatusMsg{Status: "thinking…"})
+				_ = c.SendStatus(joinName, "thinking…")
 			case driver.EventToolUse:
 				status := "using tool…"
 				if event.ToolName != "" {
-					status = fmt.Sprintf("using tool: %s…", event.ToolName)
+					status = fmt.Sprintf("using: %s…", event.ToolName)
 				}
-				p.Send(tui.AgentStatusMsg{Status: status})
+				_ = c.SendStatus(joinName, status)
 			case driver.EventDone:
 				text := strings.TrimSpace(accumulated.String())
 				if text != "" {
@@ -278,7 +278,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 				}
 				accumulated.Reset()
 				p.Send(tui.AgentTypingMsg{Text: ""})
-				p.Send(tui.AgentStatusMsg{Status: ""})
+				_ = c.SendStatus(joinName, "")
 			}
 		}
 	}()

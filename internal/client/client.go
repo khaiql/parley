@@ -64,6 +64,22 @@ func (c *Client) Send(content protocol.Content, mentions []string) error {
 	return err
 }
 
+// SendStatus sends a room.status notification with the given status string.
+// An empty status string means the participant is idle.
+func (c *Client) SendStatus(name, status string) error {
+	params := protocol.StatusParams{
+		Name:   name,
+		Status: status,
+	}
+	notif := protocol.NewNotification("room.status", params)
+	data, err := protocol.EncodeLine(notif)
+	if err != nil {
+		return err
+	}
+	_, err = c.conn.Write(data)
+	return err
+}
+
 // Close signals the read loop to stop and closes the underlying connection.
 // It is safe to call Close concurrently or more than once.
 func (c *Client) Close() error {

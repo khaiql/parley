@@ -22,12 +22,6 @@ type AgentTypingMsg struct {
 	Text string
 }
 
-// AgentStatusMsg carries a status string (e.g. "thinking...", "using tool: ls")
-// to display in the agent input area when no text is being streamed.
-type AgentStatusMsg struct {
-	Status string
-}
-
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
 	topbar  TopBar
@@ -97,10 +91,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AgentTypingMsg:
 		a.input.SetAgentText(m.Text)
-		return a, nil
-
-	case AgentStatusMsg:
-		a.input.SetAgentStatus(m.Status)
 		return a, nil
 	}
 
@@ -182,6 +172,12 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 		var params protocol.LeftParams
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
 			a.sidebar.RemoveParticipant(params.Name)
+		}
+
+	case "room.status":
+		var params protocol.StatusParams
+		if err := json.Unmarshal(raw.Params, &params); err == nil {
+			a.sidebar.SetParticipantStatus(params.Name, params.Status)
 		}
 	}
 }
