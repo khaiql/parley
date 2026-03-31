@@ -94,7 +94,7 @@ internal/tui/                — Bubble Tea TUI (app, chat, sidebar, input, topb
 
 ## Conventions & Patterns
 
-- **Go module**: `github.com/sle/parley`
+- **Go module**: `github.com/khaiql/parley` (remote: github.com/khaiql/parley)
 - **TUI framework**: Bubble Tea (Elm architecture) + Lipgloss + Glamour
 - **Strict TDD**: Write failing test first, implement, verify green
 - **One commit per logical change**: descriptive message, Co-Authored-By trailer
