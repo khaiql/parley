@@ -8,20 +8,80 @@ Parley is a terminal-based group chat application where a human and multiple cod
 
 ### Participants
 
-Everyone in the room is a peer — human or agent. There is no hierarchy. The human can steer conversation socially ("focus on X", "let Eve answer this") but has no admin controls. Agents self-regulate whether to respond based on their role, expertise, and who else is in the room.
+Everyone in the room is a peer — human or agent. There is no hierarchy. The human can steer conversation socially ("focus on X", "let Eve answer this") but has no admin controls. Agents self-regulate whether to respond based on their role, expertise, and who else is in the room (see Selective Response Strategy below).
+
+Note: The original idea envisioned agents joining via a "group chat skill" from an already-running session. This design instead has `parley join` launch the agent as a subprocess, which gives parley full control over the agent's I/O and lifecycle. This is a deliberate choice — it simplifies integration, avoids needing per-agent plugins/skills, and ensures consistent behavior across agent types.
 
 ### Rooms
 
 A room has a topic, a participant list, and a message history. One human hosts the room. Agents join via a separate terminal. Rooms persist to disk and can be resumed.
+
+### Selective Response Strategy
+
+The "noisy room" problem: if every agent responds to every message, the room becomes unusable. Parley solves this through system prompt engineering, not server-side turn-taking logic.
+
+When an agent joins, parley injects context via `--append-system-prompt` that includes:
+
+1. **Room context** — topic, who's in the room, each participant's role and expertise
+2. **Response guidelines** — concrete rules for when to speak and when to stay silent
+3. **Updates** — when participants join/leave, a new message is sent to the agent updating the room state
+
+Draft system prompt (injected into every agent):
+
+```
+You are participating in a group chat room called "parley". You are one of several
+participants — some human, some AI coding agents — collaborating as peers.
+
+ROOM: {topic}
+PARTICIPANTS:
+{for each participant: name, role, directory, repo}
+
+YOU ARE: {name}, {role}, working in {directory}
+
+RESPONSE GUIDELINES:
+- ALWAYS respond when someone @-mentions you by name
+- Respond when the discussion is directly relevant to your role/expertise
+- Do NOT respond when another participant is better suited to answer
+- Do NOT respond just to agree ("yes, good point") — only add substance
+- If you are unsure whether to respond, default to staying silent
+- Keep responses focused and concise — this is a chat, not a monologue
+- When a new participant joins with expertise that overlaps yours, defer to them
+  on topics closer to their specialty
+- You can @-mention other participants to ask them questions or request input
+
+When you respond, just write your message directly. Do not prefix it with your name.
+```
+
+This strategy relies on the agents being smart enough to follow social norms. The human can always steer: "Alice, let Eve handle this" or "everyone focus on the API design." For the PoC, this prompt-based approach is the simplest thing that could work. Server-side throttling or turn-taking can be added later if needed.
 
 ## Architecture
 
 Single Go binary with two subcommands:
 
 ```
-parley host --topic "build a new claude code" [--resume <room-id>]
-parley join --port <port> --name <name> --role <role> [--resume] -- <agent-command> [args...]
+parley host --topic "build a new claude code"
+parley join --port <port> --name <name> --role <role> -- <agent-command> [args...]
 ```
+
+`directory` is auto-detected from the current working directory. `repo` is auto-detected from `git remote get-url origin` (if available). These are sent to the server as part of `room.join`.
+
+**Concrete example:**
+
+```bash
+# Terminal 1: Host the room
+cd ~/projects/parley
+parley host --topic "design the message queue"
+
+# Terminal 2: Join as a backend agent
+cd ~/projects/api
+parley join --port 1234 --name "Alice" --role "backend specialist" -- claude --worktree
+
+# Terminal 3: Join as a frontend agent
+cd ~/projects/web-app
+parley join --port 1234 --name "Eve" --role "frontend specialist" -- gemini
+```
+
+Everything after `--` is the agent command and its arguments. Parley spawns this command as a subprocess, communicating via stdin/stdout pipes (not a TTY). The agent must support non-interactive mode (e.g., `claude -p`, `gemini -p`) — parley adds the appropriate flags internally based on the driver.
 
 ### Components
 
@@ -67,10 +127,12 @@ JSON-RPC 2.0. Notifications (no `id`) for broadcast messages. Requests (with `id
 
 | Method | Description |
 |--------|-------------|
-| `room.message` | A participant sent a message |
+| `room.message` | A participant sent a message (includes server-assigned sequence number) |
 | `room.joined` | Someone joined the room |
 | `room.left` | Someone left the room |
 | `room.state` | Full room snapshot (sent to newly joined clients) |
+| `permission.prompt` | Forwarded permission request to the human client for approval |
+| `permission.response` | Forwarded approval/denial back to the requesting agent's client |
 
 **Client → Server (requests/notifications):**
 
@@ -89,6 +151,7 @@ JSON-RPC 2.0. Notifications (no `id`) for broadcast messages. Requests (with `id
   "method": "room.message",
   "params": {
     "id": "msg-uuid",
+    "seq": 42,
     "from": "Alice",
     "source": "agent",
     "role": "backend",
@@ -222,11 +285,11 @@ Built with Bubble Tea (charmbracelet/bubbletea) and the Charm ecosystem.
 │ sle [22:01]                       │ ● Eve (frontend)    │
 │ I think we need a message queue   │   gemini · /sle/web │
 │                                   │                     │
-│ Alice [backend] [22:02]           │ ⚠ Permissions       │
-│ Agreed. Redis Streams would work  │ ┌─────────────────┐ │
-│                                   │ │ Alice: npm i     │ │
-│ [system] Eve has joined —         │ │ [y] ok  [n] deny │ │
-│   frontend, github.com/sle/web   │ └─────────────────┘ │
+│ Alice [backend] [22:02]           │                     │
+│ Agreed. Redis Streams would work  │                     │
+│                                   │                     │
+│ [system] Eve has joined —         │                     │
+│   frontend, github.com/sle/web   │                     │
 │                                   │                     │
 ├───────────────────────────────────┴─────────────────────┤
 │ sle › What about using NATS instead?▊                   │
@@ -237,7 +300,7 @@ Built with Bubble Tea (charmbracelet/bubbletea) and the Charm ecosystem.
 
 1. **Top bar** — project name, room topic, port
 2. **Chat log** — scrollable viewport. Messages rendered with name, role badge, timestamp. Code blocks and markdown rendered via Glamour.
-3. **Sidebar** — participant list (name, role, agent type, repo). Permission prompts that need attention appear below the participant list.
+3. **Sidebar** — participant list (name, role, agent type, repo). Future: permission prompts below the participant list.
 4. **Input box** — human client: keyboard input with @-mention autocomplete. Agent client: shows agent response being "typed" with an "agent typing..." indicator.
 
 ### Same TUI, Different Input
@@ -253,9 +316,7 @@ This means you can glance at any terminal and see the same chat room interface.
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
-| `Tab` | Focus sidebar (permissions) |
-| `y` / `n` | Approve/deny permission (when sidebar focused) |
-| `@` | Start mention (autocomplete) |
+| `@` | Start mention |
 | `Up/Down` | Scroll chat history |
 | `Ctrl+C` | Quit |
 
@@ -369,25 +430,46 @@ parley/
 | `charmbracelet/glamour` | Markdown rendering |
 | `spf13/cobra` | CLI parsing and subcommands |
 
+## Implementation Notes
+
+### Subprocess I/O
+
+Agent processes are spawned with stdin/stdout connected via pipes (not a PTY). Bubble Tea owns the terminal for the TUI — the agent subprocess must never write directly to the terminal. The `-p` / `--print` flag on agents like Claude Code and Gemini CLI is designed for non-interactive pipe usage, so this should work. The NDJSON buffering implementation must handle partial reads — a single `read()` on TCP may return half a JSON line or multiple lines concatenated. Use `bufio.Scanner` with newline splitting.
+
+### Validation Spike (must be done first)
+
+Before writing any parley code, validate that Claude Code's `--input-format stream-json` supports receiving multiple follow-up messages on stdin within a single process invocation. Test:
+
+```bash
+claude -p --input-format stream-json --output-format stream-json
+# Then send multiple JSON messages on stdin and observe behavior
+```
+
+If bidirectional streaming is not supported, the ClaudeDriver falls back to per-invocation with `--resume` (same pattern as GeminiDriver). This changes the driver implementation but not the architecture.
+
 ## PoC Scope
 
 The PoC implements the minimum to demonstrate the core loop: human and one Claude Code agent in a room, chatting.
 
 **In scope:**
+- Validation spike: Claude Code stream-json bidirectional I/O
 - `parley host` and `parley join` commands
 - Server with single room, TCP + JSON-RPC 2.0
-- Claude Code driver (bidirectional stream-json)
+- Claude Code driver (bidirectional stream-json, or per-invocation fallback)
 - TUI with chat log, sidebar (participants only), input box
 - Text messages only (content type `text`)
 - @-mentions
 - System messages for join/leave
-- JSON file persistence for room state
-- Session resume
+- Selective response system prompt (injected via `--append-system-prompt`)
+- JSON file persistence for room state (messages + participants)
 
 **Out of scope for PoC:**
+- Session resume (defer to post-PoC — agents run with `--dangerously-skip-permissions` or similar for now)
 - Gemini driver, HTTP driver
 - Rich content types (diff, code, tool_use, thinking)
 - Permission forwarding
 - Multiple rooms
 - @-mention autocomplete
 - Glamour markdown rendering (plain text first)
+- Error handling, reconnection, heartbeats
+- Multiple humans in one room
