@@ -110,6 +110,38 @@ func TestNotificationRoundTrip(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// TestParseMentions
+// ---------------------------------------------------------------------------
+
+func TestParseMentions_ExtractsAtMentions(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{"no mentions", "hello world", nil},
+		{"single mention", "@alice hello", []string{"alice"}},
+		{"multiple mentions", "@alice and @bob should look", []string{"alice", "bob"}},
+		{"bare at sign skipped", "@ hello", nil},
+		{"mention with punctuation attached", "@alice: hello", []string{"alice:"}},
+		{"empty string", "", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := protocol.ParseMentions(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("ParseMentions(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("ParseMentions(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestJoinParamsEncodeDecodeRoundTrip(t *testing.T) {
 	params := protocol.JoinParams{
 		Name:      "agent-x",

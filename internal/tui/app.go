@@ -82,7 +82,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				text := strings.TrimSpace(a.input.Value())
 				if text != "" {
 					a.input.Reset()
-					mentions := parseMentions(text)
+					mentions := protocol.ParseMentions(text)
 					if a.sendFn != nil {
 						a.sendFn(text, mentions)
 					}
@@ -184,15 +184,4 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 			a.sidebar.RemoveParticipant(params.Name)
 		}
 	}
-}
-
-// parseMentions extracts @mention tokens from a message string.
-func parseMentions(text string) []string {
-	var mentions []string
-	for _, word := range strings.Fields(text) {
-		if strings.HasPrefix(word, "@") && len(word) > 1 {
-			mentions = append(mentions, word[1:])
-		}
-	}
-	return mentions
 }

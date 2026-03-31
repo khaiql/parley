@@ -57,9 +57,6 @@ func (t TopBar) View() string {
 	leftGap := (spacerRight) / 2
 	rightGap := spacerRight - leftGap
 
-	leftPad := lipgloss.NewStyle().Width(leftLen + leftGap).Render(appName)
-	_ = leftPad
-
 	line := appName +
 		lipgloss.NewStyle().Width(leftGap).Render("") +
 		middle +
