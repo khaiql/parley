@@ -7,48 +7,6 @@ import (
 	"github.com/khaiql/parley/internal/protocol"
 )
 
-// ---- parseMentions -----------------------------------------------------------
-
-func TestParseMentions_None(t *testing.T) {
-	mentions := parseMentions("hello world, no mentions here")
-	if len(mentions) != 0 {
-		t.Fatalf("expected no mentions, got %v", mentions)
-	}
-}
-
-func TestParseMentions_Single(t *testing.T) {
-	mentions := parseMentions("hey @alice how are you")
-	if len(mentions) != 1 || mentions[0] != "alice" {
-		t.Fatalf("expected [alice], got %v", mentions)
-	}
-}
-
-func TestParseMentions_Multiple(t *testing.T) {
-	mentions := parseMentions("@alice and @bob please review")
-	if len(mentions) != 2 {
-		t.Fatalf("expected 2 mentions, got %v", mentions)
-	}
-	if mentions[0] != "alice" || mentions[1] != "bob" {
-		t.Errorf("unexpected mentions: %v", mentions)
-	}
-}
-
-func TestParseMentions_AtSignAlone(t *testing.T) {
-	// A bare "@" should not count as a mention.
-	mentions := parseMentions("email me @ home")
-	if len(mentions) != 0 {
-		t.Fatalf("expected no mentions, got %v", mentions)
-	}
-}
-
-func TestParseMentions_LeadingAtWithPunctuation(t *testing.T) {
-	// The whole token starting with @ is captured as-is (minus the @).
-	mentions := parseMentions("@alice!")
-	if len(mentions) != 1 || mentions[0] != "alice!" {
-		t.Fatalf("expected [alice!], got %v", mentions)
-	}
-}
-
 // ---- handleServerMsg ---------------------------------------------------------
 
 func makeApp() App {

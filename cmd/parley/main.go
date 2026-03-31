@@ -273,7 +273,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 			case driver.EventDone:
 				text := strings.TrimSpace(accumulated.String())
 				if text != "" {
-					mentions := parseMentions(text)
+					mentions := protocol.ParseMentions(text)
 					_ = c.Send(protocol.Content{Type: "text", Text: text}, mentions)
 				}
 				accumulated.Reset()
@@ -296,15 +296,4 @@ func contentText(content []protocol.Content) string {
 		}
 	}
 	return strings.Join(parts, "")
-}
-
-// parseMentions extracts @mention tokens from a message string.
-func parseMentions(text string) []string {
-	var mentions []string
-	for _, word := range strings.Fields(text) {
-		if strings.HasPrefix(word, "@") && len(word) > 1 {
-			mentions = append(mentions, word[1:])
-		}
-	}
-	return mentions
 }

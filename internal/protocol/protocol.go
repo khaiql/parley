@@ -4,6 +4,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -117,6 +118,20 @@ type RoomStateParams struct {
 }
 
 // ---- Helper functions -------------------------------------------------------
+
+// ParseMentions extracts @mention tokens from a message string.
+// A mention is any whitespace-delimited token that starts with "@" and has at
+// least one additional character. The returned slice contains the names without
+// the leading "@".
+func ParseMentions(text string) []string {
+	var mentions []string
+	for _, word := range strings.Fields(text) {
+		if strings.HasPrefix(word, "@") && len(word) > 1 {
+			mentions = append(mentions, word[1:])
+		}
+	}
+	return mentions
+}
 
 // EncodeLine marshals v to JSON and appends a newline, returning the result.
 // This produces one NDJSON line suitable for writing to a TCP stream.

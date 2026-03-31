@@ -271,36 +271,6 @@ func parseStreamEvent(raw claudeRawEvent) (AgentEvent, bool) {
 	}
 }
 
-// parseAssistantEvent extracts text and tool-use content from a non-streaming assistant event.
-func parseAssistantEvent(raw claudeRawEvent) (AgentEvent, bool) {
-	if raw.Message == nil {
-		return AgentEvent{}, false
-	}
-	var msg claudeMessage
-	if err := json.Unmarshal(raw.Message, &msg); err != nil {
-		return AgentEvent{}, false
-	}
-
-	var texts []string
-	for _, item := range msg.Content {
-		switch item.Type {
-		case "text":
-			if item.Text != "" {
-				texts = append(texts, item.Text)
-			}
-		case "thinking":
-			return AgentEvent{Type: EventThinking, Text: item.Thinking}, true
-		case "tool_use":
-			return AgentEvent{Type: EventToolUse, ToolName: item.Name}, true
-		}
-	}
-
-	if len(texts) > 0 {
-		return AgentEvent{Type: EventText, Text: strings.Join(texts, "")}, true
-	}
-	return AgentEvent{}, false
-}
-
 // ---------------------------------------------------------------------------
 // BuildSystemPrompt
 // ---------------------------------------------------------------------------
