@@ -68,16 +68,24 @@ func (c Chat) View() string {
 func renderMessage(msg protocol.MessageParams, width int) string {
 	text := extractText(msg.Content)
 
+	// Leave at least 1 column for content; body is capped at the viewport
+	// width so long text wraps instead of overflowing.
+	bodyWidth := width
+	if bodyWidth < 1 {
+		bodyWidth = 1
+	}
+	bodyStyle := lipgloss.NewStyle().Foreground(colorText).Width(bodyWidth)
+
 	switch msg.Source {
 	case "system", "":
 		if msg.Source == "" && msg.Role == "system" {
-			return systemMsgStyle.Render(fmt.Sprintf("[system] %s", text))
+			return systemMsgStyle.Width(bodyWidth).Render(fmt.Sprintf("[system] %s", text))
 		}
 		if msg.Source == "system" {
-			return systemMsgStyle.Render(fmt.Sprintf("[system] %s", text))
+			return systemMsgStyle.Width(bodyWidth).Render(fmt.Sprintf("[system] %s", text))
 		}
 		// Unknown — render as plain text.
-		return lipgloss.NewStyle().Foreground(colorText).Render(text)
+		return bodyStyle.Render(text)
 
 	case "human":
 		ts := formatTimestamp(msg)
@@ -87,7 +95,7 @@ func renderMessage(msg protocol.MessageParams, width int) string {
 			" ",
 			timestampStyle.Render(ts),
 		)
-		return header + "\n" + lipgloss.NewStyle().Foreground(colorText).Render(text)
+		return header + "\n" + bodyStyle.Render(text)
 
 	default:
 		// agent
@@ -104,7 +112,7 @@ func renderMessage(msg protocol.MessageParams, width int) string {
 			" ",
 			timestampStyle.Render(ts),
 		)
-		return header + "\n" + lipgloss.NewStyle().Foreground(colorText).Render(text)
+		return header + "\n" + bodyStyle.Render(text)
 	}
 }
 
