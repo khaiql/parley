@@ -227,7 +227,10 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	config.SystemPrompt = driver.BuildSystemPrompt(config)
 
 	ctx := context.Background()
-	d := &driver.ClaudeDriver{}
+	d, err := driver.NewDriver(command)
+	if err != nil {
+		return fmt.Errorf("join: %w", err)
+	}
 	if err := d.Start(ctx, config); err != nil {
 		return fmt.Errorf("join: start agent driver: %w", err)
 	}
