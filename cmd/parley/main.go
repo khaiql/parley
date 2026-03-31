@@ -272,13 +272,15 @@ func runJoin(cmd *cobra.Command, args []string) error {
 				_ = c.SendStatus(joinName, status)
 			case driver.EventDone:
 				text := strings.TrimSpace(accumulated.String())
-				if text != "" {
+				if driver.IsListeningSignal(text) {
+					_ = c.SendStatus(joinName, "listening")
+				} else if text != "" {
 					mentions := protocol.ParseMentions(text)
 					_ = c.Send(protocol.Content{Type: "text", Text: text}, mentions)
+					_ = c.SendStatus(joinName, "")
 				}
 				accumulated.Reset()
 				p.Send(tui.AgentTypingMsg{Text: ""})
-				_ = c.SendStatus(joinName, "")
 			}
 		}
 	}()
