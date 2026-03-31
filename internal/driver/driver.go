@@ -31,15 +31,16 @@ type AgentEvent struct {
 
 // AgentConfig holds all configuration needed to start an agent process.
 type AgentConfig struct {
-	Command      string   // e.g., "claude"
-	Args         []string // extra args, e.g. ["--worktree"]
-	Name         string
-	Role         string
-	Directory    string
-	Repo         string
-	Topic        string
-	Participants []ParticipantInfo
-	SystemPrompt string
+	Command         string   // e.g., "claude"
+	Args            []string // extra args, e.g. ["--worktree"]
+	Name            string
+	Role            string
+	Directory       string
+	Repo            string
+	Topic           string
+	Participants    []ParticipantInfo
+	SystemPrompt    string
+	ResumeSessionID string // if set, pass --resume <id> to the driver
 }
 
 // ParticipantInfo describes one participant in the room (used for system prompt).
@@ -59,4 +60,7 @@ type AgentDriver interface {
 	Events() <-chan AgentEvent
 	// Stop terminates the agent process.
 	Stop() error
+	// SessionID returns the most recently captured session ID from the agent.
+	// Returns empty string if no session has been established yet.
+	SessionID() string
 }

@@ -418,6 +418,8 @@ func contentText(content []protocol.Content) string {
 // ---------------------------------------------------------------------------
 
 // BuildArgs constructs the argument slice for the claude subprocess.
+// If config.ResumeSessionID is set, --resume <id> is appended so the agent
+// resumes a prior conversation session.
 func BuildArgs(config AgentConfig) []string {
 	args := []string{
 		"-p",
@@ -426,6 +428,9 @@ func BuildArgs(config AgentConfig) []string {
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--append-system-prompt", config.SystemPrompt,
+	}
+	if config.ResumeSessionID != "" {
+		args = append(args, "--resume", config.ResumeSessionID)
 	}
 	args = append(args, config.Args...)
 	return args

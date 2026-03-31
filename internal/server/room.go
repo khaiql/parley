@@ -74,6 +74,7 @@ func (r *Room) Join(cc *ClientConn) (protocol.RoomStateParams, error) {
 	r.mu.Unlock()
 
 	return protocol.RoomStateParams{
+		RoomID:       r.ID,
 		Topic:        topic,
 		Participants: participants,
 		Messages:     recent,

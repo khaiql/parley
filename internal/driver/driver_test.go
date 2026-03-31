@@ -267,6 +267,45 @@ func TestBuildArgs_ExtraArgsAppended(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_ResumeSessionIDIncluded(t *testing.T) {
+	cfg := AgentConfig{
+		SystemPrompt:    "prompt",
+		ResumeSessionID: "abc-session-123",
+	}
+	args := BuildArgs(cfg)
+
+	// Find --resume flag followed by the session ID.
+	found := false
+	for i, a := range args {
+		if a == "--resume" {
+			if i+1 >= len(args) {
+				t.Fatal("--resume flag has no following value")
+			}
+			if args[i+1] != "abc-session-123" {
+				t.Errorf("expected --resume value %q, got %q", "abc-session-123", args[i+1])
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected --resume flag in args: %v", args)
+	}
+}
+
+func TestBuildArgs_NoResumeWhenEmpty(t *testing.T) {
+	cfg := AgentConfig{
+		SystemPrompt:    "prompt",
+		ResumeSessionID: "",
+	}
+	args := BuildArgs(cfg)
+	for _, a := range args {
+		if a == "--resume" {
+			t.Errorf("expected no --resume flag when ResumeSessionID is empty, got args: %v", args)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // TestParseAssistantEvent
 // ---------------------------------------------------------------------------
