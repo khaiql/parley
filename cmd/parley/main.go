@@ -238,6 +238,17 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 	// Bridge network → TUI + agent driver.
 	go func() {
+		var pendingMsg string
+		var pendingTimer *time.Timer
+
+		flushPending := func() {
+			if pendingMsg != "" {
+				_ = d.Send(pendingMsg)
+				pendingMsg = ""
+			}
+			pendingTimer = nil
+		}
+
 		for msg := range c.Incoming() {
 			p.Send(tui.ServerMsg{Raw: msg})
 
@@ -245,13 +256,42 @@ func runJoin(cmd *cobra.Command, args []string) error {
 				var params protocol.MessageParams
 				if err := json.Unmarshal(msg.Params, &params); err == nil {
 					if params.From != joinName {
-						// Format message and send to agent driver.
-						text := fmt.Sprintf("%s: %s", params.From, contentText(params.Content))
-						_ = d.Send(text)
+						// Format message and decide whether to delay.
+						formatted := fmt.Sprintf("%s: %s", params.From, contentText(params.Content))
+						if isMentioned(params.Mentions, joinName) {
+							// @-mentioned: flush any pending messages and send immediately.
+							if pendingTimer != nil {
+								pendingTimer.Stop()
+								pendingTimer = nil
+							}
+							if pendingMsg != "" {
+								_ = d.Send(pendingMsg)
+								pendingMsg = ""
+							}
+							_ = d.Send(formatted)
+						} else {
+							// Not mentioned: batch with a 2-second debounce timer.
+							if pendingMsg != "" {
+								pendingMsg += "\n" + formatted
+							} else {
+								pendingMsg = formatted
+							}
+							if pendingTimer == nil {
+								pendingTimer = time.AfterFunc(2*time.Second, flushPending)
+							} else {
+								pendingTimer.Reset(2 * time.Second)
+							}
+						}
 					}
 				}
 			}
 		}
+
+		// Flush any remaining pending message when the channel closes.
+		if pendingTimer != nil {
+			pendingTimer.Stop()
+		}
+		flushPending()
 	}()
 
 	// Bridge agent → network.
@@ -287,6 +327,16 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 	_, err = p.Run()
 	return err
+}
+
+// isMentioned reports whether name appears in the mentions list.
+func isMentioned(mentions []string, name string) bool {
+	for _, m := range mentions {
+		if m == name {
+			return true
+		}
+	}
+	return false
 }
 
 // contentText extracts the text from a slice of Content items.
