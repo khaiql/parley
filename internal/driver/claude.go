@@ -18,6 +18,7 @@ import (
 // ClaudeDriver drives a long-lived `claude` subprocess using stream-json I/O.
 type ClaudeDriver struct {
 	mu        sync.Mutex
+	wg        sync.WaitGroup
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
 	events    chan AgentEvent
@@ -62,6 +63,7 @@ func (d *ClaudeDriver) Start(ctx context.Context, config AgentConfig) error {
 		return fmt.Errorf("driver: start process: %w", err)
 	}
 
+	d.wg.Add(1)
 	go d.readLoop(stdout)
 
 	// Send initial message to prompt the agent to introduce itself.
@@ -90,17 +92,22 @@ func (d *ClaudeDriver) Events() <-chan AgentEvent {
 	return d.events
 }
 
-// Stop terminates the agent process.
+// Stop terminates the agent process and waits for readLoop to finish.
+// It closes stdin first to signal the subprocess to finish, then cancels
+// the context (which sends SIGKILL via CommandContext), and finally waits
+// for readLoop to exit so callers know the events channel is closed.
 func (d *ClaudeDriver) Stop() error {
-	if d.cancel != nil {
-		d.cancel()
-	}
+	// Close stdin to signal the subprocess that no more input is coming.
 	if d.stdin != nil {
 		_ = d.stdin.Close()
 	}
-	if d.cmd != nil && d.cmd.Process != nil {
-		return d.cmd.Process.Kill()
+	// Cancel context — kills the process via CommandContext.
+	if d.cancel != nil {
+		d.cancel()
 	}
+	// Wait for readLoop to finish. This guarantees the events channel is
+	// closed before Stop returns, eliminating the race condition.
+	d.wg.Wait()
 	return nil
 }
 
@@ -108,6 +115,7 @@ func (d *ClaudeDriver) Stop() error {
 // The scanner buffer is set to 1 MB to match the server limit and to handle
 // large tool results that would otherwise silently truncate the event stream.
 func (d *ClaudeDriver) readLoop(r io.Reader) {
+	defer d.wg.Done()
 	defer close(d.events)
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)

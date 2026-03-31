@@ -390,6 +390,47 @@ func TestParseStreamEvent_MessageStartSkipped(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestStop_WaitsForReadLoop — Stop() must wait for readLoop to finish
+// ---------------------------------------------------------------------------
+
+// TestStop_WaitsForReadLoop starts a driver backed by a `cat` subprocess,
+// calls Stop(), and verifies that the events channel is closed before Stop
+// returns (i.e. readLoop has finished and there is no race).
+func TestStop_WaitsForReadLoop(t *testing.T) {
+	// Use a pipe-based driver rather than a real subprocess so the test is
+	// hermetic: we control when stdout closes.
+	pr, pw := io.Pipe()
+
+	d := &ClaudeDriver{}
+	d.events = make(chan AgentEvent, 64)
+
+	// Simulate a started driver: launch readLoop manually.
+	d.wg.Add(1)
+	go d.readLoop(pr)
+
+	// Writing a few bytes to pw then closing it mimics a process exiting.
+	// Stop() should close pw (via stdin) and cancel, but here we just
+	// exercise the wg.Wait() path directly by closing the pipe.
+	pw.Close()
+
+	// Stop() must not return until readLoop has finished.
+	if err := d.Stop(); err != nil {
+		t.Fatalf("Stop() returned error: %v", err)
+	}
+
+	// After Stop returns, the events channel MUST be closed (readLoop done).
+	select {
+	case _, ok := <-d.Events():
+		if ok {
+			t.Error("expected events channel to be closed after Stop(), but received a value")
+		}
+		// ok==false means channel is closed — correct
+	default:
+		t.Error("events channel is not closed after Stop() returned — readLoop is still running")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestReadLoop — scanner buffer size
 // ---------------------------------------------------------------------------
 
@@ -458,6 +499,7 @@ func TestReadLoop_OneMBBufferHandlesLargeLine(t *testing.T) {
 
 	d := &ClaudeDriver{}
 	d.events = make(chan AgentEvent, 8)
+	d.wg.Add(1) // required: readLoop calls wg.Done()
 
 	go func() {
 		pw.Write(makeResultLine(lineSize))
