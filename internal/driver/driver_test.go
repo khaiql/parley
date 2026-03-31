@@ -266,45 +266,13 @@ func TestBuildArgs_ExtraArgsAppended(t *testing.T) {
 // TestParseAssistantEvent
 // ---------------------------------------------------------------------------
 
-func TestParseAssistantEvent_TextContent(t *testing.T) {
+func TestParseAssistantEvent_SkippedWithPartialMessages(t *testing.T) {
+	// With --include-partial-messages, assistant events are skipped to avoid
+	// double-rendering (stream_event deltas already provide the text).
 	line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello from agent"}]}}`
-	event, ok := parseLine([]byte(line))
-	if !ok {
-		t.Fatal("expected parseLine to return ok=true for assistant event")
-	}
-	if event.Type != EventText {
-		t.Errorf("expected EventText, got %v", event.Type)
-	}
-	if event.Text != "Hello from agent" {
-		t.Errorf("expected text 'Hello from agent', got %q", event.Text)
-	}
-}
-
-func TestParseAssistantEvent_MultipleTextBlocks(t *testing.T) {
-	line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"part one"},{"type":"text","text":" part two"}]}}`
-	event, ok := parseLine([]byte(line))
-	if !ok {
-		t.Fatal("expected parseLine to return ok=true")
-	}
-	if event.Type != EventText {
-		t.Errorf("expected EventText, got %v", event.Type)
-	}
-	if !strings.Contains(event.Text, "part one") {
-		t.Errorf("expected combined text to contain 'part one', got %q", event.Text)
-	}
-}
-
-func TestParseAssistantEvent_ToolUseContent(t *testing.T) {
-	line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"bash","input":{}}]}}`
-	event, ok := parseLine([]byte(line))
-	if !ok {
-		t.Fatal("expected parseLine to return ok=true for tool_use")
-	}
-	if event.Type != EventToolUse {
-		t.Errorf("expected EventToolUse, got %v", event.Type)
-	}
-	if event.ToolName != "bash" {
-		t.Errorf("expected ToolName 'bash', got %q", event.ToolName)
+	_, ok := parseLine([]byte(line))
+	if ok {
+		t.Error("expected parseLine to skip assistant events (handled by stream_event instead)")
 	}
 }
 

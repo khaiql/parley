@@ -210,7 +210,10 @@ func parseLine(line []byte) (AgentEvent, bool) {
 	case "stream_event":
 		return parseStreamEvent(raw)
 	case "assistant":
-		return parseAssistantEvent(raw)
+		// With --include-partial-messages, we get both stream_event (token-level)
+		// and assistant (full text). Skip assistant to avoid double-rendering.
+		// The stream_event deltas already provide the text incrementally.
+		return AgentEvent{}, false
 	case "result":
 		return AgentEvent{Type: EventDone}, true
 	default:
