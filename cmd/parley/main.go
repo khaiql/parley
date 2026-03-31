@@ -33,6 +33,7 @@ var rootCmd = &cobra.Command{
 
 var hostTopic string
 var hostPort int
+var hostResume string
 
 var hostCmd = &cobra.Command{
 	Use:   "host",
@@ -43,6 +44,7 @@ var hostCmd = &cobra.Command{
 var joinPort int
 var joinName string
 var joinRole string
+var joinResume bool
 
 var joinCmd = &cobra.Command{
 	Use:   "join",
@@ -52,13 +54,14 @@ var joinCmd = &cobra.Command{
 }
 
 func init() {
-	hostCmd.Flags().StringVar(&hostTopic, "topic", "", "Topic for the chat session (required)")
+	hostCmd.Flags().StringVar(&hostTopic, "topic", "", "Topic for the chat session (required unless --resume is set)")
 	hostCmd.Flags().IntVar(&hostPort, "port", 0, "Port to listen on (0 = auto-assign)")
-	_ = hostCmd.MarkFlagRequired("topic")
+	hostCmd.Flags().StringVar(&hostResume, "resume", "", "Room ID to resume (loads saved room from ~/.parley/rooms/<id>)")
 
 	joinCmd.Flags().IntVar(&joinPort, "port", 0, "Port of the session to join (required)")
 	joinCmd.Flags().StringVar(&joinName, "name", "", "Your name in the session (required)")
 	joinCmd.Flags().StringVar(&joinRole, "role", "agent", "Your role in the session")
+	joinCmd.Flags().BoolVar(&joinResume, "resume", false, "Resume prior agent session (looks up session ID from saved agents.json)")
 	joinCmd.Flags().SetInterspersed(false)
 	_ = joinCmd.MarkFlagRequired("port")
 	_ = joinCmd.MarkFlagRequired("name")
@@ -81,9 +84,33 @@ func detectRepo() string {
 // runs the TUI.
 func runHost(cmd *cobra.Command, args []string) error {
 	addr := fmt.Sprintf(":%d", hostPort)
-	srv, err := server.New(addr, hostTopic)
-	if err != nil {
-		return fmt.Errorf("host: create server: %w", err)
+
+	var srv *server.Server
+	var err error
+
+	if hostResume != "" {
+		// Resume an existing room from disk.
+		dir := server.RoomDir(hostResume)
+		room, loadErr := server.LoadRoom(dir)
+		if loadErr != nil {
+			return fmt.Errorf("host: load room %q: %w", hostResume, loadErr)
+		}
+		srv, err = server.NewWithRoom(addr, room)
+		if err != nil {
+			return fmt.Errorf("host: create server: %w", err)
+		}
+		// Use loaded topic if --topic was not explicitly set.
+		if hostTopic == "" {
+			hostTopic = room.Topic
+		}
+	} else {
+		if hostTopic == "" {
+			return fmt.Errorf("host: --topic is required when not using --resume")
+		}
+		srv, err = server.New(addr, hostTopic)
+		if err != nil {
+			return fmt.Errorf("host: create server: %w", err)
+		}
 	}
 
 	go srv.Serve()
@@ -197,6 +224,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	topic := roomState.Topic
+	roomID := roomState.RoomID
 
 	// Build participant info list.
 	participants := make([]driver.ParticipantInfo, 0, len(roomState.Participants))
@@ -215,15 +243,31 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		extraArgs = agentArgs[1:]
 	}
 
+	// If --resume is set and we know the room ID, look up the prior session ID.
+	var resumeSessionID string
+	if joinResume && roomID != "" {
+		roomDir := server.RoomDir(roomID)
+		sid, lookupErr := server.FindAgentSessionID(roomDir, joinName)
+		if lookupErr != nil {
+			fmt.Fprintf(os.Stderr, "join: warning: could not load prior session ID: %v\n", lookupErr)
+		} else if sid != "" {
+			resumeSessionID = sid
+			fmt.Fprintf(os.Stderr, "join: resuming session %s\n", sid)
+		} else {
+			fmt.Fprintf(os.Stderr, "join: no prior session found for %q, starting fresh\n", joinName)
+		}
+	}
+
 	config := driver.AgentConfig{
-		Command:      command,
-		Args:         extraArgs,
-		Name:         joinName,
-		Role:         joinRole,
-		Directory:    dir,
-		Repo:         repo,
-		Topic:        topic,
-		Participants: participants,
+		Command:         command,
+		Args:            extraArgs,
+		Name:            joinName,
+		Role:            joinRole,
+		Directory:       dir,
+		Repo:            repo,
+		Topic:           topic,
+		Participants:    participants,
+		ResumeSessionID: resumeSessionID,
 	}
 	config.SystemPrompt = driver.BuildSystemPrompt(config)
 
@@ -343,6 +387,17 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}()
 
 	_, err = p.Run()
+
+	// Save the agent's session ID so it can be resumed next time.
+	if roomID != "" {
+		if sid := d.SessionID(); sid != "" {
+			roomDir := server.RoomDir(roomID)
+			if saveErr := server.UpdateAgentSessionID(roomDir, joinName, sid); saveErr != nil {
+				fmt.Fprintf(os.Stderr, "join: warning: could not save session ID: %v\n", saveErr)
+			}
+		}
+	}
+
 	return err
 }
 

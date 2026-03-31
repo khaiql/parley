@@ -112,6 +112,44 @@ func TestSaveLoadRoomPreservesID(t *testing.T) {
 	}
 }
 
+func TestLoadRoomRestoresTopicAndMessages(t *testing.T) {
+	dir := t.TempDir()
+
+	room := NewRoom("discussion")
+	cc := &ClientConn{Name: "alice", Role: "human", Source: "human", Send: make(chan []byte, 8), Done: make(chan struct{})}
+	room.Participants["alice"] = cc
+
+	room.Broadcast("alice", "human", "human", protocol.Content{Type: "text", Text: "hello"}, nil)
+	room.Broadcast("alice", "human", "human", protocol.Content{Type: "text", Text: "world"}, nil)
+
+	if err := SaveRoom(dir, room); err != nil {
+		t.Fatalf("SaveRoom: %v", err)
+	}
+
+	loaded, err := LoadRoom(dir)
+	if err != nil {
+		t.Fatalf("LoadRoom: %v", err)
+	}
+
+	if loaded.Topic != "discussion" {
+		t.Errorf("topic: got %q, want %q", loaded.Topic, "discussion")
+	}
+	msgs := loaded.GetMessages()
+	if len(msgs) != 2 {
+		t.Fatalf("messages: got %d, want 2", len(msgs))
+	}
+	if msgs[0].Content[0].Text != "hello" {
+		t.Errorf("first message text: got %q, want %q", msgs[0].Content[0].Text, "hello")
+	}
+	if msgs[1].Content[0].Text != "world" {
+		t.Errorf("second message text: got %q, want %q", msgs[1].Content[0].Text, "world")
+	}
+	// seq should be restored so next message gets seq 3
+	if loaded.seq != 2 {
+		t.Errorf("seq: got %d, want 2", loaded.seq)
+	}
+}
+
 func TestSaveRoomUsesRoomID(t *testing.T) {
 	dir := t.TempDir()
 	room := NewRoom("topic")
@@ -128,5 +166,188 @@ func TestSaveRoomUsesRoomID(t *testing.T) {
 
 	if rd.ID != room.ID {
 		t.Errorf("room.json ID = %q, want room.ID = %q", rd.ID, room.ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Session ID persistence tests
+// ---------------------------------------------------------------------------
+
+func TestParticipantDataSessionIDField(t *testing.T) {
+	dir := t.TempDir()
+	agents := []ParticipantData{
+		{Name: "alice", Role: "agent", Source: "agent", SessionID: "sess-abc-123"},
+		{Name: "bob", Role: "agent", Source: "agent", SessionID: ""},
+	}
+
+	if err := SaveAgents(dir, agents); err != nil {
+		t.Fatalf("SaveAgents: %v", err)
+	}
+
+	loaded, err := LoadAgents(dir)
+	if err != nil {
+		t.Fatalf("LoadAgents: %v", err)
+	}
+
+	if len(loaded) != 2 {
+		t.Fatalf("expected 2 agents, got %d", len(loaded))
+	}
+	if loaded[0].SessionID != "sess-abc-123" {
+		t.Errorf("alice SessionID: got %q, want %q", loaded[0].SessionID, "sess-abc-123")
+	}
+	if loaded[1].SessionID != "" {
+		t.Errorf("bob SessionID: got %q, want empty", loaded[1].SessionID)
+	}
+}
+
+func TestLoadAgents_NonExistentFileReturnsNil(t *testing.T) {
+	dir := t.TempDir()
+	agents, err := LoadAgents(dir)
+	if err != nil {
+		t.Fatalf("expected no error for missing agents.json, got: %v", err)
+	}
+	if agents != nil {
+		t.Errorf("expected nil for missing file, got: %v", agents)
+	}
+}
+
+func TestFindAgentSessionID_Found(t *testing.T) {
+	dir := t.TempDir()
+	agents := []ParticipantData{
+		{Name: "alice", SessionID: "session-xyz"},
+		{Name: "bob", SessionID: "session-abc"},
+	}
+	if err := SaveAgents(dir, agents); err != nil {
+		t.Fatalf("SaveAgents: %v", err)
+	}
+
+	sid, err := FindAgentSessionID(dir, "alice")
+	if err != nil {
+		t.Fatalf("FindAgentSessionID: %v", err)
+	}
+	if sid != "session-xyz" {
+		t.Errorf("got session ID %q, want %q", sid, "session-xyz")
+	}
+}
+
+func TestFindAgentSessionID_NotFound(t *testing.T) {
+	dir := t.TempDir()
+	agents := []ParticipantData{
+		{Name: "alice", SessionID: "session-xyz"},
+	}
+	if err := SaveAgents(dir, agents); err != nil {
+		t.Fatalf("SaveAgents: %v", err)
+	}
+
+	sid, err := FindAgentSessionID(dir, "charlie")
+	if err != nil {
+		t.Fatalf("FindAgentSessionID: %v", err)
+	}
+	if sid != "" {
+		t.Errorf("expected empty session ID for unknown agent, got %q", sid)
+	}
+}
+
+func TestFindAgentSessionID_MissingFile(t *testing.T) {
+	dir := t.TempDir()
+	sid, err := FindAgentSessionID(dir, "alice")
+	if err != nil {
+		t.Fatalf("expected no error for missing file, got: %v", err)
+	}
+	if sid != "" {
+		t.Errorf("expected empty session ID for missing file, got %q", sid)
+	}
+}
+
+func TestUpdateAgentSessionID_UpdatesExisting(t *testing.T) {
+	dir := t.TempDir()
+	agents := []ParticipantData{
+		{Name: "alice", SessionID: "old-session"},
+	}
+	if err := SaveAgents(dir, agents); err != nil {
+		t.Fatalf("SaveAgents: %v", err)
+	}
+
+	if err := UpdateAgentSessionID(dir, "alice", "new-session-456"); err != nil {
+		t.Fatalf("UpdateAgentSessionID: %v", err)
+	}
+
+	sid, err := FindAgentSessionID(dir, "alice")
+	if err != nil {
+		t.Fatalf("FindAgentSessionID after update: %v", err)
+	}
+	if sid != "new-session-456" {
+		t.Errorf("got %q, want %q", sid, "new-session-456")
+	}
+}
+
+func TestUpdateAgentSessionID_AppendsNew(t *testing.T) {
+	dir := t.TempDir()
+	// Start with an empty but existing file.
+	if err := SaveAgents(dir, []ParticipantData{}); err != nil {
+		t.Fatalf("SaveAgents: %v", err)
+	}
+
+	if err := UpdateAgentSessionID(dir, "newagent", "fresh-session"); err != nil {
+		t.Fatalf("UpdateAgentSessionID: %v", err)
+	}
+
+	sid, err := FindAgentSessionID(dir, "newagent")
+	if err != nil {
+		t.Fatalf("FindAgentSessionID: %v", err)
+	}
+	if sid != "fresh-session" {
+		t.Errorf("got %q, want %q", sid, "fresh-session")
+	}
+}
+
+func TestUpdateAgentSessionID_CreatesFileWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	// No agents.json exists yet.
+
+	if err := UpdateAgentSessionID(dir, "alice", "brand-new-session"); err != nil {
+		t.Fatalf("UpdateAgentSessionID: %v", err)
+	}
+
+	sid, err := FindAgentSessionID(dir, "alice")
+	if err != nil {
+		t.Fatalf("FindAgentSessionID: %v", err)
+	}
+	if sid != "brand-new-session" {
+		t.Errorf("got %q, want %q", sid, "brand-new-session")
+	}
+}
+
+func TestSaveRoom_AgentsIncludeSessionID(t *testing.T) {
+	dir := t.TempDir()
+
+	room := NewRoom("topic")
+	cc := &ClientConn{
+		Name:      "agent1",
+		Role:      "agent",
+		Source:    "agent",
+		AgentType: "claude",
+		Send:      make(chan []byte, 8),
+		Done:      make(chan struct{}),
+	}
+	if _, err := room.Join(cc); err != nil {
+		t.Fatalf("room.Join: %v", err)
+	}
+
+	if err := SaveRoom(dir, room); err != nil {
+		t.Fatalf("SaveRoom: %v", err)
+	}
+
+	// agents.json should exist.
+	var agents []ParticipantData
+	if err := readJSON(filepath.Join(dir, AgentsFile), &agents); err != nil {
+		t.Fatalf("read agents.json: %v", err)
+	}
+
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent in agents.json, got %d", len(agents))
+	}
+	if agents[0].Name != "agent1" {
+		t.Errorf("agent name: got %q, want %q", agents[0].Name, "agent1")
 	}
 }

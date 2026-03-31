@@ -23,6 +23,7 @@ type ParticipantData struct {
 	Repo      string `json:"repo,omitempty"`
 	AgentType string `json:"agent_type,omitempty"`
 	Source    string `json:"source"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // RoomDir returns the canonical directory for a room's persisted state.
@@ -99,6 +100,70 @@ func LoadRoom(dir string) (*Room, error) {
 	}
 
 	return room, nil
+}
+
+// AgentsFile is the canonical filename for agent session data within a room dir.
+const AgentsFile = "agents.json"
+
+// SaveAgents writes agent participant data (including session IDs) to
+// <dir>/agents.json. It creates dir if it does not exist.
+func SaveAgents(dir string, agents []ParticipantData) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create room dir: %w", err)
+	}
+	return writeJSON(filepath.Join(dir, AgentsFile), agents)
+}
+
+// LoadAgents reads <dir>/agents.json and returns the slice of ParticipantData.
+// Returns nil (no error) if the file does not exist.
+func LoadAgents(dir string) ([]ParticipantData, error) {
+	path := filepath.Join(dir, AgentsFile)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, nil
+	}
+	var agents []ParticipantData
+	if err := readJSON(path, &agents); err != nil {
+		return nil, fmt.Errorf("read agents.json: %w", err)
+	}
+	return agents, nil
+}
+
+// FindAgentSessionID returns the session_id stored for the named agent in
+// <dir>/agents.json. Returns empty string if the agent is not found or the
+// file does not exist.
+func FindAgentSessionID(dir, name string) (string, error) {
+	agents, err := LoadAgents(dir)
+	if err != nil {
+		return "", err
+	}
+	for _, a := range agents {
+		if a.Name == name {
+			return a.SessionID, nil
+		}
+	}
+	return "", nil
+}
+
+// UpdateAgentSessionID updates the session_id for the named agent in
+// <dir>/agents.json. If the agent is not already present, it is appended.
+// If the file does not exist, a new one is created.
+func UpdateAgentSessionID(dir, name, sessionID string) error {
+	agents, err := LoadAgents(dir)
+	if err != nil {
+		return err
+	}
+	found := false
+	for i, a := range agents {
+		if a.Name == name {
+			agents[i].SessionID = sessionID
+			found = true
+			break
+		}
+	}
+	if !found {
+		agents = append(agents, ParticipantData{Name: name, SessionID: sessionID})
+	}
+	return SaveAgents(dir, agents)
 }
 
 // writeJSON marshals v with indentation and writes it to path.
