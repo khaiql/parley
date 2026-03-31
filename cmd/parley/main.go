@@ -233,6 +233,19 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 	defer d.Stop()
 
+	// Send initial prompt with conversation history if available.
+	intro := fmt.Sprintf("You have joined a parley chat room. Topic: %s. Introduce yourself briefly.", topic)
+	history := driver.FormatHistory(roomState.Messages)
+	if history != "" {
+		if err := d.Send(history + "\n" + intro); err != nil {
+			return fmt.Errorf("join: send initial prompt: %w", err)
+		}
+	} else {
+		if err := d.Send(intro); err != nil {
+			return fmt.Errorf("join: send initial prompt: %w", err)
+		}
+	}
+
 	app := tui.NewApp(topic, joinPort, tui.InputModeAgent, joinName, nil, roomState.Participants...)
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 

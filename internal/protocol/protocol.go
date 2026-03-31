@@ -121,8 +121,9 @@ type Participant struct {
 
 // RoomStateParams is the params payload for a "room/state" notification.
 type RoomStateParams struct {
-	Topic        string        `json:"topic,omitempty"`
-	Participants []Participant `json:"participants"`
+	Topic        string         `json:"topic,omitempty"`
+	Participants []Participant  `json:"participants"`
+	Messages     []MessageParams `json:"messages,omitempty"`
 }
 
 // ---- Helper functions -------------------------------------------------------

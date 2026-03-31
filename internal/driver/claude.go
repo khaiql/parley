@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 // ---------------------------------------------------------------------------
@@ -65,12 +67,6 @@ func (d *ClaudeDriver) Start(ctx context.Context, config AgentConfig) error {
 
 	d.wg.Add(1)
 	go d.readLoop(stdout)
-
-	// Send initial message to prompt the agent to introduce itself.
-	intro := fmt.Sprintf("You have joined a parley chat room. The topic is: %s. Briefly introduce yourself and ask how you can help.", config.Topic)
-	if err := d.Send(intro); err != nil {
-		return fmt.Errorf("driver: send initial prompt: %w", err)
-	}
 
 	return nil
 }
@@ -358,6 +354,63 @@ func BuildInputMessage(text string) []byte {
 
 	data, _ := json.Marshal(env)
 	return append(data, '\n')
+}
+
+// ---------------------------------------------------------------------------
+// BuildArgs
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// FormatHistory
+// ---------------------------------------------------------------------------
+
+// FormatHistory formats the last N non-system messages as a readable history
+// string to inject into an agent's initial context. Returns empty string when
+// there are no messages to show.
+func FormatHistory(messages []protocol.MessageParams) string {
+	if len(messages) == 0 {
+		return ""
+	}
+
+	const maxMessages = 20
+
+	// Filter out system messages.
+	var filtered []protocol.MessageParams
+	for _, m := range messages {
+		if m.Source != "system" {
+			filtered = append(filtered, m)
+		}
+	}
+
+	if len(filtered) == 0 {
+		return ""
+	}
+
+	// Take the last maxMessages entries.
+	if len(filtered) > maxMessages {
+		filtered = filtered[len(filtered)-maxMessages:]
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Here is the conversation so far:\n")
+	for _, m := range filtered {
+		text := contentText(m.Content)
+		sb.WriteString(fmt.Sprintf("[%s]: %s\n", m.From, text))
+	}
+	sb.WriteString("---\n")
+	sb.WriteString("You are joining this conversation now. Read the above for context.")
+	return sb.String()
+}
+
+// contentText extracts the text from a slice of protocol.Content items.
+func contentText(content []protocol.Content) string {
+	var parts []string
+	for _, c := range content {
+		if c.Text != "" {
+			parts = append(parts, c.Text)
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 // ---------------------------------------------------------------------------

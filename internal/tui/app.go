@@ -148,6 +148,9 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 		var params protocol.RoomStateParams
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
 			a.sidebar.SetParticipants(params.Participants)
+			for _, msg := range params.Messages {
+				a.chat.AddMessage(msg)
+			}
 		}
 
 	case "room.message":
