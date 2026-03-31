@@ -151,6 +151,7 @@ func (s *Server) handleConn(conn net.Conn) {
 	if cc != nil {
 		name := cc.Name
 		s.room.Leave(name)
+		s.room.BroadcastLeft(protocol.LeftParams{Name: name})
 		s.room.BroadcastSystem(fmt.Sprintf("%s left", name))
 	}
 }

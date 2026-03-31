@@ -105,9 +105,12 @@ func (d *ClaudeDriver) Stop() error {
 }
 
 // readLoop reads stdout line by line and emits AgentEvents.
+// The scanner buffer is set to 1 MB to match the server limit and to handle
+// large tool results that would otherwise silently truncate the event stream.
 func (d *ClaudeDriver) readLoop(r io.Reader) {
 	defer close(d.events)
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		d.parseAndEmitLine(line, d.events)
