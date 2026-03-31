@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sle/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 func TestSaveAndLoadRoom(t *testing.T) {

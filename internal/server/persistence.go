@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sle/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 // RoomData is the JSON representation of a Room's metadata.

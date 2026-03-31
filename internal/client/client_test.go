@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sle/parley/internal/client"
-	"github.com/sle/parley/internal/protocol"
-	"github.com/sle/parley/internal/server"
+	"github.com/khaiql/parley/internal/client"
+	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/server"
 )
 
 // drain reads up to n messages from ch within a timeout, returning what it collected.

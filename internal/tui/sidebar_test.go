@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/sle/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 func TestSidebarAddParticipant(t *testing.T) {

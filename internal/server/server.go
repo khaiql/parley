@@ -7,7 +7,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/sle/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 const scanBufSize = 1024 * 1024 // 1 MB

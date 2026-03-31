@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sle/parley/internal/client"
-	"github.com/sle/parley/internal/protocol"
-	"github.com/sle/parley/internal/server"
+	"github.com/khaiql/parley/internal/client"
+	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/server"
 )
 
 // readMsg reads the next message from the client's incoming channel, failing

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/sle/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 const updateGolden = false // set to true to regenerate golden files

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sle/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 func TestExtractText(t *testing.T) {
