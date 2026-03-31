@@ -1,0 +1,361 @@
+package driver
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// ---------------------------------------------------------------------------
+// TestBuildSystemPrompt
+// ---------------------------------------------------------------------------
+
+func TestBuildSystemPrompt_ContainsTopic(t *testing.T) {
+	cfg := AgentConfig{
+		Name:      "Alice",
+		Role:      "backend engineer",
+		Directory: "/home/alice/repo",
+		Topic:     "refactor the auth module",
+		Participants: []ParticipantInfo{
+			{Name: "Alice", Role: "backend engineer", Directory: "/home/alice/repo"},
+			{Name: "Bob", Role: "frontend engineer", Directory: "/home/bob/repo"},
+		},
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "refactor the auth module") {
+		t.Errorf("expected system prompt to contain topic, got:\n%s", prompt)
+	}
+}
+
+func TestBuildSystemPrompt_ContainsParticipantNames(t *testing.T) {
+	cfg := AgentConfig{
+		Name:      "Alice",
+		Role:      "backend engineer",
+		Directory: "/home/alice/repo",
+		Topic:     "test topic",
+		Participants: []ParticipantInfo{
+			{Name: "Alice", Role: "backend engineer", Directory: "/home/alice/repo"},
+			{Name: "Bob", Role: "frontend engineer", Directory: "/home/bob/repo"},
+			{Name: "Carol", Role: "QA", Directory: "/home/carol/repo"},
+		},
+	}
+	prompt := BuildSystemPrompt(cfg)
+	for _, name := range []string{"Alice", "Bob", "Carol"} {
+		if !strings.Contains(prompt, name) {
+			t.Errorf("expected system prompt to contain participant %q, got:\n%s", name, prompt)
+		}
+	}
+}
+
+func TestBuildSystemPrompt_ContainsRoleAndDirectory(t *testing.T) {
+	cfg := AgentConfig{
+		Name:      "Alice",
+		Role:      "backend engineer",
+		Directory: "/home/alice/special-dir",
+		Topic:     "test topic",
+		Participants: []ParticipantInfo{
+			{Name: "Alice", Role: "backend engineer", Directory: "/home/alice/special-dir"},
+		},
+	}
+	prompt := BuildSystemPrompt(cfg)
+	if !strings.Contains(prompt, "backend engineer") {
+		t.Errorf("expected system prompt to contain role, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "/home/alice/special-dir") {
+		t.Errorf("expected system prompt to contain directory, got:\n%s", prompt)
+	}
+}
+
+func TestBuildSystemPrompt_ContainsGuidelines(t *testing.T) {
+	cfg := AgentConfig{
+		Name:      "Alice",
+		Role:      "engineer",
+		Directory: "/tmp",
+		Topic:     "topic",
+		Participants: []ParticipantInfo{
+			{Name: "Alice", Role: "engineer", Directory: "/tmp"},
+		},
+	}
+	prompt := BuildSystemPrompt(cfg)
+	guidelines := []string{
+		"@-mentions",
+		"parley",
+		"ALWAYS respond",
+		"Do NOT respond",
+	}
+	for _, g := range guidelines {
+		if !strings.Contains(prompt, g) {
+			t.Errorf("expected system prompt to contain guideline %q, got:\n%s", g, prompt)
+		}
+	}
+}
+
+func TestBuildSystemPrompt_IdentifiesAgent(t *testing.T) {
+	cfg := AgentConfig{
+		Name:      "DeepThought",
+		Role:      "philosopher",
+		Directory: "/tmp/dt",
+		Topic:     "meaning of life",
+		Participants: []ParticipantInfo{
+			{Name: "DeepThought", Role: "philosopher", Directory: "/tmp/dt"},
+		},
+	}
+	prompt := BuildSystemPrompt(cfg)
+	// The prompt must tell the agent who it is.
+	if !strings.Contains(prompt, "YOU ARE") {
+		t.Errorf("expected system prompt to identify the agent with 'YOU ARE', got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "DeepThought") {
+		t.Errorf("expected system prompt to contain agent name 'DeepThought', got:\n%s", prompt)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestBuildInputMessage
+// ---------------------------------------------------------------------------
+
+func TestBuildInputMessage_ValidJSON(t *testing.T) {
+	msg := BuildInputMessage("hello world")
+	var v interface{}
+	if err := json.Unmarshal(msg, &v); err != nil {
+		t.Fatalf("BuildInputMessage did not produce valid JSON: %v\nraw: %s", err, msg)
+	}
+}
+
+func TestBuildInputMessage_NewlineTerminated(t *testing.T) {
+	msg := BuildInputMessage("hello")
+	if len(msg) == 0 || msg[len(msg)-1] != '\n' {
+		t.Errorf("BuildInputMessage must end with newline, got: %q", msg)
+	}
+}
+
+func TestBuildInputMessage_ContainsText(t *testing.T) {
+	text := "this is the message content"
+	msg := BuildInputMessage(text)
+	if !strings.Contains(string(msg), text) {
+		t.Errorf("BuildInputMessage must contain the text %q, got: %s", text, msg)
+	}
+}
+
+func TestBuildInputMessage_Structure(t *testing.T) {
+	msg := BuildInputMessage("ping")
+	// Trim the trailing newline before unmarshalling into a strict struct.
+	trimmed := strings.TrimRight(string(msg), "\n")
+
+	type contentItem struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	type innerMsg struct {
+		Role    string        `json:"role"`
+		Content []contentItem `json:"content"`
+	}
+	type envelope struct {
+		Type    string   `json:"type"`
+		Message innerMsg `json:"message"`
+	}
+
+	var env envelope
+	if err := json.Unmarshal([]byte(trimmed), &env); err != nil {
+		t.Fatalf("failed to unmarshal BuildInputMessage output: %v", err)
+	}
+	if env.Type != "user" {
+		t.Errorf("expected type=user, got %q", env.Type)
+	}
+	if env.Message.Role != "user" {
+		t.Errorf("expected message.role=user, got %q", env.Message.Role)
+	}
+	if len(env.Message.Content) == 0 {
+		t.Fatal("expected at least one content item")
+	}
+	item := env.Message.Content[0]
+	if item.Type != "text" {
+		t.Errorf("expected content[0].type=text, got %q", item.Type)
+	}
+	if item.Text != "ping" {
+		t.Errorf("expected content[0].text=ping, got %q", item.Text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestBuildArgs
+// ---------------------------------------------------------------------------
+
+func TestBuildArgs_ContainsRequiredFlags(t *testing.T) {
+	cfg := AgentConfig{
+		Name:         "Alice",
+		Role:         "engineer",
+		Directory:    "/tmp",
+		Topic:        "topic",
+		SystemPrompt: "you are helpful",
+	}
+	args := BuildArgs(cfg)
+
+	required := []string{
+		"-p",
+		"--verbose",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--append-system-prompt",
+	}
+
+	for i := 0; i < len(required); i++ {
+		flag := required[i]
+		found := false
+		for j, a := range args {
+			if a == flag {
+				// If next element is a value token, advance required pointer.
+				if i+1 < len(required) && !strings.HasPrefix(required[i+1], "-") {
+					if j+1 < len(args) && args[j+1] == required[i+1] {
+						found = true
+						i++ // consume the value from required too
+						break
+					}
+				} else {
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			t.Errorf("expected args to contain %q; got: %v", flag, args)
+		}
+	}
+}
+
+func TestBuildArgs_SystemPromptFollowsFlag(t *testing.T) {
+	cfg := AgentConfig{
+		SystemPrompt: "MY CUSTOM PROMPT",
+	}
+	args := BuildArgs(cfg)
+	for i, a := range args {
+		if a == "--append-system-prompt" {
+			if i+1 >= len(args) {
+				t.Fatal("--append-system-prompt has no following value")
+			}
+			if args[i+1] != "MY CUSTOM PROMPT" {
+				t.Errorf("expected system prompt value %q, got %q", "MY CUSTOM PROMPT", args[i+1])
+			}
+			return
+		}
+	}
+	t.Error("--append-system-prompt flag not found in args")
+}
+
+func TestBuildArgs_ExtraArgsAppended(t *testing.T) {
+	cfg := AgentConfig{
+		Args:         []string{"--worktree", "--permission-mode", "acceptEdits"},
+		SystemPrompt: "prompt",
+	}
+	args := BuildArgs(cfg)
+	for _, extra := range cfg.Args {
+		found := false
+		for _, a := range args {
+			if a == extra {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected extra arg %q to be present in args: %v", extra, args)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestParseAssistantEvent
+// ---------------------------------------------------------------------------
+
+func TestParseAssistantEvent_TextContent(t *testing.T) {
+	line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Hello from agent"}]}}`
+	event, ok := parseLine([]byte(line))
+	if !ok {
+		t.Fatal("expected parseLine to return ok=true for assistant event")
+	}
+	if event.Type != EventText {
+		t.Errorf("expected EventText, got %v", event.Type)
+	}
+	if event.Text != "Hello from agent" {
+		t.Errorf("expected text 'Hello from agent', got %q", event.Text)
+	}
+}
+
+func TestParseAssistantEvent_MultipleTextBlocks(t *testing.T) {
+	line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"part one"},{"type":"text","text":" part two"}]}}`
+	event, ok := parseLine([]byte(line))
+	if !ok {
+		t.Fatal("expected parseLine to return ok=true")
+	}
+	if event.Type != EventText {
+		t.Errorf("expected EventText, got %v", event.Type)
+	}
+	if !strings.Contains(event.Text, "part one") {
+		t.Errorf("expected combined text to contain 'part one', got %q", event.Text)
+	}
+}
+
+func TestParseAssistantEvent_ToolUseContent(t *testing.T) {
+	line := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"bash","input":{}}]}}`
+	event, ok := parseLine([]byte(line))
+	if !ok {
+		t.Fatal("expected parseLine to return ok=true for tool_use")
+	}
+	if event.Type != EventToolUse {
+		t.Errorf("expected EventToolUse, got %v", event.Type)
+	}
+	if event.ToolName != "bash" {
+		t.Errorf("expected ToolName 'bash', got %q", event.ToolName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestParseResultEvent
+// ---------------------------------------------------------------------------
+
+func TestParseResultEvent_EmitsDone(t *testing.T) {
+	line := `{"type":"result","subtype":"success","session_id":"sess-123","result":"final text","num_turns":4,"total_cost_usd":0.01}`
+	event, ok := parseLine([]byte(line))
+	if !ok {
+		t.Fatal("expected parseLine to return ok=true for result event")
+	}
+	if event.Type != EventDone {
+		t.Errorf("expected EventDone, got %v", event.Type)
+	}
+}
+
+func TestParseResultEvent_SessionIDExtracted(t *testing.T) {
+	line := `{"type":"result","subtype":"success","session_id":"abc-456","result":"done","num_turns":1,"total_cost_usd":0.0}`
+	d := &ClaudeDriver{}
+	d.parseAndEmitLine([]byte(line), make(chan AgentEvent, 1))
+	if d.sessionID != "abc-456" {
+		t.Errorf("expected sessionID 'abc-456', got %q", d.sessionID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestParseSystemEvent
+// ---------------------------------------------------------------------------
+
+func TestParseSystemEvent_InitSkipped(t *testing.T) {
+	line := `{"type":"system","subtype":"init","session_id":"init-session","tools":[],"model":"claude-opus-4-5"}`
+	_, ok := parseLine([]byte(line))
+	if ok {
+		t.Error("expected parseLine to return ok=false for system init event (should be skipped)")
+	}
+}
+
+func TestParseSystemEvent_HookSkipped(t *testing.T) {
+	line := `{"type":"system","subtype":"hook_started","hook_type":"PreToolUse"}`
+	_, ok := parseLine([]byte(line))
+	if ok {
+		t.Error("expected parseLine to return ok=false for system hook event")
+	}
+}
+
+func TestParseSystemEvent_RateLimitSkipped(t *testing.T) {
+	line := `{"type":"rate_limit_event","remaining_tokens":1000}`
+	_, ok := parseLine([]byte(line))
+	if ok {
+		t.Error("expected parseLine to return ok=false for rate_limit_event")
+	}
+}
