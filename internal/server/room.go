@@ -154,6 +154,26 @@ func (r *Room) snapshot() []protocol.Participant {
 	return out
 }
 
+// GetMessages returns a copy of the room's message history, safe for concurrent use.
+func (r *Room) GetMessages() []protocol.MessageParams {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]protocol.MessageParams, len(r.Messages))
+	copy(out, r.Messages)
+	return out
+}
+
+// GetParticipants returns a snapshot of the current participants, safe for concurrent use.
+func (r *Room) GetParticipants() []*ClientConn {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*ClientConn, 0, len(r.Participants))
+	for _, cc := range r.Participants {
+		out = append(out, cc)
+	}
+	return out
+}
+
 // generateID returns a simple timestamp-based ID.
 func generateID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
