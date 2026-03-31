@@ -64,6 +64,12 @@ func (d *ClaudeDriver) Start(ctx context.Context, config AgentConfig) error {
 
 	go d.readLoop(stdout)
 
+	// Send initial message to prompt the agent to introduce itself.
+	intro := fmt.Sprintf("You have joined a parley chat room. The topic is: %s. Briefly introduce yourself and ask how you can help.", config.Topic)
+	if err := d.Send(intro); err != nil {
+		return fmt.Errorf("driver: send initial prompt: %w", err)
+	}
+
 	return nil
 }
 
@@ -156,20 +162,40 @@ type claudeRawEvent struct {
 	SessionID string          `json:"session_id,omitempty"`
 	Message   json.RawMessage `json:"message,omitempty"`
 	Result    string          `json:"result,omitempty"`
+	Event     json.RawMessage `json:"event,omitempty"` // for stream_event
 }
 
 // claudeContentItem represents one item in message.content[].
 type claudeContentItem struct {
-	Type  string `json:"type"`
-	Text  string `json:"text,omitempty"`
-	Name  string `json:"name,omitempty"` // for tool_use
-	ID    string `json:"id,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+	Name     string `json:"name,omitempty"` // for tool_use
+	ID       string `json:"id,omitempty"`
 }
 
 // claudeMessage is the shape of the "message" field in assistant events.
 type claudeMessage struct {
 	Role    string              `json:"role"`
 	Content []claudeContentItem `json:"content"`
+}
+
+// claudeStreamEvent represents a stream_event from --include-partial-messages.
+type claudeStreamEvent struct {
+	Type         string          `json:"type"` // message_start, content_block_start, content_block_delta, content_block_stop, message_stop
+	ContentBlock json.RawMessage `json:"content_block,omitempty"`
+	Delta        json.RawMessage `json:"delta,omitempty"`
+}
+
+type claudeDelta struct {
+	Type     string `json:"type"` // text_delta, thinking_delta
+	Text     string `json:"text,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+}
+
+type claudeContentBlock struct {
+	Type string `json:"type"` // thinking, text, tool_use
+	Name string `json:"name,omitempty"`
 }
 
 // parseLine parses one NDJSON line from Claude Code's stdout and returns an
@@ -181,17 +207,65 @@ func parseLine(line []byte) (AgentEvent, bool) {
 	}
 
 	switch raw.Type {
+	case "stream_event":
+		return parseStreamEvent(raw)
 	case "assistant":
 		return parseAssistantEvent(raw)
 	case "result":
 		return AgentEvent{Type: EventDone}, true
 	default:
-		// system, rate_limit_event, and anything else — skip silently.
 		return AgentEvent{}, false
 	}
 }
 
-// parseAssistantEvent extracts text and tool-use content from an assistant event.
+// parseStreamEvent handles token-level streaming events from --include-partial-messages.
+func parseStreamEvent(raw claudeRawEvent) (AgentEvent, bool) {
+	if raw.Event == nil {
+		return AgentEvent{}, false
+	}
+	var se claudeStreamEvent
+	if err := json.Unmarshal(raw.Event, &se); err != nil {
+		return AgentEvent{}, false
+	}
+
+	switch se.Type {
+	case "content_block_start":
+		if se.ContentBlock != nil {
+			var cb claudeContentBlock
+			if err := json.Unmarshal(se.ContentBlock, &cb); err == nil {
+				switch cb.Type {
+				case "thinking":
+					return AgentEvent{Type: EventThinking}, true
+				case "tool_use":
+					return AgentEvent{Type: EventToolUse, ToolName: cb.Name}, true
+				}
+			}
+		}
+		return AgentEvent{}, false
+
+	case "content_block_delta":
+		if se.Delta != nil {
+			var d claudeDelta
+			if err := json.Unmarshal(se.Delta, &d); err == nil {
+				switch d.Type {
+				case "text_delta":
+					if d.Text != "" {
+						return AgentEvent{Type: EventText, Text: d.Text}, true
+					}
+				case "thinking_delta":
+					// Thinking deltas — we already showed "thinking..." on block start
+					return AgentEvent{}, false
+				}
+			}
+		}
+		return AgentEvent{}, false
+
+	default:
+		return AgentEvent{}, false
+	}
+}
+
+// parseAssistantEvent extracts text and tool-use content from a non-streaming assistant event.
 func parseAssistantEvent(raw claudeRawEvent) (AgentEvent, bool) {
 	if raw.Message == nil {
 		return AgentEvent{}, false
@@ -208,6 +282,8 @@ func parseAssistantEvent(raw claudeRawEvent) (AgentEvent, bool) {
 			if item.Text != "" {
 				texts = append(texts, item.Text)
 			}
+		case "thinking":
+			return AgentEvent{Type: EventThinking, Text: item.Thinking}, true
 		case "tool_use":
 			return AgentEvent{Type: EventToolUse, ToolName: item.Name}, true
 		}
@@ -298,6 +374,7 @@ func BuildArgs(config AgentConfig) []string {
 		"--verbose",
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
+		"--include-partial-messages",
 		"--append-system-prompt", config.SystemPrompt,
 	}
 	args = append(args, config.Args...)

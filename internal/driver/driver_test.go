@@ -359,3 +359,62 @@ func TestParseSystemEvent_RateLimitSkipped(t *testing.T) {
 		t.Error("expected parseLine to return ok=false for rate_limit_event")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestParseStreamEvent (--include-partial-messages)
+// ---------------------------------------------------------------------------
+
+func TestParseStreamEvent_TextDelta(t *testing.T) {
+	line := `{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}},"session_id":"s1"}`
+	event, ok := parseLine([]byte(line))
+	if !ok {
+		t.Fatal("expected parseLine to return ok=true for text_delta")
+	}
+	if event.Type != EventText {
+		t.Errorf("expected EventText, got %v", event.Type)
+	}
+	if event.Text != "Hello" {
+		t.Errorf("expected text 'Hello', got %q", event.Text)
+	}
+}
+
+func TestParseStreamEvent_ThinkingBlockStart(t *testing.T) {
+	line := `{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}},"session_id":"s1"}`
+	event, ok := parseLine([]byte(line))
+	if !ok {
+		t.Fatal("expected parseLine to return ok=true for thinking block start")
+	}
+	if event.Type != EventThinking {
+		t.Errorf("expected EventThinking, got %v", event.Type)
+	}
+}
+
+func TestParseStreamEvent_ToolUseBlockStart(t *testing.T) {
+	line := `{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","name":"Bash"}},"session_id":"s1"}`
+	event, ok := parseLine([]byte(line))
+	if !ok {
+		t.Fatal("expected parseLine to return ok=true for tool_use block start")
+	}
+	if event.Type != EventToolUse {
+		t.Errorf("expected EventToolUse, got %v", event.Type)
+	}
+	if event.ToolName != "Bash" {
+		t.Errorf("expected ToolName 'Bash', got %q", event.ToolName)
+	}
+}
+
+func TestParseStreamEvent_ThinkingDeltaSkipped(t *testing.T) {
+	line := `{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"let me think"}},"session_id":"s1"}`
+	_, ok := parseLine([]byte(line))
+	if ok {
+		t.Error("expected parseLine to return ok=false for thinking_delta (already showed thinking status)")
+	}
+}
+
+func TestParseStreamEvent_MessageStartSkipped(t *testing.T) {
+	line := `{"type":"stream_event","event":{"type":"message_start","message":{"model":"claude","id":"msg1","type":"message","role":"assistant"}},"session_id":"s1"}`
+	_, ok := parseLine([]byte(line))
+	if ok {
+		t.Error("expected parseLine to return ok=false for message_start")
+	}
+}

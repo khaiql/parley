@@ -96,7 +96,7 @@ func (i Input) View() string {
 	switch i.mode {
 	case InputModeAgent:
 		if i.agentText != "" {
-			// Show the last two lines of streaming text so the user sees it arrive.
+			// Show the last 2 lines of streaming text
 			lines := strings.Split(i.agentText, "\n")
 			start := len(lines) - 2
 			if start < 0 {
@@ -104,7 +104,7 @@ func (i Input) View() string {
 			}
 			visible := strings.Join(lines[start:], "\n")
 			content = lipgloss.NewStyle().Foreground(colorAgent).Render(visible) +
-				"\n" + systemMsgStyle.Render("agent typing…")
+				systemMsgStyle.Render(" ▊")
 		} else if i.agentStatus != "" {
 			content = systemMsgStyle.Render(i.agentStatus)
 		} else {
