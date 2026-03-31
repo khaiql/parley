@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -176,11 +177,21 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 	// Wait for room.state to get topic and participants.
 	var roomState protocol.RoomStateParams
-	for msg := range c.Incoming() {
-		if msg.Method == "room.state" {
-			if err := json.Unmarshal(msg.Params, &roomState); err == nil {
-				break
+	timeout := time.After(5 * time.Second)
+	found := false
+	for !found {
+		select {
+		case msg, ok := <-c.Incoming():
+			if !ok {
+				return fmt.Errorf("join: connection closed before receiving room state")
 			}
+			if msg.Method == "room.state" {
+				if err := json.Unmarshal(msg.Params, &roomState); err == nil {
+					found = true
+				}
+			}
+		case <-timeout:
+			return fmt.Errorf("join: timeout: server did not send room state within 5 seconds")
 		}
 	}
 
