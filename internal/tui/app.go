@@ -61,6 +61,11 @@ func NewApp(topic string, port int, mode InputMode, name string, sendFn func(str
 	return a
 }
 
+// SetAgent configures the agent name and role shown in the topbar.
+func (a *App) SetAgent(name, role string) {
+	a.topbar.SetAgent(name, role)
+}
+
 // Init satisfies tea.Model. Returns textarea.Blink to animate the cursor.
 func (a App) Init() tea.Cmd {
 	return textarea.Blink
