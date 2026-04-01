@@ -1,8 +1,11 @@
 package driver
 
 import (
+	"context"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -285,5 +288,93 @@ func TestExtractGeminiSessionIndex_FromNonInitEvent(t *testing.T) {
 	sessionID := extractGeminiSessionID([]byte(line))
 	if sessionID != "" {
 		t.Errorf("expected empty session ID from non-init event, got %q", sessionID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestGeminiDriver Start/Send lifecycle
+// ---------------------------------------------------------------------------
+
+func TestGeminiDriver_StartWaitsForSessionID(t *testing.T) {
+	// Create a script that emits init (with session_id) then a result event.
+	// This simulates what the real gemini CLI does.
+	script := `#!/bin/sh
+echo '{"type":"init","session_id":"test-session-42","model":"gemini-3"}'
+echo '{"type":"message","role":"assistant","content":"hello","delta":true}'
+echo '{"type":"result","status":"success","stats":{}}'
+`
+	scriptPath := t.TempDir() + "/fake-gemini.sh"
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &GeminiDriver{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := d.Start(ctx, AgentConfig{
+		Command: scriptPath,
+		Name:    "Test",
+		Role:    "tester",
+		Topic:   "test",
+	})
+	if err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer d.Stop()
+
+	// After Start returns, session ID must be set.
+	sid := d.SessionID()
+	if sid != "test-session-42" {
+		t.Errorf("expected session ID 'test-session-42', got %q", sid)
+	}
+}
+
+func TestGeminiDriver_SendAfterStart(t *testing.T) {
+	// Script that handles both initial and resumed invocations.
+	// It emits an init event with session_id, then responds.
+	script := `#!/bin/sh
+echo '{"type":"init","session_id":"sess-1","model":"gemini-3"}'
+echo '{"type":"message","role":"assistant","content":"response","delta":true}'
+echo '{"type":"result","status":"success","stats":{}}'
+`
+	scriptPath := t.TempDir() + "/fake-gemini.sh"
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &GeminiDriver{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := d.Start(ctx, AgentConfig{
+		Command: scriptPath,
+		Name:    "Test",
+		Role:    "tester",
+		Topic:   "test",
+	})
+	if err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer d.Stop()
+
+	// Drain events from Start's initial invocation.
+	drainEvents(d.Events(), 3, time.Second)
+
+	// Send should not error since session is established.
+	err = d.Send("hello")
+	if err != nil {
+		t.Fatalf("Send() failed: %v", err)
+	}
+}
+
+func drainEvents(ch <-chan AgentEvent, max int, timeout time.Duration) {
+	deadline := time.After(timeout)
+	for i := 0; i < max; i++ {
+		select {
+		case <-ch:
+		case <-deadline:
+			return
+		}
 	}
 }
