@@ -19,10 +19,10 @@ var (
 		lipgloss.Color("#d2a8ff"), // purple
 		lipgloss.Color("#7ee787"), // green
 		lipgloss.Color("#f778ba"), // pink
-		lipgloss.Color("#ffa657"), // orange
 		lipgloss.Color("#79c0ff"), // sky blue
 		lipgloss.Color("#ff7b72"), // coral
 		lipgloss.Color("#d8e77e"), // lime
+		lipgloss.Color("#ffc680"), // peach
 	}
 )
 

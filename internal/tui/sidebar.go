@@ -81,11 +81,6 @@ func (s Sidebar) View() string {
 
 	for _, p := range s.participants {
 		nameLine := nameStyle(p.Name, s.nameColors).Render(p.Name)
-
-		if p.Role != "" && p.Role != "human" {
-			badge := roleBadgeStyle.Render(p.Role)
-			nameLine = lipgloss.JoinHorizontal(lipgloss.Top, nameLine, " ", badge)
-		}
 		lines = append(lines, nameLine)
 
 		// Show per-participant status when non-empty.

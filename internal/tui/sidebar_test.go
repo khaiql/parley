@@ -184,9 +184,6 @@ func TestSidebarViewContainsNames(t *testing.T) {
 	if !contains(view, "bot1") {
 		t.Errorf("sidebar view should contain 'bot1', got: %q", view)
 	}
-	if !contains(view, "coder") {
-		t.Errorf("sidebar view should contain role badge 'coder', got: %q", view)
-	}
 	if !contains(view, "claude") {
 		t.Errorf("sidebar view should contain agent type 'claude', got: %q", view)
 	}

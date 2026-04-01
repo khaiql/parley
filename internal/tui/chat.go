@@ -136,9 +136,6 @@ func renderMessage(msg protocol.MessageParams, width int, colors map[string]lipg
 		namePart := nameStyle(msg.From, colors).Render(msg.From)
 
 		headerParts := []string{namePart}
-		if msg.Role != "" && msg.Role != "agent" && msg.Role != "human" {
-			headerParts = append(headerParts, " ", roleBadgeStyle.Render(msg.Role))
-		}
 		if ts != "" {
 			headerParts = append(headerParts, " ", timestampStyle.Render(ts))
 		}

@@ -128,7 +128,7 @@ func TestRenderMessageContainsText(t *testing.T) {
 	}
 }
 
-func TestRenderMessageAgentContainsRoleBadge(t *testing.T) {
+func TestRenderMessageAgentContainsNameAndText(t *testing.T) {
 	msg := protocol.MessageParams{
 		From:   "bot1",
 		Source: "agent",
@@ -141,9 +141,6 @@ func TestRenderMessageAgentContainsRoleBadge(t *testing.T) {
 	rendered := renderMessage(msg, 80, nil)
 	if !contains(rendered, "bot1") {
 		t.Errorf("renderMessage (agent) should contain agent name, got: %q", rendered)
-	}
-	if !contains(rendered, "coder") {
-		t.Errorf("renderMessage (agent) should contain role badge, got: %q", rendered)
 	}
 	if !contains(rendered, "I wrote some code") {
 		t.Errorf("renderMessage (agent) should contain message text, got: %q", rendered)
