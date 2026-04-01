@@ -165,6 +165,10 @@ func runHost(cmd *cobra.Command, args []string) error {
 	}()
 
 	_, err = p.Run()
+
+	// Host is leaving — shut down the server so all agent connections drop.
+	srv.Close()
+
 	return err
 }
 
@@ -353,6 +357,9 @@ func runJoin(cmd *cobra.Command, args []string) error {
 			pendingTimer.Stop()
 		}
 		flushPending()
+
+		// Server disconnected — quit the TUI and stop the agent.
+		p.Send(tui.ServerDisconnectedMsg{})
 	}()
 
 	// Bridge agent → network.

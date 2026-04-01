@@ -22,6 +22,9 @@ type AgentTypingMsg struct {
 	Text string
 }
 
+// ServerDisconnectedMsg signals that the server connection was lost.
+type ServerDisconnectedMsg struct{}
+
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
 	topbar  TopBar
@@ -84,6 +87,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 		}
+
+	case ServerDisconnectedMsg:
+		return a, tea.Quit
 
 	case ServerMsg:
 		a.handleServerMsg(m.Raw)
