@@ -114,7 +114,8 @@ func renderMessage(msg protocol.MessageParams, width int, colors map[string]lipg
 			" ",
 			timestampStyle.Render(ts),
 		)
-		return header + "\n" + bodyStyle.Render(text)
+		body := highlightMentions(text, colors)
+		return header + "\n" + bodyStyle.Render(body)
 
 	default:
 		// agent
@@ -131,8 +132,31 @@ func renderMessage(msg protocol.MessageParams, width int, colors map[string]lipg
 			" ",
 			timestampStyle.Render(ts),
 		)
-		return header + "\n" + bodyStyle.Render(text)
+		body := highlightMentions(text, colors)
+		return header + "\n" + bodyStyle.Render(body)
 	}
+}
+
+// highlightMentions renders @mentions in the text with a highlight style.
+// It splits on whitespace boundaries, highlights tokens starting with "@",
+// and reassembles the result.
+func highlightMentions(text string, colors map[string]lipgloss.Color) string {
+	mentionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#58a6ff"))
+
+	words := strings.Fields(text)
+	for i, word := range words {
+		if strings.HasPrefix(word, "@") && len(word) > 1 {
+			// Strip trailing punctuation for color lookup.
+			name := strings.TrimRight(word[1:], ".,;:!?")
+			if colors != nil {
+				if c, ok := colors[name]; ok {
+					mentionStyle = lipgloss.NewStyle().Bold(true).Foreground(c)
+				}
+			}
+			words[i] = mentionStyle.Render(word)
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 // extractText concatenates all text-type content blocks.
