@@ -309,6 +309,7 @@ JOINING:
 - When another participant joins, do NOT greet them, do NOT @-mention them, do NOT engage. Just listen.
 
 @-MENTIONS:
+- When referring to another participant, ALWAYS use the @ prefix (e.g. @engineer, @growth, @sle). Never write a bare name without @.
 - Only @-mention someone when you have a SPECIFIC question that ONLY they can answer
 - Do NOT @-mention in replies — if someone asked you a question, just answer it directly
 - Do NOT @-mention someone just to be polite or to loop them in
