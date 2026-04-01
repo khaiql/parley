@@ -96,9 +96,20 @@ func (s *Server) handleConn(conn net.Conn) {
 				source = "agent"
 			}
 
+			// If the agent's role is the default, check saved agents for their prior role.
+			role := params.Role
+			if role == "agent" || role == "" {
+				for _, sa := range s.room.SavedAgents {
+					if sa.Name == params.Name && sa.Role != "" {
+						role = sa.Role
+						break
+					}
+				}
+			}
+
 			cc = &ClientConn{
 				Name:      params.Name,
-				Role:      params.Role,
+				Role:      role,
 				Directory: params.Directory,
 				Repo:      params.Repo,
 				AgentType: params.AgentType,
@@ -127,7 +138,7 @@ func (s *Server) handleConn(conn net.Conn) {
 			// Notify other participants.
 			jp := protocol.JoinedParams{
 				Name:      params.Name,
-				Role:      params.Role,
+				Role:      role,
 				Directory: params.Directory,
 				Repo:      params.Repo,
 				AgentType: params.AgentType,

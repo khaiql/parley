@@ -99,6 +99,10 @@ func LoadRoom(dir string) (*Room, error) {
 		room.seq = msgs[len(msgs)-1].Seq
 	}
 
+	// Load saved agents so rejoining agents can recover their role.
+	agents, _ := LoadAgents(dir)
+	room.SavedAgents = agents
+
 	return room, nil
 }
 

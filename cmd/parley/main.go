@@ -119,6 +119,22 @@ func runHost(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Parley server listening on port %d\n", port)
 	fmt.Fprintf(os.Stderr, "Room ID: %s\n", roomID)
 
+	// When resuming, print agent rejoin commands so the user can copy-paste.
+	if hostResume != "" {
+		agents, _ := server.LoadAgents(server.RoomDir(roomID))
+		if len(agents) > 0 {
+			fmt.Fprintf(os.Stderr, "\nTo resume agents:\n")
+			for _, a := range agents {
+				cmd := fmt.Sprintf("  parley join --port %d --name %q --role %q --resume", port, a.Name, a.Role)
+				if a.AgentType != "" {
+					cmd += " -- " + a.AgentType
+				}
+				fmt.Fprintln(os.Stderr, cmd)
+			}
+			fmt.Fprintln(os.Stderr)
+		}
+	}
+
 	roomDir := server.RoomDir(roomID)
 
 	// Save immediately so the room folder exists from the start.

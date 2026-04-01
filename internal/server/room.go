@@ -16,6 +16,7 @@ type Room struct {
 	Topic        string
 	Participants map[string]*ClientConn
 	Messages     []protocol.MessageParams
+	SavedAgents  []ParticipantData // loaded from agents.json on resume
 	seq          int
 	mu           sync.RWMutex
 }
