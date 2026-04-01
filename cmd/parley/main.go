@@ -119,12 +119,37 @@ func runHost(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Parley server listening on port %d\n", port)
 	fmt.Fprintf(os.Stderr, "Room ID: %s\n", roomID)
 
+	roomDir := server.RoomDir(roomID)
+
+	// Save immediately so the room folder exists from the start.
+	if err := server.SaveRoom(roomDir, srv.Room()); err != nil {
+		fmt.Fprintf(os.Stderr, "Initial save failed: %v\n", err)
+	}
+
+	// Save on exit.
 	defer func() {
-		dir := server.RoomDir(roomID)
-		if err := server.SaveRoom(dir, srv.Room()); err != nil {
+		if err := server.SaveRoom(roomDir, srv.Room()); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to save room: %v\n", err)
 		}
 	}()
+
+	// Auto-save every 30 seconds so data isn't lost on crash.
+	autoSaveStop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := server.SaveRoom(roomDir, srv.Room()); err != nil {
+					fmt.Fprintf(os.Stderr, "Auto-save failed: %v\n", err)
+				}
+			case <-autoSaveStop:
+				return
+			}
+		}
+	}()
+	defer close(autoSaveStop)
 
 	c, err := client.New(srv.Addr())
 	if err != nil {
