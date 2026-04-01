@@ -110,7 +110,7 @@ func TestRenderMessageContainsText(t *testing.T) {
 		},
 		Timestamp: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
-	rendered := renderMessage(msg, 80)
+	rendered := renderMessage(msg, 80, nil)
 	if !contains(rendered, "alice") {
 		t.Errorf("renderMessage (human) should contain sender name %q, got: %q", "alice", rendered)
 	}
@@ -132,7 +132,7 @@ func TestRenderMessageAgentContainsRoleBadge(t *testing.T) {
 		},
 		Timestamp: time.Date(2024, 1, 1, 8, 30, 0, 0, time.UTC),
 	}
-	rendered := renderMessage(msg, 80)
+	rendered := renderMessage(msg, 80, nil)
 	if !contains(rendered, "bot1") {
 		t.Errorf("renderMessage (agent) should contain agent name, got: %q", rendered)
 	}
@@ -153,7 +153,7 @@ func TestRenderMessageSystemFormat(t *testing.T) {
 			{Type: "text", Text: "alice has joined"},
 		},
 	}
-	rendered := renderMessage(msg, 80)
+	rendered := renderMessage(msg, 80, nil)
 	if !contains(rendered, "[system]") {
 		t.Errorf("renderMessage (system) should contain [system] prefix, got: %q", rendered)
 	}
@@ -194,7 +194,7 @@ func TestRenderMessageWrapsLongText(t *testing.T) {
 	}
 
 	const width = 80
-	rendered := renderMessage(msg, width)
+	rendered := renderMessage(msg, width, nil)
 
 	lines := strings.Split(rendered, "\n")
 	if len(lines) <= 1 {

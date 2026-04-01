@@ -27,28 +27,35 @@ type ServerDisconnectedMsg struct{}
 
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
-	topbar  TopBar
-	chat    Chat
-	sidebar Sidebar
-	input   Input
-	sendFn  func(string, []string) // callback to send messages over network
-	width   int
-	height  int
+	topbar     TopBar
+	chat       Chat
+	sidebar    Sidebar
+	input      Input
+	sendFn     func(string, []string) // callback to send messages over network
+	nameColors map[string]lipgloss.Color // stable color per participant
+	colorIdx   int                       // next color index to assign
+	width      int
+	height     int
 }
 
 // NewApp creates an App with the given topic, port, input mode, display name,
 // send callback, and optional initial participants (may be nil).
 func NewApp(topic string, port int, mode InputMode, name string, sendFn func(string, []string), participants ...protocol.Participant) App {
 	a := App{
-		topbar:  NewTopBar(topic, port),
-		chat:    NewChat(0, 0),
-		sidebar: NewSidebar(),
-		input:   NewInput(),
-		sendFn:  sendFn,
+		topbar:     NewTopBar(topic, port),
+		chat:       NewChat(0, 0),
+		sidebar:    NewSidebar(),
+		input:      NewInput(),
+		sendFn:     sendFn,
+		nameColors: make(map[string]lipgloss.Color),
 	}
 	a.input.SetMode(mode)
 	if len(participants) > 0 {
+		for _, p := range participants {
+			a.assignColor(p.Name, p.Role)
+		}
 		a.sidebar.SetParticipants(participants)
+		a.sidebar.SetNameColors(a.nameColors)
 	}
 	return a
 }
@@ -143,6 +150,20 @@ func (a *App) layout() {
 	a.input.SetWidth(a.width)
 }
 
+// assignColor gives a participant a stable color. Humans get colorHuman;
+// agents cycle through participantColors.
+func (a *App) assignColor(name, role string) {
+	if _, ok := a.nameColors[name]; ok {
+		return
+	}
+	if role == "human" {
+		a.nameColors[name] = colorHuman
+	} else {
+		a.nameColors[name] = participantColors[a.colorIdx%len(participantColors)]
+		a.colorIdx++
+	}
+}
+
 // handleServerMsg dispatches an incoming RawMessage to the appropriate handler
 // based on its method.
 func (a *App) handleServerMsg(raw *protocol.RawMessage) {
@@ -153,7 +174,12 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 	case "room.state":
 		var params protocol.RoomStateParams
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
+			for _, p := range params.Participants {
+				a.assignColor(p.Name, p.Role)
+			}
 			a.sidebar.SetParticipants(params.Participants)
+			a.sidebar.SetNameColors(a.nameColors)
+			a.chat.SetNameColors(a.nameColors)
 			for _, msg := range params.Messages {
 				a.chat.AddMessage(msg)
 			}
@@ -168,6 +194,7 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 	case "room.joined":
 		var params protocol.JoinedParams
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
+			a.assignColor(params.Name, params.Role)
 			a.sidebar.AddParticipant(protocol.Participant{
 				Name:      params.Name,
 				Role:      params.Role,
@@ -175,6 +202,8 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 				Repo:      params.Repo,
 				AgentType: params.AgentType,
 			})
+			a.sidebar.SetNameColors(a.nameColors)
+			a.chat.SetNameColors(a.nameColors)
 		}
 
 	case "room.left":

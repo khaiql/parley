@@ -10,7 +10,8 @@ import (
 // Sidebar renders the participant list panel.
 type Sidebar struct {
 	participants []protocol.Participant
-	statuses     map[string]string // per-participant status text
+	statuses     map[string]string              // per-participant status text
+	nameColors   map[string]lipgloss.Color       // per-participant name color
 	width        int
 	height       int
 }
@@ -52,6 +53,11 @@ func (s *Sidebar) SetParticipantStatus(name, status string) {
 	s.statuses[name] = status
 }
 
+// SetNameColors updates the per-participant color map.
+func (s *Sidebar) SetNameColors(colors map[string]lipgloss.Color) {
+	s.nameColors = colors
+}
+
 // RemoveParticipant removes a participant by name.
 func (s *Sidebar) RemoveParticipant(name string) {
 	filtered := s.participants[:0]
@@ -74,12 +80,7 @@ func (s Sidebar) View() string {
 	lines := []string{title}
 
 	for _, p := range s.participants {
-		var nameLine string
-		if p.Source == "human" || p.Role == "human" {
-			nameLine = humanNameStyle.Render(p.Name)
-		} else {
-			nameLine = agentNameStyle.Render(p.Name)
-		}
+		nameLine := nameStyle(p.Name, s.nameColors).Render(p.Name)
 
 		if p.Role != "" && p.Role != "human" {
 			badge := roleBadgeStyle.Render(p.Role)

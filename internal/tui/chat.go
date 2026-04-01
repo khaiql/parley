@@ -12,10 +12,11 @@ import (
 
 // Chat wraps a viewport and holds the message history.
 type Chat struct {
-	vp       viewport.Model
-	messages []protocol.MessageParams
-	width    int
-	height   int
+	vp         viewport.Model
+	messages   []protocol.MessageParams
+	nameColors map[string]lipgloss.Color
+	width      int
+	height     int
 }
 
 // NewChat creates a Chat component with the given dimensions.
@@ -40,6 +41,12 @@ func (c *Chat) AddMessage(msg protocol.MessageParams) {
 	c.vp.GotoBottom()
 }
 
+// SetNameColors updates the per-participant color map and re-renders.
+func (c *Chat) SetNameColors(colors map[string]lipgloss.Color) {
+	c.nameColors = colors
+	c.rebuildContent()
+}
+
 // rebuildContent re-renders all messages into the viewport.
 func (c *Chat) rebuildContent() {
 	var sb strings.Builder
@@ -47,7 +54,7 @@ func (c *Chat) rebuildContent() {
 		if i > 0 {
 			sb.WriteString("\n")
 		}
-		sb.WriteString(renderMessage(msg, c.width))
+		sb.WriteString(renderMessage(msg, c.width, c.nameColors))
 	}
 	c.vp.SetContent(sb.String())
 }
@@ -64,8 +71,20 @@ func (c Chat) View() string {
 	return c.vp.View()
 }
 
+// nameStyle returns a bold style using the participant's assigned color,
+// falling back to colorAgent if no color is assigned.
+func nameStyle(name string, colors map[string]lipgloss.Color) lipgloss.Style {
+	c := colorAgent
+	if colors != nil {
+		if assigned, ok := colors[name]; ok {
+			c = assigned
+		}
+	}
+	return lipgloss.NewStyle().Bold(true).Foreground(c)
+}
+
 // renderMessage renders a single message according to its source.
-func renderMessage(msg protocol.MessageParams, width int) string {
+func renderMessage(msg protocol.MessageParams, width int, colors map[string]lipgloss.Color) string {
 	text := extractText(msg.Content)
 
 	// Leave at least 1 column for content; body is capped at the viewport
@@ -91,7 +110,7 @@ func renderMessage(msg protocol.MessageParams, width int) string {
 		ts := formatTimestamp(msg)
 		header := lipgloss.JoinHorizontal(
 			lipgloss.Top,
-			humanNameStyle.Render(msg.From),
+			nameStyle(msg.From, colors).Render(msg.From),
 			" ",
 			timestampStyle.Render(ts),
 		)
@@ -100,7 +119,7 @@ func renderMessage(msg protocol.MessageParams, width int) string {
 	default:
 		// agent
 		ts := formatTimestamp(msg)
-		namePart := agentNameStyle.Render(msg.From)
+		namePart := nameStyle(msg.From, colors).Render(msg.From)
 		rolePart := ""
 		if msg.Role != "" && msg.Role != "agent" {
 			rolePart = " " + roleBadgeStyle.Render(msg.Role)
