@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -20,13 +21,14 @@ import (
 // stdin streaming). Each message requires a new process invocation.
 // Session continuity is maintained via --resume <session_id>.
 type GeminiDriver struct {
-	mu        sync.Mutex
-	wg        sync.WaitGroup
-	events    chan AgentEvent
-	config    AgentConfig
-	sessionID string // session_id from the init event; passed as --resume
-	cancel    context.CancelFunc
-	ctx       context.Context
+	mu         sync.Mutex
+	wg         sync.WaitGroup
+	events     chan AgentEvent
+	config     AgentConfig
+	sessionID  string // session_id from the init event; passed as --resume
+	sessionSet chan struct{} // closed when sessionID is first set
+	cancel     context.CancelFunc
+	ctx        context.Context
 }
 
 // Start saves the config, creates the events channel, and sends the initial
@@ -43,6 +45,7 @@ func (d *GeminiDriver) Start(ctx context.Context, config AgentConfig) error {
 	}
 
 	d.events = make(chan AgentEvent, 64)
+	d.sessionSet = make(chan struct{})
 
 	// Gemini needs an initial prompt to start — use a join message.
 	initialMsg := "[joining the conversation]"
@@ -51,7 +54,19 @@ func (d *GeminiDriver) Start(ctx context.Context, config AgentConfig) error {
 		return err
 	}
 
-	return nil
+	// Wait for the session ID to be captured from the init event before
+	// returning, so that subsequent Send() calls have a valid session.
+	// Timeout after 30 seconds in case gemini doesn't emit an init event.
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-d.sessionSet:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("gemini: timeout waiting for session to be established (30s)")
+	case <-ctx.Done():
+		return fmt.Errorf("gemini: context cancelled before session established")
+	}
 }
 
 // Send invokes gemini with the given text, resuming the existing session.
@@ -139,7 +154,18 @@ func (d *GeminiDriver) readLoop(r io.Reader, cmd *exec.Cmd) {
 		// Try to capture session_id from init event.
 		if sid := extractGeminiSessionID(line); sid != "" {
 			d.mu.Lock()
-			d.sessionID = sid
+			if d.sessionID == "" {
+				d.sessionID = sid
+				// Signal that the session is established.
+				select {
+				case <-d.sessionSet:
+					// already closed
+				default:
+					close(d.sessionSet)
+				}
+			} else {
+				d.sessionID = sid
+			}
 			d.mu.Unlock()
 		}
 
