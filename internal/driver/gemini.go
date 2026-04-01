@@ -196,6 +196,7 @@ type geminiRawEvent struct {
 	Role      string `json:"role,omitempty"`
 	Content   string `json:"content,omitempty"`
 	Delta     bool   `json:"delta,omitempty"`
+	Thought   bool   `json:"thought,omitempty"`
 	ToolName  string `json:"tool_name,omitempty"`
 	ToolID    string `json:"tool_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
@@ -222,6 +223,11 @@ func parseGeminiLine(line []byte) (AgentEvent, bool) {
 		}
 		if raw.Content == "" {
 			return AgentEvent{}, false
+		}
+		// Filter out thinking/reasoning content — these are internal
+		// chain-of-thought that shouldn't be sent to the chat.
+		if raw.Thought {
+			return AgentEvent{Type: EventThinking}, true
 		}
 		return AgentEvent{Type: EventText, Text: raw.Content}, true
 

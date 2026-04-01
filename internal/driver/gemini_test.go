@@ -205,6 +205,20 @@ func TestParseGeminiLine_AssistantTextDelta(t *testing.T) {
 	}
 }
 
+func TestParseGeminiLine_ThoughtFiltered(t *testing.T) {
+	line := `{"type":"message","role":"assistant","content":"Thinking about strategy...","thought":true,"delta":true}`
+	event, ok := parseGeminiLine([]byte(line))
+	if !ok {
+		t.Fatal("expected thought message to produce an event")
+	}
+	if event.Type != EventThinking {
+		t.Errorf("expected EventThinking, got %v", event.Type)
+	}
+	if event.Text != "" {
+		t.Errorf("expected empty text for thought, got %q", event.Text)
+	}
+}
+
 func TestParseGeminiLine_AssistantFullMessage(t *testing.T) {
 	// Non-delta assistant messages should also produce text.
 	line := `{"type":"message","role":"assistant","content":"Full response"}`
