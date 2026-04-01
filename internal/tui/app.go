@@ -111,6 +111,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, a.input.Update(msg))
 	cmds = append(cmds, a.chat.Update(msg))
 
+	// Re-layout in case input height changed.
+	if a.width > 0 && a.height > 0 {
+		a.layout()
+	}
+
 	return a, tea.Batch(cmds...)
 }
 
@@ -134,7 +139,7 @@ func (a App) View() string {
 // terminal dimensions.
 func (a *App) layout() {
 	topbarHeight := 1
-	inputHeight := 2 // 1 line text + 1 line border-top
+	inputHeight := a.input.Height()
 	chatHeight := a.height - topbarHeight - inputHeight
 	if chatHeight < 0 {
 		chatHeight = 0
