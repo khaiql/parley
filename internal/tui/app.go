@@ -32,10 +32,11 @@ type App struct {
 	sidebar    Sidebar
 	input      Input
 	sendFn     func(string, []string) // callback to send messages over network
-	nameColors map[string]lipgloss.Color // stable color per participant
-	colorIdx   int                       // next color index to assign
-	width      int
-	height     int
+	nameColors      map[string]lipgloss.Color // stable color per participant
+	colorIdx        int                       // next color index to assign
+	lastInputHeight int                       // cached to avoid redundant re-layouts
+	width           int
+	height          int
 }
 
 // NewApp creates an App with the given topic, port, input mode, display name,
@@ -111,9 +112,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, a.input.Update(msg))
 	cmds = append(cmds, a.chat.Update(msg))
 
-	// Re-layout in case input height changed.
+	// Re-layout only if input height actually changed.
 	if a.width > 0 && a.height > 0 {
-		a.layout()
+		if a.input.Height() != a.lastInputHeight {
+			a.layout()
+		}
 	}
 
 	return a, tea.Batch(cmds...)
@@ -149,6 +152,7 @@ func (a *App) layout() {
 		chatWidth = 0
 	}
 
+	a.lastInputHeight = inputHeight
 	a.topbar.SetWidth(a.width)
 	a.chat.SetSize(chatWidth, chatHeight)
 	a.sidebar.SetSize(sidebarWidth, chatHeight)
