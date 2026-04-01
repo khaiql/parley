@@ -47,8 +47,11 @@ func (d *GeminiDriver) Start(ctx context.Context, config AgentConfig) error {
 	d.events = make(chan AgentEvent, 64)
 	d.sessionSet = make(chan struct{})
 
-	// Gemini needs an initial prompt to start — use a join message.
-	initialMsg := "[joining the conversation]"
+	// Gemini needs an initial prompt to start.
+	initialMsg := config.InitialMessage
+	if initialMsg == "" {
+		initialMsg = "[joining the conversation]"
+	}
 	if err := d.invoke(initialMsg, true); err != nil {
 		cancel()
 		return err

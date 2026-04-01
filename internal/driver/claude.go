@@ -305,7 +305,7 @@ func BuildSystemPrompt(config AgentConfig) string {
 - If you decide not to respond to a message, output exactly [LISTENING] on a line by itself and nothing else
 
 JOINING:
-- When you first join, introduce yourself with: your name, your role, what directory/repo you're working in, and what you can help with. Keep it to 1-2 sentences. Do NOT ask questions or @-mention anyone.
+- When you first join, introduce yourself with: your @name (e.g. "I am @growth"), your role, what directory/repo you're working in, and what you can help with. Keep it to 1-2 sentences. Do NOT ask questions or @-mention anyone else.
 - When another participant joins, do NOT greet them, do NOT @-mention them, do NOT engage. Just listen.
 
 @-MENTIONS:

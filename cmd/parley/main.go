@@ -59,12 +59,11 @@ func init() {
 	hostCmd.Flags().StringVar(&hostResume, "resume", "", "Room ID to resume (loads saved room from ~/.parley/rooms/<id>)")
 
 	joinCmd.Flags().IntVar(&joinPort, "port", 0, "Port of the session to join (required)")
-	joinCmd.Flags().StringVar(&joinName, "name", "", "Your name in the session (required)")
+	joinCmd.Flags().StringVar(&joinName, "name", "", "Your name in the session (random if not set)")
 	joinCmd.Flags().StringVar(&joinRole, "role", "agent", "Your role in the session")
 	joinCmd.Flags().BoolVar(&joinResume, "resume", false, "Resume prior agent session (looks up session ID from saved agents.json)")
 	joinCmd.Flags().SetInterspersed(false)
 	_ = joinCmd.MarkFlagRequired("port")
-	_ = joinCmd.MarkFlagRequired("name")
 
 	rootCmd.AddCommand(hostCmd)
 	rootCmd.AddCommand(joinCmd)
@@ -174,7 +173,23 @@ func runHost(cmd *cobra.Command, args []string) error {
 
 // runJoin implements the join command: connects to an existing server as an
 // agent participant and runs the TUI with a Claude driver.
+// randomName picks a random agent name from a curated list.
+func randomName() string {
+	names := []string{
+		"atlas", "nova", "cipher", "echo", "flux",
+		"helix", "iris", "juno", "kappa", "lumen",
+		"nexus", "onyx", "pixel", "quark", "rune",
+		"sage", "titan", "vega", "wren", "zephyr",
+	}
+	return names[time.Now().UnixNano()%int64(len(names))]
+}
+
 func runJoin(cmd *cobra.Command, args []string) error {
+	if joinName == "" {
+		joinName = randomName()
+		fmt.Fprintf(os.Stderr, "No --name provided, using: %s\n", joinName)
+	}
+
 	// Extract agent command from args after "--".
 	var agentArgs []string
 	dashPos := cmd.Flags().ArgsLenAtDash()
@@ -262,6 +277,13 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Build the intro message for the agent.
+	intro := fmt.Sprintf("You have joined a parley chat room. Topic: %s. Introduce yourself briefly.", topic)
+	history := driver.FormatHistory(roomState.Messages)
+	if history != "" {
+		intro = history + "\n" + intro
+	}
+
 	config := driver.AgentConfig{
 		Command:         command,
 		Args:            extraArgs,
@@ -271,6 +293,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		Repo:            repo,
 		Topic:           topic,
 		Participants:    participants,
+		InitialMessage:  intro,
 		ResumeSessionID: resumeSessionID,
 	}
 	config.SystemPrompt = driver.BuildSystemPrompt(config)
@@ -285,14 +308,9 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 	defer d.Stop()
 
-	// Send initial prompt with conversation history if available.
-	intro := fmt.Sprintf("You have joined a parley chat room. Topic: %s. Introduce yourself briefly.", topic)
-	history := driver.FormatHistory(roomState.Messages)
-	if history != "" {
-		if err := d.Send(history + "\n" + intro); err != nil {
-			return fmt.Errorf("join: send initial prompt: %w", err)
-		}
-	} else {
+	// For drivers that don't consume InitialMessage in Start() (e.g. Claude),
+	// send the intro explicitly.
+	if _, isGemini := d.(*driver.GeminiDriver); !isGemini {
 		if err := d.Send(intro); err != nil {
 			return fmt.Errorf("join: send initial prompt: %w", err)
 		}
