@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -226,10 +227,16 @@ func parseGeminiLine(line []byte) (AgentEvent, bool) {
 		}
 		// Filter out thinking/reasoning content — these are internal
 		// chain-of-thought that shouldn't be sent to the chat.
+		// Gemini marks thoughts via the JSON "thought" field, but also
+		// embeds "[Thought: true]" as a text prefix in the content.
 		if raw.Thought {
 			return AgentEvent{Type: EventThinking}, true
 		}
-		return AgentEvent{Type: EventText, Text: raw.Content}, true
+		content := raw.Content
+		if strings.HasPrefix(content, "[Thought: true]") {
+			return AgentEvent{Type: EventThinking}, true
+		}
+		return AgentEvent{Type: EventText, Text: content}, true
 
 	case "tool_use":
 		return AgentEvent{Type: EventToolUse, ToolName: raw.ToolName}, true

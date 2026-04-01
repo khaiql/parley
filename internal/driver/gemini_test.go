@@ -219,6 +219,30 @@ func TestParseGeminiLine_ThoughtFiltered(t *testing.T) {
 	}
 }
 
+func TestParseGeminiLine_ThoughtTextPrefixFiltered(t *testing.T) {
+	// Gemini sometimes embeds "[Thought: true]" as a text prefix.
+	line := `{"type":"message","role":"assistant","content":"[Thought: true]Analyzing the plan...","delta":true}`
+	event, ok := parseGeminiLine([]byte(line))
+	if !ok {
+		t.Fatal("expected thought-prefixed message to produce an event")
+	}
+	if event.Type != EventThinking {
+		t.Errorf("expected EventThinking for [Thought: true] prefix, got %v", event.Type)
+	}
+}
+
+func TestParseGeminiLine_ThoughtListeningFiltered(t *testing.T) {
+	// "[Thought: true][LISTENING]" should be filtered as thinking, not leak.
+	line := `{"type":"message","role":"assistant","content":"[Thought: true][LISTENING]","delta":true}`
+	event, ok := parseGeminiLine([]byte(line))
+	if !ok {
+		t.Fatal("expected thought+listening message to produce an event")
+	}
+	if event.Type != EventThinking {
+		t.Errorf("expected EventThinking, got %v", event.Type)
+	}
+}
+
 func TestParseGeminiLine_AssistantFullMessage(t *testing.T) {
 	// Non-delta assistant messages should also produce text.
 	line := `{"type":"message","role":"assistant","content":"Full response"}`
