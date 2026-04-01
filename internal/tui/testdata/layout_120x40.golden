@@ -1,8 +1,8 @@
  parley                                             Topic: test topic                                             :1234  
 [system] Alice has joined — backend                                                         │ participants               
-sle 10:31                                                                                   │                            
-Hello everyone                                                                              │ sle                        
-                                                                                            │                            
+┃ sle 10:31                                                                                 │                            
+┃                                                                                           │ sle                        
+┃   Hello everyone                                                                          │                            
                                                                                             │ Alice  backend             
                                                                                             │   claude                   
                                                                                             │   /home/alice/project      

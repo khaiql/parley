@@ -1,11 +1,11 @@
  parley     Topic: test topic     :1234  
-[system]    │ participants               
-Alice has   │                            
-joined —    │ sle                        
-backend     │                            
-sle 10:31   │ Alice  backend             
-Hello       │   claude                   
-everyone    │   /home/alice/project      
+Alice has   │ participants               
+joined —    │                            
+backend     │ sle                        
+┃ sle 10:31 │                            
+┃           │ Alice  backend             
+┃   Hello   │   claude                   
+┃   everyone│   /home/alice/project      
             │                            
 ──────────────────────────────────────── 
  ┃ Type a message… (Enter to send)       

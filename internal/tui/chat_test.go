@@ -6,16 +6,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/khaiql/parley/internal/protocol"
 )
 
-// ansiEscapeRegex strips ANSI escape sequences from a string so we can measure
-// visible character width.
+// ansiEscapeRegex strips ANSI escape sequences from a string.
 var ansiEscapeRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripANSI(s string) string {
 	return ansiEscapeRegex.ReplaceAllString(s, "")
 }
+
+// displayWidth returns the visible column width of a string, ignoring ANSI.
+func displayWidth(s string) int {
+	return lipgloss.Width(s)
+}
+
 
 func TestExtractText(t *testing.T) {
 	tests := []struct {
@@ -202,9 +208,9 @@ func TestRenderMessageWrapsLongText(t *testing.T) {
 	}
 
 	for i, line := range lines {
-		visible := stripANSI(line)
-		if len(visible) > width {
-			t.Errorf("line %d exceeds width %d: len=%d %q", i, width, len(visible), visible)
+		w := displayWidth(line)
+		if w > width {
+			t.Errorf("line %d exceeds width %d: display_width=%d %q", i, width, w, line)
 		}
 	}
 }

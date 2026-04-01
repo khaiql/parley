@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/khaiql/parley/internal/protocol"
 )
@@ -83,57 +84,83 @@ func nameStyle(name string, colors map[string]lipgloss.Color) lipgloss.Style {
 	return lipgloss.NewStyle().Bold(true).Foreground(c)
 }
 
+// borderColor returns the color for a participant's left border.
+func borderColor(name string, colors map[string]lipgloss.Color) lipgloss.Color {
+	if colors != nil {
+		if c, ok := colors[name]; ok {
+			return c
+		}
+	}
+	return colorAgent
+}
+
+// renderMarkdown renders markdown text using Glamour, falling back to plain
+// text if rendering fails.
+func renderMarkdown(text string, width int) string {
+	if width < 10 {
+		width = 10
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return text
+	}
+	rendered, err := r.Render(text)
+	if err != nil {
+		return text
+	}
+	// Glamour adds trailing newlines; trim them.
+	return strings.TrimRight(rendered, "\n")
+}
+
 // renderMessage renders a single message according to its source.
 func renderMessage(msg protocol.MessageParams, width int, colors map[string]lipgloss.Color) string {
 	text := extractText(msg.Content)
 
-	// Leave at least 1 column for content; body is capped at the viewport
-	// width so long text wraps instead of overflowing.
-	bodyWidth := width
-	if bodyWidth < 1 {
-		bodyWidth = 1
+	if width < 1 {
+		width = 1
 	}
-	bodyStyle := lipgloss.NewStyle().Foreground(colorText).Width(bodyWidth)
 
 	switch msg.Source {
 	case "system", "":
-		if msg.Source == "" && msg.Role == "system" {
-			return systemMsgStyle.Width(bodyWidth).Render(fmt.Sprintf("[system] %s", text))
+		if msg.Source == "system" || msg.Role == "system" {
+			return systemMsgStyle.Width(width).Render(fmt.Sprintf("[system] %s", text))
 		}
-		if msg.Source == "system" {
-			return systemMsgStyle.Width(bodyWidth).Render(fmt.Sprintf("[system] %s", text))
-		}
-		// Unknown — render as plain text.
-		return bodyStyle.Render(text)
-
-	case "human":
-		ts := formatTimestamp(msg)
-		header := lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			nameStyle(msg.From, colors).Render(msg.From),
-			" ",
-			timestampStyle.Render(ts),
-		)
-		body := highlightMentions(text, colors)
-		return header + "\n" + bodyStyle.Render(body)
+		return lipgloss.NewStyle().Foreground(colorText).Width(width).Render(text)
 
 	default:
-		// agent
+		// Human or agent message — render with thick left border.
 		ts := formatTimestamp(msg)
 		namePart := nameStyle(msg.From, colors).Render(msg.From)
-		rolePart := ""
-		if msg.Role != "" && msg.Role != "agent" {
-			rolePart = " " + roleBadgeStyle.Render(msg.Role)
+
+		headerParts := []string{namePart}
+		if msg.Role != "" && msg.Role != "agent" && msg.Role != "human" {
+			headerParts = append(headerParts, " ", roleBadgeStyle.Render(msg.Role))
 		}
-		header := lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			namePart,
-			rolePart,
-			" ",
-			timestampStyle.Render(ts),
-		)
-		body := highlightMentions(text, colors)
-		return header + "\n" + bodyStyle.Render(body)
+		if ts != "" {
+			headerParts = append(headerParts, " ", timestampStyle.Render(ts))
+		}
+		header := lipgloss.JoinHorizontal(lipgloss.Top, headerParts...)
+
+		// Render body as markdown. Account for border (1 col) + padding (1 col).
+		contentWidth := width - 2
+		if contentWidth < 10 {
+			contentWidth = 10
+		}
+		body := renderMarkdown(highlightMentions(text, colors), contentWidth)
+
+		content := header + "\n" + body
+
+		bc := borderColor(msg.From, colors)
+		msgStyle := lipgloss.NewStyle().
+			BorderLeft(true).
+			BorderStyle(lipgloss.ThickBorder()).
+			BorderForeground(bc).
+			PaddingLeft(1)
+
+		return msgStyle.Render(content)
 	}
 }
 
