@@ -150,7 +150,9 @@ func renderMessage(msg protocol.MessageParams, width int, colors map[string]lipg
 		if contentWidth < 10 {
 			contentWidth = 10
 		}
-		body := renderMarkdown(highlightMentions(text, colors), contentWidth)
+		// Render markdown first, then highlight @mentions in the result.
+		// Applying mentions before Glamour corrupts ANSI codes.
+		body := highlightMentions(renderMarkdown(text, contentWidth), colors)
 
 		content := header + "\n" + body
 
@@ -166,25 +168,30 @@ func renderMessage(msg protocol.MessageParams, width int, colors map[string]lipg
 }
 
 // highlightMentions renders @mentions in the text with a highlight style.
-// It splits on whitespace boundaries, highlights tokens starting with "@",
-// and reassembles the result.
+// Processes line by line to preserve newlines and indentation.
 func highlightMentions(text string, colors map[string]lipgloss.Color) string {
-	mentionStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#58a6ff"))
-
-	words := strings.Fields(text)
-	for i, word := range words {
-		if strings.HasPrefix(word, "@") && len(word) > 1 {
-			// Strip trailing punctuation for color lookup.
-			name := strings.TrimRight(word[1:], ".,;:!?")
-			if colors != nil {
-				if c, ok := colors[name]; ok {
-					mentionStyle = lipgloss.NewStyle().Bold(true).Foreground(c)
+	lines := strings.Split(text, "\n")
+	for li, line := range lines {
+		words := strings.Fields(line)
+		changed := false
+		for wi, word := range words {
+			if strings.HasPrefix(word, "@") && len(word) > 1 {
+				name := strings.TrimRight(word[1:], ".,;:!?")
+				style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#58a6ff"))
+				if colors != nil {
+					if c, ok := colors[name]; ok {
+						style = lipgloss.NewStyle().Bold(true).Foreground(c)
+					}
 				}
+				words[wi] = style.Render(word)
+				changed = true
 			}
-			words[i] = mentionStyle.Render(word)
+		}
+		if changed {
+			lines[li] = strings.Join(words, " ")
 		}
 	}
-	return strings.Join(words, " ")
+	return strings.Join(lines, "\n")
 }
 
 // extractText concatenates all text-type content blocks.
