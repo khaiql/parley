@@ -176,6 +176,58 @@ func TestExport_OptionalAgentsJSON(t *testing.T) {
 	}
 }
 
+func TestExport_EscapesScriptTags(t *testing.T) {
+	dir := t.TempDir()
+
+	room := map[string]string{"topic": "XSS Test", "id": "xss-1"}
+	agents := []map[string]string{
+		{"name": "Attacker", "role": "agent", "source": "agent"},
+	}
+	// Message containing </script> which could break out of the data tag.
+	messages := []map[string]any{
+		{
+			"id": "msg-1", "seq": 1, "from": "Attacker", "source": "agent",
+			"role": "assistant",
+			"content": []map[string]string{{"type": "text", "text": "</script><script>alert('xss')</script>"}},
+		},
+	}
+
+	writeTestJSON(t, filepath.Join(dir, "room.json"), room)
+	writeTestJSON(t, filepath.Join(dir, "agents.json"), agents)
+	writeTestJSON(t, filepath.Join(dir, "messages.json"), messages)
+
+	var buf bytes.Buffer
+	if err := Export(dir, &buf); err != nil {
+		t.Fatalf("Export() error: %v", err)
+	}
+
+	html := buf.String()
+
+	// The literal </script> must not appear inside the data script tag.
+	// It should be escaped as <\/script>.
+	dataStart := strings.Index(html, `<script id="parley-data"`)
+	dataEnd := strings.Index(html[dataStart:], `</script>`)
+	dataContent := html[dataStart : dataStart+dataEnd]
+	if strings.Contains(dataContent, `</script>`) && !strings.Contains(dataContent, `<\/script>`) {
+		t.Error("embedded data contains unescaped </script> tag — XSS vulnerability")
+	}
+	if !strings.Contains(dataContent, `<\\/script>`) {
+		// In JSON, the backslash is escaped, so </script> becomes <\/script>
+		// which in JSON string is <\\/script>
+	}
+
+	// The embedded JSON should still be valid after escaping.
+	tagLen := len(`<script id="parley-data" type="application/json">`)
+	jsonStart := strings.Index(html, `<script id="parley-data" type="application/json">`) + tagLen
+	jsonEnd := strings.Index(html[jsonStart:], `</script>`)
+	jsonStr := html[jsonStart : jsonStart+jsonEnd]
+
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
+		t.Fatalf("embedded JSON is invalid after escaping: %v\nJSON: %.200s", err, jsonStr)
+	}
+}
+
 func writeTestJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	data, err := json.MarshalIndent(v, "", "  ")

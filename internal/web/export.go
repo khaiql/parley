@@ -57,7 +57,12 @@ func Export(dir string, w io.Writer) error {
 		return fmt.Errorf("marshal bundle: %w", err)
 	}
 
-	output := strings.Replace(templateHTML, placeholder, string(bundleJSON), 1)
+	// Escape </script> sequences in the JSON to prevent breaking out of the
+	// <script> tag. The raw JSON is read from disk and not re-escaped by
+	// json.Marshal (since it's json.RawMessage), so literal </script> in
+	// message text would terminate the data tag early.
+	escaped := strings.ReplaceAll(string(bundleJSON), "</script>", `<\/script>`)
+	output := strings.Replace(templateHTML, placeholder, escaped, 1)
 	_, err = io.WriteString(w, output)
 	return err
 }

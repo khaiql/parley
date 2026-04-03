@@ -504,13 +504,13 @@ body {
     }
 
     function renderTable(rows) {
-      if (rows.length < 2) return rows.map(function(r) { return '<p>' + r + '</p>'; }).join('');
+      if (rows.length < 2) return rows.map(function(r) { return '<p>' + escapeHtml(r) + '</p>'; }).join('');
       var out = '<table>';
       // Header row
       var headerCells = splitTableRow(rows[0]);
       out += '<thead><tr>';
       for (var h = 0; h < headerCells.length; h++) {
-        out += '<th>' + renderInline(headerCells[h].trim(), colorMap) + '</th>';
+        out += '<th>' + renderInline(escapeHtml(headerCells[h].trim()), colorMap) + '</th>';
       }
       out += '</tr></thead><tbody>';
       // Skip separator row (index 1), render data rows
@@ -518,7 +518,7 @@ body {
         var cells = splitTableRow(rows[r]);
         out += '<tr>';
         for (var c = 0; c < cells.length; c++) {
-          out += '<td>' + renderInline(cells[c].trim(), colorMap) + '</td>';
+          out += '<td>' + renderInline(escapeHtml(cells[c].trim()), colorMap) + '</td>';
         }
         out += '</tr>';
       }
