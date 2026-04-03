@@ -746,3 +746,36 @@ func TestFormatHistory_SeparatorPresent(t *testing.T) {
 		t.Errorf("expected separator '---' in output, got:\n%s", result)
 	}
 }
+
+func TestBuildArgs_AutoApproveAddsFlag(t *testing.T) {
+	cfg := AgentConfig{
+		SystemPrompt: "prompt",
+		AutoApprove:  true,
+	}
+	args := BuildArgs(cfg)
+
+	found := false
+	for _, a := range args {
+		if a == "--dangerously-skip-permissions" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected --dangerously-skip-permissions when AutoApprove is true, got: %v", args)
+	}
+}
+
+func TestBuildArgs_NoAutoApproveByDefault(t *testing.T) {
+	cfg := AgentConfig{
+		SystemPrompt: "prompt",
+		AutoApprove:  false,
+	}
+	args := BuildArgs(cfg)
+
+	for _, a := range args {
+		if a == "--dangerously-skip-permissions" {
+			t.Errorf("expected no --dangerously-skip-permissions when AutoApprove is false, got: %v", args)
+		}
+	}
+}

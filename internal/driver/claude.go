@@ -443,6 +443,9 @@ func BuildArgs(config AgentConfig) []string {
 		"--include-partial-messages",
 		"--append-system-prompt", config.SystemPrompt,
 	}
+	if config.AutoApprove {
+		args = append(args, "--dangerously-skip-permissions")
+	}
 	if config.ResumeSessionID != "" {
 		args = append(args, "--resume", config.ResumeSessionID)
 	}

@@ -41,6 +41,7 @@ type AgentConfig struct {
 	Participants    []ParticipantInfo
 	SystemPrompt    string
 	ResumeSessionID string // if set, pass --resume <id> to the driver
+	AutoApprove     bool   // if set, append driver-specific auto-approve flag
 }
 
 // ParticipantInfo describes one participant in the room (used for system prompt).
