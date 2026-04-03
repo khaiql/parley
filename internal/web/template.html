@@ -194,7 +194,7 @@ body {
 
 .message-content {
   font-size: 14px;
-  line-height: 1.5;
+  line-height: 1.6;
   color: #333;
   word-wrap: break-word;
   overflow-wrap: break-word;
@@ -328,6 +328,7 @@ body {
 <body>
 
 <script id="parley-data" type="application/json">{{PARLEY_DATA}}</script>
+<div id="app"></div>
 
 <script>
 (function() {
@@ -369,29 +370,26 @@ body {
     return Math.abs(h);
   }
 
-  function buildColorMap(agents) {
+  function getColor(name, source) {
+    var palette = (source === 'human') ? HUMAN_COLORS : AGENT_COLORS;
+    return palette[hashName(name) % palette.length];
+  }
+
+  function buildColorMap(agents, messages) {
     var map = {};
-    var humanIdx = 0;
-    var agentIdx = 0;
     for (var i = 0; i < agents.length; i++) {
       var a = agents[i];
-      var isHuman = !a.agent_type;
-      if (isHuman) {
-        map[a.name] = HUMAN_COLORS[humanIdx % HUMAN_COLORS.length];
-        humanIdx++;
-      } else {
-        map[a.name] = AGENT_COLORS[agentIdx % AGENT_COLORS.length];
-        agentIdx++;
+      map[a.name] = getColor(a.name, a.source);
+    }
+    // Also assign colors for message senders not in agents list
+    if (messages) {
+      for (var j = 0; j < messages.length; j++) {
+        var m = messages[j];
+        if (!map[m.from]) {
+          map[m.from] = getColor(m.from, m.source || 'agent');
+        }
       }
     }
-    // Fallback: assign by name hash for unknown senders
-    map._resolve = function(name) {
-      if (map[name]) return map[name];
-      var palette = AGENT_COLORS;
-      var idx = hashName(name) % palette.length;
-      map[name] = palette[idx];
-      return map[name];
-    };
     return map;
   }
 
@@ -402,7 +400,8 @@ body {
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function renderMarkdown(text, colorMap) {
@@ -428,7 +427,7 @@ body {
 
     // @mentions
     text = text.replace(/@(\w[\w-]*)/g, function(match, name) {
-      var color = colorMap._resolve(name);
+      var color = colorMap[name] || getColor(name, 'agent');
       return '<span class="mention" style="color:' + color.solid + '">@' + name + '</span>';
     });
 
@@ -480,7 +479,7 @@ body {
       var colorMap = buildColorMap(agents);
       for (var i = 0; i < agents.length; i++) {
         var a = agents[i];
-        var color = colorMap._resolve(a.name);
+        var color = colorMap[a.name];
         html += '<div class="participant">';
         html += '<div class="participant-name" style="color:' + color.solid + '">' + escapeHtml(a.name);
         if (a.agent_type) {
@@ -517,7 +516,7 @@ body {
         lastDate = msgDate;
       }
 
-      var color = colorMap._resolve(msg.from);
+      var color = colorMap[msg.from] || getColor(msg.from, msg.source || 'agent');
       var initial = msg.from ? msg.from.charAt(0).toUpperCase() : '?';
 
       // Combine content array into single text
@@ -549,7 +548,7 @@ body {
     var agents = data.agents || [];
     var messages = data.messages || [];
     var room = data.room || {};
-    var colorMap = buildColorMap(agents);
+    var colorMap = buildColorMap(agents, messages);
 
     var topic = room.topic || 'Chat History';
     var msgCount = messages.length;
@@ -560,7 +559,7 @@ body {
       dateRange = first === last ? first : first + ' — ' + last;
     }
 
-    document.body.innerHTML = '<div class="sidebar">' + renderSidebar(agents) + '</div>'
+    document.getElementById('app').innerHTML = '<div class="sidebar">' + renderSidebar(agents) + '</div>'
       + '<div class="chat-area">'
       + '<div class="topic-bar">' + escapeHtml(topic) + '</div>'
       + '<div class="messages">' + renderMessages(messages, colorMap) + '</div>'
@@ -573,7 +572,7 @@ body {
   }
 
   function renderEmpty() {
-    document.body.innerHTML = '<div class="sidebar">' + renderSidebar(null) + '</div>'
+    document.getElementById('app').innerHTML = '<div class="sidebar">' + renderSidebar(null) + '</div>'
       + '<div class="chat-area">'
       + '<div class="empty-state">'
       + '<div class="drop-zone" id="drop-zone">'
