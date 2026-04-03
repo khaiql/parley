@@ -261,6 +261,13 @@ func (r *Room) GetParticipants() []*ClientConn {
 	return out
 }
 
+// MessageCount returns the number of messages in the room, safe for concurrent use.
+func (r *Room) MessageCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.Messages)
+}
+
 var msgCounter uint64
 
 // generateID returns a unique message ID using an atomic counter.

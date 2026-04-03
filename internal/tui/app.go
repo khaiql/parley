@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/protocol"
 )
 
@@ -25,6 +26,12 @@ type AgentTypingMsg struct {
 // ServerDisconnectedMsg signals that the server connection was lost.
 type ServerDisconnectedMsg struct{}
 
+// LocalSystemMsg injects a local-only system message into the chat view.
+// These messages are not broadcast to other participants.
+type LocalSystemMsg struct {
+	Text string
+}
+
 // HistoryLoadedMsg signals that message history has been loaded.
 type HistoryLoadedMsg struct {
 	Messages []protocol.MessageParams
@@ -37,6 +44,8 @@ type App struct {
 	sidebar    Sidebar
 	input      Input
 	sendFn     func(string, []string) // callback to send messages over network
+	registry   *command.Registry      // slash command registry (nil = no commands)
+	cmdCtx     command.Context         // context passed to slash commands
 	nameColors      map[string]lipgloss.Color // stable color per participant
 	colorIdx        int                       // next color index to assign
 	lastInputHeight int                       // cached to avoid redundant re-layouts
@@ -72,6 +81,13 @@ func (a *App) SetAgent(name, role string) {
 	a.topbar.SetAgent(name, role)
 }
 
+// SetCommandRegistry configures the slash command registry and context.
+// This is only used by the host TUI.
+func (a *App) SetCommandRegistry(reg *command.Registry, ctx command.Context) {
+	a.registry = reg
+	a.cmdCtx = ctx
+}
+
 // Init satisfies tea.Model. Returns textarea.Blink to animate the cursor.
 func (a App) Init() tea.Cmd {
 	return textarea.Blink
@@ -98,6 +114,16 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				text := strings.TrimSpace(a.input.Value())
 				if text != "" {
 					a.input.Reset()
+					// Slash command dispatch.
+					if a.registry != nil && command.IsCommand(text) {
+						result := a.registry.Execute(a.cmdCtx, text)
+						if result.Error != nil {
+							a.chat.AddMessage(systemMessage(result.Error.Error()))
+						} else if result.LocalMessage != "" {
+							a.chat.AddMessage(systemMessage(result.LocalMessage))
+						}
+						return a, nil
+					}
 					mentions := protocol.ParseMentions(text)
 					if a.sendFn != nil {
 						a.sendFn(text, mentions)
@@ -129,6 +155,10 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AgentTypingMsg:
 		a.input.SetAgentText(m.Text)
+		return a, nil
+
+	case LocalSystemMsg:
+		a.chat.AddMessage(systemMessage(m.Text))
 		return a, nil
 	}
 
@@ -251,5 +281,18 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
 			a.sidebar.SetParticipantStatus(params.Name, params.Status)
 		}
+	}
+}
+
+// systemMessage creates a local-only system MessageParams for display in the
+// chat view. These are not broadcast to other participants.
+func systemMessage(text string) protocol.MessageParams {
+	return protocol.MessageParams{
+		From:   "system",
+		Source: "system",
+		Role:   "system",
+		Content: []protocol.Content{
+			{Type: "text", Text: text},
+		},
 	}
 }
