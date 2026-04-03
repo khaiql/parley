@@ -10,8 +10,8 @@ import (
 // Sidebar renders the participant list panel.
 type Sidebar struct {
 	participants []protocol.Participant
-	statuses     map[string]string              // per-participant status text
-	nameColors   map[string]lipgloss.Color       // per-participant name color
+	statuses     map[string]string         // per-participant status text
+	nameColors   map[string]lipgloss.Color // per-participant name color
 	width        int
 	height       int
 }

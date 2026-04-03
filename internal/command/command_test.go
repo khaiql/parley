@@ -19,9 +19,9 @@ type mockRoom struct {
 func (m *mockRoom) GetID() string                             { return m.id }
 func (m *mockRoom) GetTopic() string                          { return m.topic }
 func (m *mockRoom) GetPort() int                              { return m.port }
-func (m *mockRoom) GetParticipantSnapshot() []ParticipantInfo  { return m.participants }
+func (m *mockRoom) GetParticipantSnapshot() []ParticipantInfo { return m.participants }
 func (m *mockRoom) GetMessageCount() int                      { return m.messageCount }
-func (m *mockRoom) GetSavedAgents() []SavedAgentInfo           { return m.savedAgents }
+func (m *mockRoom) GetSavedAgents() []SavedAgentInfo          { return m.savedAgents }
 
 func newTestRoom() *mockRoom {
 	return &mockRoom{

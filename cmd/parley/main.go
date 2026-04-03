@@ -515,9 +515,9 @@ type RoomAdapter struct {
 	port int
 }
 
-func (a *RoomAdapter) GetID() string    { return a.room.ID }
-func (a *RoomAdapter) GetTopic() string { return a.room.Topic }
-func (a *RoomAdapter) GetPort() int     { return a.port }
+func (a *RoomAdapter) GetID() string        { return a.room.ID }
+func (a *RoomAdapter) GetTopic() string     { return a.room.Topic }
+func (a *RoomAdapter) GetPort() int         { return a.port }
 func (a *RoomAdapter) GetMessageCount() int { return a.room.MessageCount() }
 
 func (a *RoomAdapter) GetParticipantSnapshot() []command.ParticipantInfo {

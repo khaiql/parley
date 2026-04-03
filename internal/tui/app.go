@@ -39,13 +39,13 @@ type HistoryLoadedMsg struct {
 
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
-	topbar     TopBar
-	chat       Chat
-	sidebar    Sidebar
-	input      Input
-	sendFn     func(string, []string) // callback to send messages over network
-	registry   *command.Registry      // slash command registry (nil = no commands)
-	cmdCtx     command.Context         // context passed to slash commands
+	topbar          TopBar
+	chat            Chat
+	sidebar         Sidebar
+	input           Input
+	sendFn          func(string, []string)    // callback to send messages over network
+	registry        *command.Registry         // slash command registry (nil = no commands)
+	cmdCtx          command.Context           // context passed to slash commands
 	nameColors      map[string]lipgloss.Color // stable color per participant
 	colorIdx        int                       // next color index to assign
 	lastInputHeight int                       // cached to avoid redundant re-layouts

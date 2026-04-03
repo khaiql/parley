@@ -26,7 +26,7 @@ type GeminiDriver struct {
 	wg         sync.WaitGroup
 	events     chan AgentEvent
 	config     AgentConfig
-	sessionID  string // session_id from the init event; passed as --resume
+	sessionID  string        // session_id from the init event; passed as --resume
 	sessionSet chan struct{} // closed when sessionID is first set
 	cancel     context.CancelFunc
 	ctx        context.Context
