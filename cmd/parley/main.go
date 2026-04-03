@@ -18,6 +18,7 @@ import (
 	"github.com/khaiql/parley/internal/protocol"
 	"github.com/khaiql/parley/internal/server"
 	"github.com/khaiql/parley/internal/tui"
+	"github.com/khaiql/parley/internal/web"
 )
 
 func main() {
@@ -55,6 +56,15 @@ var joinCmd = &cobra.Command{
 	RunE:  runJoin,
 }
 
+var exportOutput string
+
+var exportCmd = &cobra.Command{
+	Use:   "export [roomID]",
+	Short: "Export a chat session as a shareable HTML file",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runExport,
+}
+
 func init() {
 	hostCmd.Flags().StringVar(&hostTopic, "topic", "", "Topic for the chat session (required unless --resume is set)")
 	hostCmd.Flags().IntVar(&hostPort, "port", 0, "Port to listen on (0 = auto-assign)")
@@ -68,8 +78,11 @@ func init() {
 	joinCmd.Flags().SetInterspersed(false)
 	_ = joinCmd.MarkFlagRequired("port")
 
+	exportCmd.Flags().StringVarP(&exportOutput, "output", "o", "", "Output file path (default: <roomID>.html)")
+
 	rootCmd.AddCommand(hostCmd)
 	rootCmd.AddCommand(joinCmd)
+	rootCmd.AddCommand(exportCmd)
 }
 
 // detectRepo runs git remote get-url origin and returns the trimmed output,
@@ -498,6 +511,34 @@ func isMentioned(mentions []string, name string) bool {
 		}
 	}
 	return false
+}
+
+func runExport(cmd *cobra.Command, args []string) error {
+	roomID := args[0]
+	dir := server.RoomDir(roomID)
+
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		return fmt.Errorf("export: room %q not found at %s", roomID, dir)
+	}
+
+	output := exportOutput
+	if output == "" {
+		output = roomID + ".html"
+	}
+
+	f, err := os.Create(output)
+	if err != nil {
+		return fmt.Errorf("export: create output file: %w", err)
+	}
+	defer f.Close()
+
+	if err := web.Export(dir, f); err != nil {
+		os.Remove(output)
+		return fmt.Errorf("export: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Exported to %s\n", output)
+	return nil
 }
 
 // contentText extracts the text from a slice of Content items.
