@@ -206,8 +206,18 @@ func runHost(cmd *cobra.Command, args []string) error {
 
 	_, err = p.Run()
 
+	// Save room state BEFORE closing the server. This ensures the final
+	// messages are persisted while participants are still in the room.
+	if saveErr := server.SaveRoom(roomDir, srv.Room()); saveErr != nil {
+		fmt.Fprintf(os.Stderr, "Failed to save room on exit: %v\n", saveErr)
+	}
+
 	// Host is leaving — shut down the server so all agent connections drop.
+	// Agent processes will save their session IDs to agents.json after this.
 	srv.Close()
+
+	// Brief pause to let agent processes save their session IDs.
+	time.Sleep(500 * time.Millisecond)
 
 	return err
 }
