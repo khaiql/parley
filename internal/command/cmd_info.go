@@ -7,7 +7,7 @@ var InfoCommand = &Command{
 	Name:        "info",
 	Usage:       "/info",
 	Description: "Display current room information",
-	Execute: func(ctx Context, args string) Result {
+	Execute: func(ctx Context, _ string) Result {
 		room := ctx.Room
 		participants := room.GetParticipantSnapshot()
 		port := room.GetPort()

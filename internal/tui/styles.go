@@ -3,14 +3,13 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	colorPrimary   = lipgloss.Color("#58a6ff")
-	colorHuman     = lipgloss.Color("#f0883e")
-	colorAgent     = lipgloss.Color("#a5d6ff")
-	colorSystem    = lipgloss.Color("#8b949e")
-	colorRoleBadge = lipgloss.Color("#388bfd")
-	colorBorder    = lipgloss.Color("#30363d")
-	colorText      = lipgloss.Color("#c9d1d9")
-	colorDimText   = lipgloss.Color("#484f58")
+	colorPrimary = lipgloss.Color("#58a6ff")
+	colorHuman   = lipgloss.Color("#f0883e")
+	colorAgent   = lipgloss.Color("#a5d6ff")
+	colorSystem  = lipgloss.Color("#8b949e")
+	colorBorder  = lipgloss.Color("#30363d")
+	colorText    = lipgloss.Color("#c9d1d9")
+	colorDimText = lipgloss.Color("#484f58")
 
 	// participantColors is a palette of distinct colors assigned to participants
 	// by their join order. The human always gets colorHuman; agents cycle through these.
@@ -49,19 +48,6 @@ var (
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderTop(true).
 			BorderForeground(colorBorder).
-			Padding(0, 1)
-
-	humanNameStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorHuman)
-
-	agentNameStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(colorAgent)
-
-	roleBadgeStyle = lipgloss.NewStyle().
-			Background(colorRoleBadge).
-			Foreground(lipgloss.Color("#ffffff")).
 			Padding(0, 1)
 
 	systemMsgStyle = lipgloss.NewStyle().

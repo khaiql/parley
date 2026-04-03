@@ -56,7 +56,7 @@ type App struct {
 
 // NewApp creates an App with the given topic, port, input mode, display name,
 // send callback, and optional initial participants (may be nil).
-func NewApp(topic string, port int, mode InputMode, name string, sendFn func(string, []string), participants ...protocol.Participant) App {
+func NewApp(topic string, port int, mode InputMode, _ string, sendFn func(string, []string), participants ...protocol.Participant) App {
 	a := App{
 		topbar:     NewTopBar(topic, port),
 		chat:       NewChat(0, 0),
@@ -131,6 +131,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return a, nil
 			}
+		default:
+			// ignore other keys
 		}
 
 	case ServerDisconnectedMsg:
