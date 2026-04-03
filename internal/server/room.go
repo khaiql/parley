@@ -97,7 +97,10 @@ func (r *Room) extractMentions(text string) []string {
 		token := word[1:]
 		// Check if any participant name is a prefix of the token (handles @bob, @bob's, @bob! etc.)
 		for name := range r.Participants {
-			if strings.EqualFold(token, name) || strings.HasPrefix(strings.ToLower(token), strings.ToLower(name)) && len(token) > len(name) && !isNameChar(token[len(name)]) {
+			lower := strings.ToLower(token)
+			lowerName := strings.ToLower(name)
+			if strings.EqualFold(token, name) ||
+				(strings.HasPrefix(lower, lowerName) && len(token) > len(name) && !isNameChar(token[len(name)])) {
 				if !seen[name] {
 					mentions = append(mentions, name)
 					seen[name] = true

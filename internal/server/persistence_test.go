@@ -400,6 +400,52 @@ func TestSaveRoom_PreservesSavedAgentsWhenNoParticipants(t *testing.T) {
 	}
 }
 
+func TestSaveRoom_PreservesPartialReconnect(t *testing.T) {
+	dir := t.TempDir()
+
+	prev := []ParticipantData{
+		{Name: "claude", Role: "agent", AgentType: "claude", Source: "agent", SessionID: "sess-abc"},
+		{Name: "gemini", Role: "agent", AgentType: "gemini", Source: "agent", SessionID: "sess-xyz"},
+	}
+	if err := SaveAgents(dir, prev); err != nil {
+		t.Fatalf("SaveAgents: %v", err)
+	}
+
+	room := NewRoom("topic")
+	room.SavedAgents = prev
+
+	// Only claude reconnects.
+	cc := &ClientConn{Name: "claude", Role: "agent", AgentType: "claude", Source: "agent"}
+	if _, err := room.Join(cc); err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	if err := SaveRoom(dir, room); err != nil {
+		t.Fatalf("SaveRoom: %v", err)
+	}
+
+	agents, err := LoadAgents(dir)
+	if err != nil {
+		t.Fatalf("LoadAgents: %v", err)
+	}
+
+	// Both agents should be preserved, no duplicates.
+	if len(agents) != 2 {
+		t.Fatalf("expected 2 agents, got %d: %v", len(agents), agents)
+	}
+
+	byName := make(map[string]ParticipantData)
+	for _, a := range agents {
+		byName[a.Name] = a
+	}
+	if byName["claude"].SessionID != "sess-abc" {
+		t.Errorf("claude session ID: got %q, want %q", byName["claude"].SessionID, "sess-abc")
+	}
+	if byName["gemini"].SessionID != "sess-xyz" {
+		t.Errorf("gemini session ID: got %q, want %q", byName["gemini"].SessionID, "sess-xyz")
+	}
+}
+
 func TestSaveRoom_AgentsIncludeSessionID(t *testing.T) {
 	dir := t.TempDir()
 
