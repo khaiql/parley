@@ -357,6 +357,49 @@ func TestSaveLoadRoom_AutoApproveFalse(t *testing.T) {
 	}
 }
 
+func TestSaveRoom_PreservesSavedAgentsWhenNoParticipants(t *testing.T) {
+	dir := t.TempDir()
+
+	// Simulate a previous session: agents.json has agent data with session IDs.
+	prev := []ParticipantData{
+		{Name: "claude", Role: "agent", AgentType: "claude", Source: "agent", SessionID: "sess-abc"},
+		{Name: "gemini", Role: "agent", AgentType: "gemini", Source: "agent", SessionID: "sess-xyz"},
+	}
+	if err := SaveAgents(dir, prev); err != nil {
+		t.Fatalf("SaveAgents: %v", err)
+	}
+
+	// Resume: LoadRoom populates SavedAgents but Participants is empty.
+	room := NewRoom("topic")
+	room.SavedAgents = prev
+
+	// SaveRoom should NOT destroy the saved agents even though no one is connected.
+	if err := SaveRoom(dir, room); err != nil {
+		t.Fatalf("SaveRoom: %v", err)
+	}
+
+	agents, err := LoadAgents(dir)
+	if err != nil {
+		t.Fatalf("LoadAgents: %v", err)
+	}
+
+	if len(agents) != 2 {
+		t.Fatalf("expected 2 agents in agents.json, got %d", len(agents))
+	}
+
+	// Verify session IDs are preserved.
+	byName := make(map[string]ParticipantData)
+	for _, a := range agents {
+		byName[a.Name] = a
+	}
+	if byName["claude"].SessionID != "sess-abc" {
+		t.Errorf("claude session ID: got %q, want %q", byName["claude"].SessionID, "sess-abc")
+	}
+	if byName["gemini"].SessionID != "sess-xyz" {
+		t.Errorf("gemini session ID: got %q, want %q", byName["gemini"].SessionID, "sess-xyz")
+	}
+}
+
 func TestSaveRoom_AgentsIncludeSessionID(t *testing.T) {
 	dir := t.TempDir()
 

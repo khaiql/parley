@@ -72,6 +72,7 @@ func SaveRoom(dir string, room *Room) error {
 
 	participants := room.GetParticipants()
 	pdata := make([]ParticipantData, 0, len(participants))
+	seen := make(map[string]bool)
 	for _, cc := range participants {
 		pd := ParticipantData{
 			Name:      cc.Name,
@@ -86,7 +87,22 @@ func SaveRoom(dir string, room *Room) error {
 			pd.SessionID = sid
 		}
 		pdata = append(pdata, pd)
+		seen[cc.Name] = true
 	}
+
+	// Preserve saved agents that haven't reconnected yet (e.g. after resume).
+	for _, sa := range room.SavedAgents {
+		if !seen[sa.Name] {
+			pd := sa
+			// Use latest session ID from disk if available.
+			if sid, ok := sessionIDs[sa.Name]; ok {
+				pd.SessionID = sid
+			}
+			pdata = append(pdata, pd)
+			seen[sa.Name] = true
+		}
+	}
+
 	if err := writeJSON(filepath.Join(dir, "agents.json"), pdata); err != nil {
 		return fmt.Errorf("write agents.json: %w", err)
 	}
