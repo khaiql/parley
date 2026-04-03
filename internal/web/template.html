@@ -13,11 +13,17 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  display: flex;
   height: 100vh;
   overflow: hidden;
   background: #f8f9fa;
   color: #1a1a2e;
+  margin: 0;
+}
+
+#app {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* Sidebar */
@@ -52,7 +58,7 @@ body {
 }
 
 .sidebar-logo .tagline {
-  font-size: 10px;
+  font-size: 11px;
   color: #8888aa;
   margin-top: 2px;
   text-transform: lowercase;
@@ -63,7 +69,7 @@ body {
 }
 
 .sidebar-section-title {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 1px;
@@ -82,13 +88,13 @@ body {
 }
 
 .participant-name {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .participant-badge {
   display: inline-block;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 500;
   padding: 1px 5px;
   border-radius: 3px;
@@ -99,13 +105,13 @@ body {
 }
 
 .participant-role {
-  font-size: 11px;
+  font-size: 12px;
   color: #8888aa;
   margin-top: 2px;
 }
 
 .participant-dir {
-  font-size: 10px;
+  font-size: 11px;
   color: #666688;
   margin-top: 1px;
   white-space: nowrap;
@@ -183,17 +189,17 @@ body {
 }
 
 .message-name {
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
 }
 
 .message-time {
-  font-size: 11px;
+  font-size: 12px;
   color: #999;
 }
 
 .message-content {
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.6;
   color: #333;
   word-wrap: break-word;
@@ -204,7 +210,7 @@ body {
   background: #f0f0f0;
   padding: 1px 4px;
   border-radius: 3px;
-  font-size: 13px;
+  font-size: 14px;
   font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
 }
 
@@ -215,7 +221,7 @@ body {
   border-radius: 6px;
   overflow-x: auto;
   margin: 8px 0;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.4;
   font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
 }
@@ -240,6 +246,66 @@ body {
   font-weight: 500;
   border-radius: 3px;
   padding: 0 2px;
+}
+
+.message-content p {
+  margin: 4px 0;
+}
+
+.message-content p:first-child {
+  margin-top: 0;
+}
+
+.message-content h1, .message-content h2, .message-content h3,
+.message-content h4, .message-content h5, .message-content h6 {
+  margin: 12px 0 6px;
+  font-weight: 600;
+  color: #1a1a2e;
+}
+
+.message-content h1 { font-size: 18px; }
+.message-content h2 { font-size: 16px; }
+.message-content h3 { font-size: 15px; }
+.message-content h4 { font-size: 14px; }
+
+.message-content ul, .message-content ol {
+  margin: 6px 0;
+  padding-left: 24px;
+}
+
+.message-content li {
+  margin: 3px 0;
+  line-height: 1.5;
+}
+
+.message-content table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+  width: auto;
+}
+
+.message-content th, .message-content td {
+  border: 1px solid #ddd;
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.message-content th {
+  background: #f5f5f5;
+  font-weight: 600;
+}
+
+.message-content tr:nth-child(even) {
+  background: #fafafa;
+}
+
+.system-message {
+  text-align: center;
+  padding: 6px 0;
+  font-size: 12px;
+  color: #999;
+  font-style: italic;
 }
 
 .chat-footer {
@@ -393,7 +459,7 @@ body {
     return map;
   }
 
-  // ---------- Markdown rendering (minimal) ----------
+  // ---------- Markdown rendering ----------
 
   function escapeHtml(text) {
     return text
@@ -405,18 +471,167 @@ body {
   }
 
   function renderMarkdown(text, colorMap) {
-    // Extract fenced code blocks first
+    // Extract fenced code blocks first (preserve raw content)
     var codeBlocks = [];
     text = text.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
       var idx = codeBlocks.length;
       codeBlocks.push('<pre><code>' + escapeHtml(code.replace(/\n$/, '')) + '</code></pre>');
-      return '\x00CODEBLOCK' + idx + '\x00';
+      return '\n\x00CODEBLOCK' + idx + '\x00\n';
     });
 
-    // Escape HTML in remaining text
-    text = escapeHtml(text);
+    // Process block-level elements line by line
+    var lines = text.split('\n');
+    var html = '';
+    var inList = false;
+    var listType = '';
+    var inTable = false;
+    var tableRows = [];
 
-    // Inline code
+    function closeList() {
+      if (inList) {
+        html += '</' + listType + '>';
+        inList = false;
+        listType = '';
+      }
+    }
+
+    function closeTable() {
+      if (inTable && tableRows.length > 0) {
+        html += renderTable(tableRows);
+        inTable = false;
+        tableRows = [];
+      }
+    }
+
+    function renderTable(rows) {
+      if (rows.length < 2) return rows.map(function(r) { return '<p>' + r + '</p>'; }).join('');
+      var out = '<table>';
+      // Header row
+      var headerCells = splitTableRow(rows[0]);
+      out += '<thead><tr>';
+      for (var h = 0; h < headerCells.length; h++) {
+        out += '<th>' + renderInline(headerCells[h].trim(), colorMap) + '</th>';
+      }
+      out += '</tr></thead><tbody>';
+      // Skip separator row (index 1), render data rows
+      for (var r = 2; r < rows.length; r++) {
+        var cells = splitTableRow(rows[r]);
+        out += '<tr>';
+        for (var c = 0; c < cells.length; c++) {
+          out += '<td>' + renderInline(cells[c].trim(), colorMap) + '</td>';
+        }
+        out += '</tr>';
+      }
+      out += '</tbody></table>';
+      return out;
+    }
+
+    function splitTableRow(row) {
+      // Remove leading/trailing pipes and split
+      var trimmed = row.replace(/^\|/, '').replace(/\|$/, '');
+      return trimmed.split('|');
+    }
+
+    function isTableSeparator(line) {
+      return /^\|?[\s:]*-{2,}[\s:]*(\|[\s:]*-{2,}[\s:]*)*\|?$/.test(line.trim());
+    }
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+
+      // Code block placeholder
+      var cbMatch = line.match(/^\x00CODEBLOCK(\d+)\x00$/);
+      if (cbMatch) {
+        closeList();
+        closeTable();
+        html += codeBlocks[parseInt(cbMatch[1], 10)];
+        continue;
+      }
+
+      // Table detection: line starts with | or next line is a separator
+      var trimmedLine = line.trim();
+      if (trimmedLine.indexOf('|') !== -1 && trimmedLine.charAt(0) === '|') {
+        // Check if this is a table row
+        if (!inTable) {
+          // Check if next line is a separator (confirms table)
+          if (i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+            closeList();
+            inTable = true;
+            tableRows = [trimmedLine];
+            continue;
+          }
+        }
+        if (inTable) {
+          if (isTableSeparator(trimmedLine)) {
+            tableRows.push(trimmedLine); // separator row
+          } else {
+            tableRows.push(trimmedLine);
+          }
+          continue;
+        }
+      } else if (inTable) {
+        closeTable();
+      }
+
+      // Headings
+      var headingMatch = trimmedLine.match(/^(#{1,6})\s+(.+)$/);
+      if (headingMatch) {
+        closeList();
+        var level = headingMatch[1].length;
+        html += '<h' + level + '>' + renderInline(escapeHtml(headingMatch[2]), colorMap) + '</h' + level + '>';
+        continue;
+      }
+
+      // Unordered list items
+      var ulMatch = trimmedLine.match(/^[-*+]\s+(.+)$/);
+      if (ulMatch) {
+        closeTable();
+        if (!inList || listType !== 'ul') {
+          closeList();
+          html += '<ul>';
+          inList = true;
+          listType = 'ul';
+        }
+        html += '<li>' + renderInline(escapeHtml(ulMatch[1]), colorMap) + '</li>';
+        continue;
+      }
+
+      // Ordered list items
+      var olMatch = trimmedLine.match(/^\d+[\.\)]\s+(.+)$/);
+      if (olMatch) {
+        closeTable();
+        if (!inList || listType !== 'ol') {
+          closeList();
+          html += '<ol>';
+          inList = true;
+          listType = 'ol';
+        }
+        html += '<li>' + renderInline(escapeHtml(olMatch[1]), colorMap) + '</li>';
+        continue;
+      }
+
+      // Empty line
+      if (trimmedLine === '') {
+        closeList();
+        closeTable();
+        continue;
+      }
+
+      // Normal paragraph line
+      closeList();
+      closeTable();
+      html += '<p>' + renderInline(escapeHtml(trimmedLine), colorMap) + '</p>';
+    }
+
+    closeList();
+    closeTable();
+
+    return html;
+  }
+
+  // Render inline markdown: code, bold, italic, mentions
+  function renderInline(text, colorMap) {
+    // Inline code (must be first to prevent further processing inside code)
     text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
 
     // Bold
@@ -429,19 +644,6 @@ body {
     text = text.replace(/@(\w[\w-]*)/g, function(match, name) {
       var color = colorMap[name] || getColor(name, 'agent');
       return '<span class="mention" style="color:' + color.solid + '">@' + name + '</span>';
-    });
-
-    // Line breaks
-    text = text.replace(/\n/g, '<br>');
-
-    // Restore code blocks
-    text = text.replace(/\x00CODEBLOCK(\d+)\x00/g, function(_, idx) {
-      return codeBlocks[parseInt(idx, 10)];
-    });
-
-    // Clean up <br> inside <pre> tags
-    text = text.replace(/<pre>([\s\S]*?)<\/pre>/g, function(match, inner) {
-      return '<pre>' + inner.replace(/<br>/g, '\n') + '</pre>';
     });
 
     return text;
@@ -519,14 +721,20 @@ body {
       var color = colorMap[msg.from] || getColor(msg.from, msg.source || 'agent');
       var initial = msg.from ? msg.from.charAt(0).toUpperCase() : '?';
 
-      // Combine content array into single text
+      // Extract only type=text content blocks (matches TUI extractText)
       var text = '';
       if (msg.content) {
         for (var j = 0; j < msg.content.length; j++) {
-          if (msg.content[j].text) {
+          if (msg.content[j].type === 'text' && msg.content[j].text) {
             text += (text ? '\n' : '') + msg.content[j].text;
           }
         }
+      }
+
+      // System messages: render as muted inline text (matches TUI)
+      if (msg.source === 'system' || (!msg.source && msg.role === 'system')) {
+        html += '<div class="system-message">[system] ' + escapeHtml(text) + '</div>';
+        continue;
       }
 
       html += '<div class="message">';
