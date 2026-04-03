@@ -37,3 +37,30 @@ func TestJoinDuplicateNameReturnsError(t *testing.T) {
 		t.Error("original Alice's Send channel was replaced")
 	}
 }
+
+func TestRoom_JoinReturnsAutoApprove(t *testing.T) {
+	room := NewRoom("topic")
+	room.AutoApprove = true
+
+	cc := &ClientConn{Name: "agent1", Role: "agent", Source: "agent"}
+	state, err := room.Join(cc)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	if !state.AutoApprove {
+		t.Error("expected RoomStateParams.AutoApprove to be true")
+	}
+}
+
+func TestRoom_JoinAutoApproveDefaultFalse(t *testing.T) {
+	room := NewRoom("topic")
+
+	cc := &ClientConn{Name: "agent1", Role: "agent", Source: "agent"}
+	state, err := room.Join(cc)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	if state.AutoApprove {
+		t.Error("expected RoomStateParams.AutoApprove to default to false")
+	}
+}
