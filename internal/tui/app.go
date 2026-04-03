@@ -25,6 +25,11 @@ type AgentTypingMsg struct {
 // ServerDisconnectedMsg signals that the server connection was lost.
 type ServerDisconnectedMsg struct{}
 
+// HistoryLoadedMsg signals that message history has been loaded.
+type HistoryLoadedMsg struct {
+	Messages []protocol.MessageParams
+}
+
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
 	topbar     TopBar
@@ -35,6 +40,7 @@ type App struct {
 	nameColors      map[string]lipgloss.Color // stable color per participant
 	colorIdx        int                       // next color index to assign
 	lastInputHeight int                       // cached to avoid redundant re-layouts
+	pendingHistory  []protocol.MessageParams  // set during room.state, loaded async
 	width           int
 	height          int
 }
@@ -106,6 +112,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ServerMsg:
 		a.handleServerMsg(m.Raw)
+		// If history is pending, dispatch async load.
+		if len(a.pendingHistory) > 0 {
+			msgs := a.pendingHistory
+			a.pendingHistory = nil
+			return a, func() tea.Msg {
+				return HistoryLoadedMsg{Messages: msgs}
+			}
+		}
+		return a, nil
+
+	case HistoryLoadedMsg:
+		a.chat.SetLoading(false)
+		a.chat.LoadMessages(m.Messages)
 		return a, nil
 
 	case AgentTypingMsg:
@@ -194,8 +213,9 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 			a.sidebar.SetParticipants(params.Participants)
 			a.sidebar.SetNameColors(a.nameColors)
 			a.chat.SetNameColors(a.nameColors)
-			for _, msg := range params.Messages {
-				a.chat.AddMessage(msg)
+			if len(params.Messages) > 0 {
+				a.chat.SetLoading(true)
+				a.pendingHistory = params.Messages
 			}
 		}
 

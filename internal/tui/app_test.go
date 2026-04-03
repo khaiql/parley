@@ -177,8 +177,20 @@ func TestHandleServerMsg_RoomState_ReplayesMessageHistory(t *testing.T) {
 
 	a.handleServerMsg(raw)
 
+	// History is now loaded asynchronously: handleServerMsg sets pendingHistory,
+	// then Update dispatches HistoryLoadedMsg.
+	if len(a.pendingHistory) != 2 {
+		t.Fatalf("expected 2 pending messages after room.state, got %d", len(a.pendingHistory))
+	}
+
+	// Simulate the async load completing.
+	model, _ := a.Update(ServerMsg{Raw: raw})
+	a = model.(App)
+	model, _ = a.Update(HistoryLoadedMsg{Messages: state.Messages})
+	a = model.(App)
+
 	if len(a.chat.messages) != 2 {
-		t.Fatalf("expected 2 messages in chat after history replay, got %d", len(a.chat.messages))
+		t.Fatalf("expected 2 messages in chat after history load, got %d", len(a.chat.messages))
 	}
 	if a.chat.messages[0].From != "alice" {
 		t.Errorf("unexpected first message From: %s", a.chat.messages[0].From)

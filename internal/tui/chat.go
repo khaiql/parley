@@ -16,6 +16,7 @@ type Chat struct {
 	vp         viewport.Model
 	messages   []protocol.MessageParams
 	nameColors map[string]lipgloss.Color
+	loading    bool
 	width      int
 	height     int
 }
@@ -46,6 +47,13 @@ func (c *Chat) AddMessage(msg protocol.MessageParams) {
 	c.vp.GotoBottom()
 }
 
+// LoadMessages bulk-loads messages without re-rendering after each one.
+func (c *Chat) LoadMessages(msgs []protocol.MessageParams) {
+	c.messages = append(c.messages, msgs...)
+	c.rebuildContent()
+	c.vp.GotoBottom()
+}
+
 // SetNameColors updates the per-participant color map and re-renders.
 func (c *Chat) SetNameColors(colors map[string]lipgloss.Color) {
 	c.nameColors = colors
@@ -69,6 +77,15 @@ func (c *Chat) Update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	c.vp, cmd = c.vp.Update(msg)
 	return cmd
+}
+
+// SetLoading shows or hides the loading indicator.
+func (c *Chat) SetLoading(loading bool) {
+	c.loading = loading
+	if loading {
+		msg := lipgloss.NewStyle().Foreground(colorDimText).Render("Loading history…")
+		c.vp.SetContent(msg)
+	}
 }
 
 // View renders the chat area.
