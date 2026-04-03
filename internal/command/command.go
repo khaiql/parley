@@ -11,6 +11,7 @@ type RoomQuerier interface {
 	GetPort() int
 	GetParticipantSnapshot() []ParticipantInfo
 	GetMessageCount() int
+	GetSavedAgents() []SavedAgentInfo
 }
 
 // ParticipantInfo is a simplified view of a room participant for command output.
@@ -19,6 +20,14 @@ type ParticipantInfo struct {
 	Role      string
 	Directory string
 	AgentType string
+}
+
+// SavedAgentInfo describes an agent from a prior session that can be resumed.
+type SavedAgentInfo struct {
+	Name      string
+	Role      string
+	Directory string
+	AgentType string // the command used to run the agent (e.g. "claude")
 }
 
 // Context carries everything a command needs to execute.

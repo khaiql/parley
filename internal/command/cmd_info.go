@@ -10,11 +10,12 @@ var InfoCommand = &Command{
 	Execute: func(ctx Context, args string) Result {
 		room := ctx.Room
 		participants := room.GetParticipantSnapshot()
+		port := room.GetPort()
 
 		info := fmt.Sprintf("Room: %s\nTopic: %s\nPort: %d\nParticipants: %d\nMessages: %d\n",
 			room.GetID(),
 			room.GetTopic(),
-			room.GetPort(),
+			port,
 			len(participants),
 			room.GetMessageCount(),
 		)
@@ -27,6 +28,22 @@ var InfoCommand = &Command{
 					line += fmt.Sprintf(" — %s", p.Directory)
 				}
 				info += line + "\n"
+			}
+		}
+
+		// Ready-to-copy join command.
+		info += fmt.Sprintf("\nJoin command:\n  parley join --port %d -- claude\n", port)
+
+		// If there are saved agents from prior sessions, show resume commands.
+		savedAgents := room.GetSavedAgents()
+		if len(savedAgents) > 0 {
+			info += "\nResume prior agents:\n"
+			for _, sa := range savedAgents {
+				agentCmd := sa.AgentType
+				if agentCmd == "" {
+					agentCmd = "claude"
+				}
+				info += fmt.Sprintf("  parley join --port %d --name %s --resume -- %s\n", port, sa.Name, agentCmd)
 			}
 		}
 
