@@ -84,7 +84,7 @@ func detectRepo() string {
 
 // runHost implements the host command: starts a server, joins as human, and
 // runs the TUI.
-func runHost(cmd *cobra.Command, args []string) error {
+func runHost(_ *cobra.Command, _ []string) error {
 	addr := fmt.Sprintf(":%d", hostPort)
 
 	var srv *server.Server
@@ -367,7 +367,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	if err := d.Start(ctx, config); err != nil {
 		return fmt.Errorf("join: start agent driver: %w", err)
 	}
-	defer d.Stop()
+	defer func() { _ = d.Stop() }()
 
 	// For drivers that don't consume InitialMessage in Start() (e.g. Claude),
 	// send the intro explicitly.
@@ -469,6 +469,8 @@ func runJoin(cmd *cobra.Command, args []string) error {
 				}
 				accumulated.Reset()
 				p.Send(tui.AgentTypingMsg{Text: ""})
+			default:
+				// ignore other event types like Error or ToolResult
 			}
 		}
 	}()

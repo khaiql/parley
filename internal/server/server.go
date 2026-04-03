@@ -124,7 +124,7 @@ func (s *Server) handleConn(conn net.Conn) {
 					Error:   &protocol.RPCError{Code: -1, Message: "name already taken"},
 				}
 				if data, err := protocol.EncodeLine(resp); err == nil {
-					conn.Write(data)
+					_, _ = conn.Write(data)
 				}
 				return
 			}
@@ -132,7 +132,7 @@ func (s *Server) handleConn(conn net.Conn) {
 			// Send room.state back to the joining client.
 			notif := protocol.NewNotification("room.state", state)
 			if data, err := protocol.EncodeLine(notif); err == nil {
-				conn.Write(data)
+				_, _ = conn.Write(data)
 			}
 
 			// Notify other participants.
@@ -152,7 +152,7 @@ func (s *Server) handleConn(conn net.Conn) {
 				for {
 					select {
 					case data := <-client.Send:
-						c.Write(data)
+						_, _ = c.Write(data)
 					case <-client.Done:
 						return
 					}

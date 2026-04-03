@@ -1,0 +1,55 @@
+cmd/parley/main.go:370:14: Error return value of `d.Stop` is not checked (errcheck)
+	defer d.Stop()
+	            ^
+cmd/parley/main.go:87:14: unused-parameter: parameter 'cmd' seems to be unused, consider removing or renaming it as _ (revive)
+func runHost(cmd *cobra.Command, args []string) error {
+             ^
+cmd/parley/main.go:449:4: missing cases in switch of type driver.EventType: driver.EventToolResult, driver.EventError (exhaustive)
+			switch event.Type {
+			^
+internal/command/cmd_info.go:10:29: unused-parameter: parameter 'args' seems to be unused, consider removing or renaming it as _ (revive)
+	Execute: func(ctx Context, args string) Result {
+	                           ^
+internal/command/cmd_save.go:10:29: unused-parameter: parameter 'args' seems to be unused, consider removing or renaming it as _ (revive)
+	Execute: func(ctx Context, args string) Result {
+	                           ^
+internal/driver/claude.go:176:6: type `claudeContentItem` is unused (unused)
+type claudeContentItem struct {
+     ^
+internal/driver/claude.go:185:6: type `claudeMessage` is unused (unused)
+type claudeMessage struct {
+     ^
+internal/server/room.go:50:11: Error return value of `rand.Read` is not checked (errcheck)
+	rand.Read(b)
+	         ^
+internal/server/server.go:127:16: Error return value of `conn.Write` is not checked (errcheck)
+					conn.Write(data)
+					          ^
+internal/server/server.go:135:15: Error return value of `conn.Write` is not checked (errcheck)
+				conn.Write(data)
+				          ^
+internal/server/server.go:155:14: Error return value of `c.Write` is not checked (errcheck)
+						c.Write(data)
+						       ^
+internal/server/persistence.go:212:9: G306: Expect WriteFile permissions to be 0600 or less (gosec)
+	return os.WriteFile(path, data, 0o644)
+	       ^
+internal/tui/app.go:59:53: unused-parameter: parameter 'name' seems to be unused, consider removing or renaming it as _ (revive)
+func NewApp(topic string, port int, mode InputMode, name string, sendFn func(string, []string), participants ...protocol.Participant) App {
+                                                    ^
+internal/tui/styles.go:10:2: var `colorRoleBadge` is unused (unused)
+	colorRoleBadge = lipgloss.Color("#388bfd")
+	^
+internal/tui/styles.go:54:2: var `humanNameStyle` is unused (unused)
+	humanNameStyle = lipgloss.NewStyle().
+	^
+internal/tui/styles.go:58:2: var `agentNameStyle` is unused (unused)
+	agentNameStyle = lipgloss.NewStyle().
+	^
+internal/tui/styles.go:62:2: var `roleBadgeStyle` is unused (unused)
+	roleBadgeStyle = lipgloss.NewStyle().
+	^
+internal/tui/app.go:108:3: missing cases in switch of type tea.KeyType: tea.KeyNull|tea.KeyCtrlAt, tea.KeyBackspace|tea.KeyCtrlQuestionMark, tea.KeyTab|tea.KeyCtrlI, tea.KeyEsc|tea.KeyEscape|tea.KeyCtrlOpenBracket, tea.KeyCtrlA, tea.KeyCtrlB, tea.KeyCtrlD, tea.KeyCtrlE, tea.KeyCtrlF, tea.KeyCtrlG, tea.KeyCtrlH, tea.KeyCtrlJ, tea.KeyCtrlK, tea.KeyCtrlL, tea.KeyCtrlN, tea.KeyCtrlO, tea.KeyCtrlP, tea.KeyCtrlQ, tea.KeyCtrlR, tea.KeyCtrlS, tea.KeyCtrlT, tea.KeyCtrlU, tea.KeyCtrlV, tea.KeyCtrlW, tea.KeyCtrlX, tea.KeyCtrlY, tea.KeyCtrlZ, tea.KeyCtrlBackslash, tea.KeyCtrlCloseBracket, tea.KeyCtrlCaret, tea.KeyCtrlUnderscore, tea.KeyRunes, tea.KeyUp, tea.KeyDown, tea.KeyRight, tea.KeyLeft, tea.KeyShiftTab, tea.KeyHome, tea.KeyEnd, tea.KeyPgUp, tea.KeyPgDown, tea.KeyCtrlPgUp, tea.KeyCtrlPgDown, tea.KeyDelete, tea.KeyInsert, tea.KeySpace, tea.KeyCtrlUp, tea.KeyCtrlDown, tea.KeyCtrlRight, tea.KeyCtrlLeft, tea.KeyCtrlHome, tea.KeyCtrlEnd, tea.KeyShiftUp, tea.KeyShiftDown, tea.KeyShiftRight, tea.KeyShiftLeft, tea.KeyShiftHome, tea.KeyShiftEnd, tea.KeyCtrlShiftUp, tea.KeyCtrlShiftDown, tea.KeyCtrlShiftLeft, tea.KeyCtrlShiftRight, tea.KeyCtrlShiftHome, tea.KeyCtrlShiftEnd, tea.KeyF1, tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF5, tea.KeyF6, tea.KeyF7, tea.KeyF8, tea.KeyF9, tea.KeyF10, tea.KeyF11, tea.KeyF12, tea.KeyF13, tea.KeyF14, tea.KeyF15, tea.KeyF16, tea.KeyF17, tea.KeyF18, tea.KeyF19, tea.KeyF20 (exhaustive)
+		switch m.Type {
+		^
+exit status 1

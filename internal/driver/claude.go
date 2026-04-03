@@ -172,21 +172,6 @@ type claudeRawEvent struct {
 	Event     json.RawMessage `json:"event,omitempty"` // for stream_event
 }
 
-// claudeContentItem represents one item in message.content[].
-type claudeContentItem struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	Thinking string `json:"thinking,omitempty"`
-	Name     string `json:"name,omitempty"` // for tool_use
-	ID       string `json:"id,omitempty"`
-}
-
-// claudeMessage is the shape of the "message" field in assistant events.
-type claudeMessage struct {
-	Role    string              `json:"role"`
-	Content []claudeContentItem `json:"content"`
-}
-
 // claudeStreamEvent represents a stream_event from --include-partial-messages.
 type claudeStreamEvent struct {
 	Type         string          `json:"type"` // message_start, content_block_start, content_block_delta, content_block_stop, message_stop

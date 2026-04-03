@@ -1,0 +1,190 @@
+cmd/parley/main.go:370:14: Error return value of `d.Stop` is not checked (errcheck)
+	defer d.Stop()
+	            ^
+cmd/parley/main_test.go:73:22: Error return value of `conn.SetReadDeadline` is not checked (errcheck)
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	                    ^
+cmd/parley/main_test.go:77:22: Error return value of `conn.SetReadDeadline` is not checked (errcheck)
+	conn.SetReadDeadline(time.Time{})
+	                    ^
+cmd/parley/main.go:247:1: cognitive complexity 106 of func `runJoin` is high (> 20) (gocognit)
+func runJoin(cmd *cobra.Command, args []string) error {
+^
+cmd/parley/main.go:87:1: cognitive complexity 28 of func `runHost` is high (> 20) (gocognit)
+func runHost(cmd *cobra.Command, args []string) error {
+^
+cmd/parley/main_test.go:18:1: calculated cyclomatic complexity for function TestHostResumeLoadsHistory is 16, max is 15 (cyclop)
+func TestHostResumeLoadsHistory(t *testing.T) {
+^
+cmd/parley/main.go:449:4: missing cases in switch of type driver.EventType: driver.EventToolResult, driver.EventError (exhaustive)
+			switch event.Type {
+			^
+internal/command/cmd_save.go:10:29: unused-parameter: parameter 'args' seems to be unused, consider removing or renaming it as _ (revive)
+	Execute: func(ctx Context, args string) Result {
+	                           ^
+internal/command/cmd_info.go:10:29: unused-parameter: parameter 'args' seems to be unused, consider removing or renaming it as _ (revive)
+	Execute: func(ctx Context, args string) Result {
+	                           ^
+internal/driver/driver_test.go:510:11: Error return value of `pw.Write` is not checked (errcheck)
+		pw.Write(makeResultLine(lineSize))
+		        ^
+internal/driver/driver_test.go:607:11: Error return value of `pw.Write` is not checked (errcheck)
+		pw.Write(makeResultLine(lineSize))
+		        ^
+internal/driver/gemini_test.go:363:14: Error return value of `d.Stop` is not checked (errcheck)
+	defer d.Stop()
+	            ^
+internal/driver/gemini_test.go:398:14: Error return value of `d.Stop` is not checked (errcheck)
+	defer d.Stop()
+	            ^
+internal/driver/claude.go:232:1: cognitive complexity 26 of func `parseStreamEvent` is high (> 20) (gocognit)
+func parseStreamEvent(raw claudeRawEvent) (AgentEvent, bool) {
+^
+internal/driver/gemini_test.go:15:1: cognitive complexity 25 of func `TestBuildGeminiArgs_ContainsRequiredFlags` is high (> 20) (gocognit)
+func TestBuildGeminiArgs_ContainsRequiredFlags(t *testing.T) {
+^
+internal/driver/gemini_test.go:346:12: G306: Expect WriteFile permissions to be 0600 or less (gosec)
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+	          ^
+internal/driver/gemini_test.go:381:12: G306: Expect WriteFile permissions to be 0600 or less (gosec)
+	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
+	          ^
+internal/driver/gemini_test.go:462:40: redefines-builtin-id: redefinition of the built-in function max (revive)
+func drainEvents(ch <-chan AgentEvent, max int, timeout time.Duration) {
+                                       ^
+internal/driver/claude.go:176:6: type `claudeContentItem` is unused (unused)
+type claudeContentItem struct {
+     ^
+internal/driver/claude.go:185:6: type `claudeMessage` is unused (unused)
+type claudeMessage struct {
+     ^
+internal/server/room.go:49:11: Error return value of `rand.Read` is not checked (errcheck)
+	rand.Read(b)
+	         ^
+internal/server/server.go:127:16: Error return value of `conn.Write` is not checked (errcheck)
+					conn.Write(data)
+					          ^
+internal/server/server.go:135:15: Error return value of `conn.Write` is not checked (errcheck)
+				conn.Write(data)
+				          ^
+internal/server/server.go:155:14: Error return value of `c.Write` is not checked (errcheck)
+						c.Write(data)
+						       ^
+internal/server/server.go:71:1: cognitive complexity 60 of func `(*Server).handleConn` is high (> 20) (gocognit)
+func (s *Server) handleConn(conn net.Conn) {
+^
+internal/server/persistence.go:196:9: G306: Expect WriteFile permissions to be 0600 or less (gosec)
+	return os.WriteFile(path, data, 0o644)
+	       ^
+internal/server/server_test.go:143:28: Error return value of `connAlice.SetReadDeadline` is not checked (errcheck)
+		connAlice.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		                         ^
+internal/server/server_test.go:147:28: Error return value of `connAlice.SetReadDeadline` is not checked (errcheck)
+		connAlice.SetReadDeadline(time.Time{})
+		                         ^
+internal/server/server_test.go:165:27: Error return value of `connAlice.SetReadDeadline` is not checked (errcheck)
+	connAlice.SetReadDeadline(time.Time{})
+	                         ^
+internal/server/server_test.go:202:28: Error return value of `connAlice2.SetReadDeadline` is not checked (errcheck)
+	connAlice2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	                          ^
+internal/server/server_test.go:204:28: Error return value of `connAlice2.SetReadDeadline` is not checked (errcheck)
+	connAlice2.SetReadDeadline(time.Time{})
+	                          ^
+internal/server/server_test.go:218:28: Error return value of `connAlice2.SetReadDeadline` is not checked (errcheck)
+	connAlice2.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	                          ^
+internal/server/server_test.go:342:25: Error return value of `connBob.SetReadDeadline` is not checked (errcheck)
+	connBob.SetReadDeadline(time.Now().Add(2 * time.Second))
+	                       ^
+internal/server/server_test.go:344:25: Error return value of `connBob.SetReadDeadline` is not checked (errcheck)
+	connBob.SetReadDeadline(time.Time{})
+	                       ^
+internal/server/server_test.go:405:25: Error return value of `connBob.SetReadDeadline` is not checked (errcheck)
+	connBob.SetReadDeadline(time.Now().Add(2 * time.Second))
+	                       ^
+internal/server/server_test.go:460:22: Error return value of `conn.SetReadDeadline` is not checked (errcheck)
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	                    ^
+internal/smoke_test.go:35:16: Error return value of `json.Unmarshal` is not checked (errcheck)
+	json.Unmarshal(msg.Params, &state)
+	              ^
+internal/smoke_test.go:52:16: Error return value of `json.Unmarshal` is not checked (errcheck)
+	json.Unmarshal(agentStateMsg.Params, &aState)
+	              ^
+internal/smoke_test.go:60:16: Error return value of `json.Unmarshal` is not checked (errcheck)
+	json.Unmarshal(msg.Params, &joined)
+	              ^
+internal/smoke_test.go:140:15: Error return value of `tc.conn.Write` is not checked (errcheck)
+	tc.conn.Write(data)
+	             ^
+internal/smoke_test.go:150:15: Error return value of `tc.conn.Write` is not checked (errcheck)
+	tc.conn.Write(data)
+	             ^
+internal/smoke_test.go:155:25: Error return value of `tc.conn.SetReadDeadline` is not checked (errcheck)
+	tc.conn.SetReadDeadline(time.Now().Add(timeout))
+	                       ^
+internal/smoke_test.go:171:25: Error return value of `tc.conn.SetReadDeadline` is not checked (errcheck)
+	tc.conn.SetReadDeadline(time.Now().Add(timeout))
+	                       ^
+internal/smoke_test.go:189:25: Error return value of `tc.conn.SetReadDeadline` is not checked (errcheck)
+	tc.conn.SetReadDeadline(time.Now().Add(quiet))
+	                       ^
+internal/integration_test.go:48:1: cognitive complexity 41 of func `TestEndToEndHostAndJoin` is high (> 20) (gocognit)
+func TestEndToEndHostAndJoin(t *testing.T) {
+^
+internal/integration_test.go:16:6: func `readMsg` is unused (unused)
+func readMsg(t *testing.T, c *client.Client, timeout time.Duration) *protocol.RawMessage {
+     ^
+internal/smoke_test.go:188:23: func `(*testClient).drainUntilQuiet` is unused (unused)
+func (tc *testClient) drainUntilQuiet(quiet time.Duration) {
+                      ^
+internal/smoke_test.go:17:1: calculated cyclomatic complexity for function TestSmokeFullFlow is 16, max is 15 (cyclop)
+func TestSmokeFullFlow(t *testing.T) {
+^
+internal/client/client_test.go:240:3: empty-block: this block is empty, you can remove it (revive)
+		for range c.Incoming() {
+		}
+internal/tui/visual_test.go:20:14: Error return value of `os.MkdirAll` is not checked (errcheck)
+		os.MkdirAll("testdata", 0755)
+		           ^
+internal/tui/visual_test.go:21:15: Error return value of `os.WriteFile` is not checked (errcheck)
+		os.WriteFile(goldenPath, []byte(actual), 0644)
+		            ^
+internal/tui/visual_test.go:29:14: Error return value of `os.MkdirAll` is not checked (errcheck)
+		os.MkdirAll("testdata", 0755)
+		           ^
+internal/tui/visual_test.go:30:15: Error return value of `os.WriteFile` is not checked (errcheck)
+		os.WriteFile(goldenPath, []byte(actual), 0644)
+		            ^
+internal/tui/app.go:98:1: cognitive complexity 34 of func `(App).Update` is high (> 20) (gocognit)
+func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+^
+internal/tui/app.go:59:53: unused-parameter: parameter 'name' seems to be unused, consider removing or renaming it as _ (revive)
+func NewApp(topic string, port int, mode InputMode, name string, sendFn func(string, []string), participants ...protocol.Participant) App {
+                                                    ^
+internal/tui/sidebar_test.go:94:32: unused-parameter: parameter 't' seems to be unused, consider removing or renaming it as _ (revive)
+func TestSidebarViewSmallWidth(t *testing.T) {
+                               ^
+internal/tui/app_test.go:203:38: unused-parameter: parameter 't' seems to be unused, consider removing or renaming it as _ (revive)
+func TestHandleServerMsg_NilRaw_NoOp(t *testing.T) {
+                                     ^
+internal/tui/styles.go:10:2: var `colorRoleBadge` is unused (unused)
+	colorRoleBadge = lipgloss.Color("#388bfd")
+	^
+internal/tui/styles.go:54:2: var `humanNameStyle` is unused (unused)
+	humanNameStyle = lipgloss.NewStyle().
+	^
+internal/tui/styles.go:58:2: var `agentNameStyle` is unused (unused)
+	agentNameStyle = lipgloss.NewStyle().
+	^
+internal/tui/styles.go:62:2: var `roleBadgeStyle` is unused (unused)
+	roleBadgeStyle = lipgloss.NewStyle().
+	^
+internal/tui/chat_test.go:173:6: func `indexOf` is unused (unused)
+func indexOf(s, sub string) int {
+     ^
+internal/tui/app.go:108:3: missing cases in switch of type tea.KeyType: tea.KeyNull|tea.KeyCtrlAt, tea.KeyBackspace|tea.KeyCtrlQuestionMark, tea.KeyTab|tea.KeyCtrlI, tea.KeyEsc|tea.KeyEscape|tea.KeyCtrlOpenBracket, tea.KeyCtrlA, tea.KeyCtrlB, tea.KeyCtrlD, tea.KeyCtrlE, tea.KeyCtrlF, tea.KeyCtrlG, tea.KeyCtrlH, tea.KeyCtrlJ, tea.KeyCtrlK, tea.KeyCtrlL, tea.KeyCtrlN, tea.KeyCtrlO, tea.KeyCtrlP, tea.KeyCtrlQ, tea.KeyCtrlR, tea.KeyCtrlS, tea.KeyCtrlT, tea.KeyCtrlU, tea.KeyCtrlV, tea.KeyCtrlW, tea.KeyCtrlX, tea.KeyCtrlY, tea.KeyCtrlZ, tea.KeyCtrlBackslash, tea.KeyCtrlCloseBracket, tea.KeyCtrlCaret, tea.KeyCtrlUnderscore, tea.KeyRunes, tea.KeyUp, tea.KeyDown, tea.KeyRight, tea.KeyLeft, tea.KeyShiftTab, tea.KeyHome, tea.KeyEnd, tea.KeyPgUp, tea.KeyPgDown, tea.KeyCtrlPgUp, tea.KeyCtrlPgDown, tea.KeyDelete, tea.KeyInsert, tea.KeySpace, tea.KeyCtrlUp, tea.KeyCtrlDown, tea.KeyCtrlRight, tea.KeyCtrlLeft, tea.KeyCtrlHome, tea.KeyCtrlEnd, tea.KeyShiftUp, tea.KeyShiftDown, tea.KeyShiftRight, tea.KeyShiftLeft, tea.KeyShiftHome, tea.KeyShiftEnd, tea.KeyCtrlShiftUp, tea.KeyCtrlShiftDown, tea.KeyCtrlShiftLeft, tea.KeyCtrlShiftRight, tea.KeyCtrlShiftHome, tea.KeyCtrlShiftEnd, tea.KeyF1, tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF5, tea.KeyF6, tea.KeyF7, tea.KeyF8, tea.KeyF9, tea.KeyF10, tea.KeyF11, tea.KeyF12, tea.KeyF13, tea.KeyF14, tea.KeyF15, tea.KeyF16, tea.KeyF17, tea.KeyF18, tea.KeyF19, tea.KeyF20 (exhaustive)
+		switch m.Type {
+		^
+exit status 1
