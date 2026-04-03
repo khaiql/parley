@@ -101,9 +101,6 @@ func runHost(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("host: create server: %w", err)
 		}
-		if hostYolo {
-			srv.Room().AutoApprove = true
-		}
 		// Use loaded topic if --topic was not explicitly set.
 		if hostTopic == "" {
 			hostTopic = room.Topic
@@ -116,9 +113,10 @@ func runHost(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("host: create server: %w", err)
 		}
-		if hostYolo {
-			srv.Room().AutoApprove = true
-		}
+	}
+
+	if hostYolo {
+		srv.Room().AutoApprove = true
 	}
 
 	go srv.Serve()
