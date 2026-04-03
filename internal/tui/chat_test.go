@@ -165,11 +165,10 @@ func TestRenderMessageSystemFormat(t *testing.T) {
 	}
 }
 
-// contains checks whether s contains substr, ignoring ANSI escape codes by
-// looking at the raw bytes (lipgloss wraps strings in ANSI codes but the
-// plain text is still present).
+// contains checks whether s contains substr after stripping ANSI escape codes.
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && indexOf(s, substr) >= 0
+	clean := stripANSI(s)
+	return strings.Contains(clean, substr)
 }
 
 func indexOf(s, sub string) int {

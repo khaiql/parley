@@ -4,8 +4,8 @@ joined —    │
 backend     │ sle                        
 ┃ sle 10:31 │                            
 ┃           │ Alice                      
-┃   Hello   │   claude                   
-┃   everyone│   /home/alice/project      
+┃ [38;5;252m[0m[38;5;252m[0m  [38;5;252mHello[0m[38;5;252m[38;5;252m [0m[0m  │   claude                   
+┃ [0m[38;5;252m[0m  [38;5;252meveryone[0m│   /home/alice/project      
             │                            
 ──────────────────────────────────────── 
  ┃ Type a message… (Enter to send)       

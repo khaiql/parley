@@ -100,15 +100,33 @@ func borderColor(name string, colors map[string]lipgloss.Color) lipgloss.Color {
 
 // renderMarkdown renders markdown text using Glamour, falling back to plain
 // text if rendering fails.
+// mdRenderer is a cached Glamour renderer to avoid recreating it per message
+// and to prevent OSC terminal queries from glamour.WithAutoStyle().
+var mdRenderer *glamour.TermRenderer
+var mdRendererWidth int
+
+func getMarkdownRenderer(width int) *glamour.TermRenderer {
+	if mdRenderer != nil && mdRendererWidth == width {
+		return mdRenderer
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithStylePath("dark"),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return nil
+	}
+	mdRenderer = r
+	mdRendererWidth = width
+	return r
+}
+
 func renderMarkdown(text string, width int) string {
 	if width < 10 {
 		width = 10
 	}
-	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(width),
-	)
-	if err != nil {
+	r := getMarkdownRenderer(width)
+	if r == nil {
 		return text
 	}
 	rendered, err := r.Render(text)
