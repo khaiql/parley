@@ -33,6 +33,10 @@ func (c *Chat) SetSize(width, height int) {
 	c.vp.Width = width
 	c.vp.Height = height
 	c.rebuildContent()
+	// Scroll to bottom so resumed history shows the latest messages.
+	if len(c.messages) > 0 {
+		c.vp.GotoBottom()
+	}
 }
 
 // AddMessage appends a message and refreshes the viewport content.
