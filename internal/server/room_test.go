@@ -2,6 +2,8 @@ package server
 
 import (
 	"testing"
+
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 // TestJoinDuplicateNameReturnsError verifies that Room.Join returns an error
@@ -49,6 +51,33 @@ func TestRoom_JoinReturnsAutoApprove(t *testing.T) {
 	}
 	if !state.AutoApprove {
 		t.Error("expected RoomStateParams.AutoApprove to be true")
+	}
+}
+
+func TestBroadcast_MentionsMatchParticipantNames(t *testing.T) {
+	room := NewRoom("topic")
+
+	alice := &ClientConn{Name: "alice", Role: "user"}
+	room.Join(alice)
+	bob := &ClientConn{Name: "bob", Role: "agent"}
+	room.Join(bob)
+
+	// Text mentions @alice and @bob with punctuation, plus a non-participant @love's.
+	msg := room.Broadcast("alice", "human", "human",
+		protocol.Content{Type: "text", Text: "hey @bob, I @love's @alice!"},
+		nil, // client-supplied mentions ignored
+	)
+
+	// Only real participant names should appear.
+	if len(msg.Mentions) != 2 {
+		t.Fatalf("expected 2 mentions, got %d: %v", len(msg.Mentions), msg.Mentions)
+	}
+	has := make(map[string]bool)
+	for _, m := range msg.Mentions {
+		has[m] = true
+	}
+	if !has["alice"] || !has["bob"] {
+		t.Errorf("expected mentions [alice, bob], got %v", msg.Mentions)
 	}
 }
 

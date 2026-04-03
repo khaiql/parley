@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/rand"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,6 +85,37 @@ func (r *Room) Join(cc *ClientConn) (protocol.RoomStateParams, error) {
 	}, nil
 }
 
+// extractMentions scans text for @name tokens that match known participant names.
+// Must be called with r.mu held.
+func (r *Room) extractMentions(text string) []string {
+	var mentions []string
+	seen := make(map[string]bool)
+	for _, word := range strings.Fields(text) {
+		if !strings.HasPrefix(word, "@") || len(word) < 2 {
+			continue
+		}
+		token := word[1:]
+		// Check if any participant name is a prefix of the token (handles @bob, @bob's, @bob! etc.)
+		for name := range r.Participants {
+			lower := strings.ToLower(token)
+			lowerName := strings.ToLower(name)
+			if strings.EqualFold(token, name) ||
+				(strings.HasPrefix(lower, lowerName) && len(token) > len(name) && !isNameChar(token[len(name)])) {
+				if !seen[name] {
+					mentions = append(mentions, name)
+					seen[name] = true
+				}
+			}
+		}
+	}
+	return mentions
+}
+
+// isNameChar returns true if c could be part of a participant name.
+func isNameChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
+}
+
 // recentMessages returns up to n most recent messages. Must be called with r.mu held.
 func (r *Room) recentMessages(n int) []protocol.MessageParams {
 	msgs := r.Messages
@@ -120,7 +152,8 @@ func (r *Room) Leave(name string) {
 }
 
 // Broadcast creates a new message, stores it, and fans it out to all participants.
-func (r *Room) Broadcast(from, source, role string, content protocol.Content, mentions []string) protocol.MessageParams {
+// Mentions are computed server-side by matching @name tokens against known participants.
+func (r *Room) Broadcast(from, source, role string, content protocol.Content, _ []string) protocol.MessageParams {
 	r.mu.Lock()
 	r.seq++
 	msg := protocol.MessageParams{
@@ -130,7 +163,7 @@ func (r *Room) Broadcast(from, source, role string, content protocol.Content, me
 		Source:    source,
 		Role:      role,
 		Timestamp: time.Now().UTC(),
-		Mentions:  mentions,
+		Mentions:  r.extractMentions(content.Text),
 		Content:   []protocol.Content{content},
 	}
 	r.Messages = append(r.Messages, msg)
