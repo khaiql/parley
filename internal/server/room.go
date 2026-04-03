@@ -14,6 +14,7 @@ import (
 type Room struct {
 	ID           string
 	Topic        string
+	AutoApprove  bool
 	Participants map[string]*ClientConn
 	Messages     []protocol.MessageParams
 	SavedAgents  []ParticipantData // loaded from agents.json on resume
@@ -77,6 +78,7 @@ func (r *Room) Join(cc *ClientConn) (protocol.RoomStateParams, error) {
 	return protocol.RoomStateParams{
 		RoomID:       r.ID,
 		Topic:        topic,
+		AutoApprove:  r.AutoApprove,
 		Participants: participants,
 		Messages:     recent,
 	}, nil

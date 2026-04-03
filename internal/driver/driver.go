@@ -42,6 +42,7 @@ type AgentConfig struct {
 	SystemPrompt    string
 	InitialMessage  string // if set, used as the first prompt (for drivers that need one in Start)
 	ResumeSessionID string // if set, pass --resume <id> to the driver
+	AutoApprove     bool   // if set, append driver-specific auto-approve flag
 }
 
 // ParticipantInfo describes one participant in the room (used for system prompt).

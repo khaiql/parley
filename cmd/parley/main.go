@@ -35,6 +35,7 @@ var rootCmd = &cobra.Command{
 var hostTopic string
 var hostPort int
 var hostResume string
+var hostYolo bool
 
 var hostCmd = &cobra.Command{
 	Use:   "host",
@@ -58,6 +59,7 @@ func init() {
 	hostCmd.Flags().StringVar(&hostTopic, "topic", "", "Topic for the chat session (required unless --resume is set)")
 	hostCmd.Flags().IntVar(&hostPort, "port", 0, "Port to listen on (0 = auto-assign)")
 	hostCmd.Flags().StringVar(&hostResume, "resume", "", "Room ID to resume (loads saved room from ~/.parley/rooms/<id>)")
+	hostCmd.Flags().BoolVar(&hostYolo, "yolo", false, "Enable auto-approve mode for all joining agents")
 
 	joinCmd.Flags().IntVar(&joinPort, "port", 0, "Port of the session to join (required)")
 	joinCmd.Flags().StringVar(&joinName, "name", "", "Your name in the session (random if not set)")
@@ -111,6 +113,10 @@ func runHost(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("host: create server: %w", err)
 		}
+	}
+
+	if hostYolo {
+		srv.Room().AutoApprove = true
 	}
 
 	go srv.Serve()
@@ -349,6 +355,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		Participants:    participants,
 		InitialMessage:  intro,
 		ResumeSessionID: resumeSessionID,
+		AutoApprove:     roomState.AutoApprove,
 	}
 	config.SystemPrompt = driver.BuildSystemPrompt(config)
 

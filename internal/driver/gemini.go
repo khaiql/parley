@@ -275,7 +275,9 @@ func BuildGeminiArgs(config AgentConfig, message string) []string {
 	args := []string{
 		"-p", prompt,
 		"-o", "stream-json",
-		"--yolo",
+	}
+	if config.AutoApprove {
+		args = append(args, "--yolo")
 	}
 	args = append(args, config.Args...)
 	return args
@@ -287,9 +289,11 @@ func BuildGeminiArgsWithResume(config AgentConfig, message string, sessionID str
 	args := []string{
 		"-p", prompt,
 		"-o", "stream-json",
-		"--yolo",
-		"--resume", sessionID,
 	}
+	if config.AutoApprove {
+		args = append(args, "--yolo")
+	}
+	args = append(args, "--resume", sessionID)
 	args = append(args, config.Args...)
 	return args
 }
