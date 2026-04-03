@@ -60,18 +60,32 @@ func SaveRoom(dir string, room *Room) error {
 		return fmt.Errorf("write messages.json: %w", err)
 	}
 
-	// Write agents.json (participants snapshot).
+	// Write agents.json (participants snapshot), preserving any session IDs
+	// that were previously saved by agent processes.
+	existing, _ := LoadAgents(dir)
+	sessionIDs := make(map[string]string)
+	for _, a := range existing {
+		if a.SessionID != "" {
+			sessionIDs[a.Name] = a.SessionID
+		}
+	}
+
 	participants := room.GetParticipants()
 	pdata := make([]ParticipantData, 0, len(participants))
 	for _, cc := range participants {
-		pdata = append(pdata, ParticipantData{
+		pd := ParticipantData{
 			Name:      cc.Name,
 			Role:      cc.Role,
 			Directory: cc.Directory,
 			Repo:      cc.Repo,
 			AgentType: cc.AgentType,
 			Source:    cc.Source,
-		})
+		}
+		// Preserve existing session ID.
+		if sid, ok := sessionIDs[cc.Name]; ok {
+			pd.SessionID = sid
+		}
+		pdata = append(pdata, pd)
 	}
 	if err := writeJSON(filepath.Join(dir, "agents.json"), pdata); err != nil {
 		return fmt.Errorf("write agents.json: %w", err)
@@ -101,6 +115,10 @@ func LoadRoom(dir string) (*Room, error) {
 	if len(msgs) > 0 {
 		room.seq = msgs[len(msgs)-1].Seq
 	}
+
+	// Load saved agents so rejoining agents can recover their role.
+	agents, _ := LoadAgents(dir)
+	room.SavedAgents = agents
 
 	return room, nil
 }

@@ -19,6 +19,11 @@ const (
 	InputModeAgent
 )
 
+const (
+	minInputLines = 1
+	maxInputLines = 6
+)
+
 // Input is the bottom input component.
 type Input struct {
 	ta        textarea.Model
@@ -69,6 +74,23 @@ func (i *Input) Reset() {
 	i.ta.Reset()
 }
 
+// Height returns the total height the input component needs (content lines + border).
+func (i Input) Height() int {
+	lines := minInputLines
+	if i.mode == InputModeHuman {
+		// Count newlines in the textarea value to determine needed lines.
+		val := i.ta.Value()
+		n := strings.Count(val, "\n") + 1
+		if n > lines {
+			lines = n
+		}
+		if lines > maxInputLines {
+			lines = maxInputLines
+		}
+	}
+	return lines + 1 // +1 for border-top
+}
+
 // Update passes tea events to the textarea (human mode only).
 func (i *Input) Update(msg tea.Msg) tea.Cmd {
 	if i.mode != InputModeHuman {
@@ -76,6 +98,15 @@ func (i *Input) Update(msg tea.Msg) tea.Cmd {
 	}
 	var cmd tea.Cmd
 	i.ta, cmd = i.ta.Update(msg)
+	// Resize textarea to fit content.
+	lines := strings.Count(i.ta.Value(), "\n") + 1
+	if lines < minInputLines {
+		lines = minInputLines
+	}
+	if lines > maxInputLines {
+		lines = maxInputLines
+	}
+	i.ta.SetHeight(lines)
 	return cmd
 }
 

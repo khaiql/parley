@@ -10,12 +10,20 @@ import (
 type TopBar struct {
 	topic string
 	port  int
+	name  string // agent name (empty for host)
+	role  string // agent role (empty for host)
 	width int
 }
 
 // NewTopBar creates a TopBar with the given topic and port.
 func NewTopBar(topic string, port int) TopBar {
 	return TopBar{topic: topic, port: port}
+}
+
+// SetAgent sets the agent name and role displayed on the left of the topbar.
+func (t *TopBar) SetAgent(name, role string) {
+	t.name = name
+	t.role = role
 }
 
 // SetWidth updates the available width for rendering.
@@ -25,8 +33,15 @@ func (t *TopBar) SetWidth(w int) {
 
 // View renders the top bar as a string.
 func (t TopBar) View() string {
-	// Left: app name in primary color
+	// Left: app name, plus agent name/role if set.
 	left := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render("parley")
+	if t.name != "" {
+		agentInfo := lipgloss.NewStyle().Foreground(colorText).Render(" · " + t.name)
+		if t.role != "" {
+			agentInfo += lipgloss.NewStyle().Foreground(colorDimText).Render(" (" + t.role + ")")
+		}
+		left += agentInfo
+	}
 
 	// Right: port in primary color (bright and visible)
 	right := ""

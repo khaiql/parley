@@ -17,6 +17,7 @@ type Room struct {
 	AutoApprove  bool
 	Participants map[string]*ClientConn
 	Messages     []protocol.MessageParams
+	SavedAgents  []ParticipantData // loaded from agents.json on resume
 	seq          int
 	mu           sync.RWMutex
 }
@@ -260,6 +261,13 @@ func (r *Room) GetParticipants() []*ClientConn {
 		out = append(out, cc)
 	}
 	return out
+}
+
+// MessageCount returns the number of messages in the room, safe for concurrent use.
+func (r *Room) MessageCount() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.Messages)
 }
 
 var msgCounter uint64

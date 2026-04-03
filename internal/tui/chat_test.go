@@ -6,16 +6,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/khaiql/parley/internal/protocol"
 )
 
-// ansiEscapeRegex strips ANSI escape sequences from a string so we can measure
-// visible character width.
+// ansiEscapeRegex strips ANSI escape sequences from a string.
 var ansiEscapeRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripANSI(s string) string {
 	return ansiEscapeRegex.ReplaceAllString(s, "")
 }
+
+// displayWidth returns the visible column width of a string, ignoring ANSI.
+func displayWidth(s string) int {
+	return lipgloss.Width(s)
+}
+
 
 func TestExtractText(t *testing.T) {
 	tests := []struct {
@@ -110,7 +116,7 @@ func TestRenderMessageContainsText(t *testing.T) {
 		},
 		Timestamp: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
-	rendered := renderMessage(msg, 80)
+	rendered := renderMessage(msg, 80, nil)
 	if !contains(rendered, "alice") {
 		t.Errorf("renderMessage (human) should contain sender name %q, got: %q", "alice", rendered)
 	}
@@ -122,7 +128,7 @@ func TestRenderMessageContainsText(t *testing.T) {
 	}
 }
 
-func TestRenderMessageAgentContainsRoleBadge(t *testing.T) {
+func TestRenderMessageAgentContainsNameAndText(t *testing.T) {
 	msg := protocol.MessageParams{
 		From:   "bot1",
 		Source: "agent",
@@ -132,12 +138,9 @@ func TestRenderMessageAgentContainsRoleBadge(t *testing.T) {
 		},
 		Timestamp: time.Date(2024, 1, 1, 8, 30, 0, 0, time.UTC),
 	}
-	rendered := renderMessage(msg, 80)
+	rendered := renderMessage(msg, 80, nil)
 	if !contains(rendered, "bot1") {
 		t.Errorf("renderMessage (agent) should contain agent name, got: %q", rendered)
-	}
-	if !contains(rendered, "coder") {
-		t.Errorf("renderMessage (agent) should contain role badge, got: %q", rendered)
 	}
 	if !contains(rendered, "I wrote some code") {
 		t.Errorf("renderMessage (agent) should contain message text, got: %q", rendered)
@@ -153,7 +156,7 @@ func TestRenderMessageSystemFormat(t *testing.T) {
 			{Type: "text", Text: "alice has joined"},
 		},
 	}
-	rendered := renderMessage(msg, 80)
+	rendered := renderMessage(msg, 80, nil)
 	if !contains(rendered, "[system]") {
 		t.Errorf("renderMessage (system) should contain [system] prefix, got: %q", rendered)
 	}
@@ -162,11 +165,10 @@ func TestRenderMessageSystemFormat(t *testing.T) {
 	}
 }
 
-// contains checks whether s contains substr, ignoring ANSI escape codes by
-// looking at the raw bytes (lipgloss wraps strings in ANSI codes but the
-// plain text is still present).
+// contains checks whether s contains substr after stripping ANSI escape codes.
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && indexOf(s, substr) >= 0
+	clean := stripANSI(s)
+	return strings.Contains(clean, substr)
 }
 
 func indexOf(s, sub string) int {
@@ -194,7 +196,7 @@ func TestRenderMessageWrapsLongText(t *testing.T) {
 	}
 
 	const width = 80
-	rendered := renderMessage(msg, width)
+	rendered := renderMessage(msg, width, nil)
 
 	lines := strings.Split(rendered, "\n")
 	if len(lines) <= 1 {
@@ -202,9 +204,9 @@ func TestRenderMessageWrapsLongText(t *testing.T) {
 	}
 
 	for i, line := range lines {
-		visible := stripANSI(line)
-		if len(visible) > width {
-			t.Errorf("line %d exceeds width %d: len=%d %q", i, width, len(visible), visible)
+		w := displayWidth(line)
+		if w > width {
+			t.Errorf("line %d exceeds width %d: display_width=%d %q", i, width, w, line)
 		}
 	}
 }

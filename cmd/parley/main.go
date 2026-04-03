@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/khaiql/parley/internal/client"
+	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/driver"
 	"github.com/khaiql/parley/internal/protocol"
 	"github.com/khaiql/parley/internal/server"
@@ -61,12 +62,11 @@ func init() {
 	hostCmd.Flags().BoolVar(&hostYolo, "yolo", false, "Enable auto-approve mode for all joining agents")
 
 	joinCmd.Flags().IntVar(&joinPort, "port", 0, "Port of the session to join (required)")
-	joinCmd.Flags().StringVar(&joinName, "name", "", "Your name in the session (required)")
+	joinCmd.Flags().StringVar(&joinName, "name", "", "Your name in the session (random if not set)")
 	joinCmd.Flags().StringVar(&joinRole, "role", "agent", "Your role in the session")
 	joinCmd.Flags().BoolVar(&joinResume, "resume", false, "Resume prior agent session (looks up session ID from saved agents.json)")
 	joinCmd.Flags().SetInterspersed(false)
 	_ = joinCmd.MarkFlagRequired("port")
-	_ = joinCmd.MarkFlagRequired("name")
 
 	rootCmd.AddCommand(hostCmd)
 	rootCmd.AddCommand(joinCmd)
@@ -126,12 +126,37 @@ func runHost(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Parley server listening on port %d\n", port)
 	fmt.Fprintf(os.Stderr, "Room ID: %s\n", roomID)
 
+	roomDir := server.RoomDir(roomID)
+
+	// Save immediately so the room folder exists from the start.
+	if err := server.SaveRoom(roomDir, srv.Room()); err != nil {
+		fmt.Fprintf(os.Stderr, "Initial save failed: %v\n", err)
+	}
+
+	// Save on exit.
 	defer func() {
-		dir := server.RoomDir(roomID)
-		if err := server.SaveRoom(dir, srv.Room()); err != nil {
+		if err := server.SaveRoom(roomDir, srv.Room()); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to save room: %v\n", err)
 		}
 	}()
+
+	// Auto-save every 30 seconds so data isn't lost on crash.
+	autoSaveStop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := server.SaveRoom(roomDir, srv.Room()); err != nil {
+					fmt.Fprintf(os.Stderr, "Auto-save failed: %v\n", err)
+				}
+			case <-autoSaveStop:
+				return
+			}
+		}
+	}()
+	defer close(autoSaveStop)
 
 	c, err := client.New(srv.Addr())
 	if err != nil {
@@ -147,36 +172,84 @@ func runHost(cmd *cobra.Command, args []string) error {
 	dir, _ := os.Getwd()
 	repo := detectRepo()
 
-	if err := c.Join(protocol.JoinParams{
-		Name:      name,
-		Role:      "human",
-		Directory: dir,
-		Repo:      repo,
-	}); err != nil {
-		return fmt.Errorf("host: join room: %w", err)
-	}
-
 	sendFn := func(text string, mentions []string) {
 		_ = c.Send(protocol.Content{Type: "text", Text: text}, mentions)
 	}
 
 	app := tui.NewApp(hostTopic, port, tui.InputModeHuman, name, sendFn)
+
+	// Set up slash command registry.
+	reg := command.NewRegistry()
+	reg.Register(command.InfoCommand)
+	reg.Register(command.SaveCommand)
+	reg.Register(command.SendCommandCommand)
+
+	cmdCtx := command.Context{
+		Room: &RoomAdapter{room: srv.Room(), port: port},
+		SaveFn: func() error {
+			return server.SaveRoom(roomDir, srv.Room())
+		},
+		SendFn: func(to, text string) {
+			// Send the command text as a message mentioning the target agent.
+			_ = c.Send(protocol.Content{Type: "text", Text: fmt.Sprintf("@%s %s", to, text)}, []string{to})
+		},
+	}
+	app.SetCommandRegistry(reg, cmdCtx)
+
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
-	// Bridge network → TUI.
+	// Bridge network → TUI. Join is done here (not before p.Run) so that
+	// the room.state response arrives after the TUI event loop is running.
 	go func() {
+		// Join the room — this triggers room.state from the server.
+		_ = c.Join(protocol.JoinParams{
+			Name:      name,
+			Role:      "human",
+			Directory: dir,
+			Repo:      repo,
+		})
 		for msg := range c.Incoming() {
 			p.Send(tui.ServerMsg{Raw: msg})
 		}
 	}()
 
 	_, err = p.Run()
+
+	// Save room state BEFORE closing the server. This ensures the final
+	// messages are persisted while participants are still in the room.
+	if saveErr := server.SaveRoom(roomDir, srv.Room()); saveErr != nil {
+		fmt.Fprintf(os.Stderr, "Failed to save room on exit: %v\n", saveErr)
+	}
+
+	// Host is leaving — shut down the server so all agent connections drop.
+	// Agent processes will save their session IDs to agents.json after this.
+	srv.Close()
+
+	// Brief pause to let agent processes save their session IDs.
+	time.Sleep(500 * time.Millisecond)
+
 	return err
 }
 
 // runJoin implements the join command: connects to an existing server as an
 // agent participant and runs the TUI with a Claude driver.
+// randomName picks a random agent name from a curated list.
+func randomName() string {
+	names := []string{
+		"atlas", "nova", "cipher", "echo", "flux",
+		"helix", "iris", "juno", "kappa", "lumen",
+		"nexus", "onyx", "pixel", "quark", "rune",
+		"sage", "titan", "vega", "wren", "zephyr",
+	}
+	return names[time.Now().UnixNano()%int64(len(names))]
+}
+
 func runJoin(cmd *cobra.Command, args []string) error {
+	if joinName == "" {
+		joinName = randomName()
+		fmt.Fprintf(os.Stderr, "No --name provided, using: %s\n", joinName)
+	}
+
 	// Extract agent command from args after "--".
 	var agentArgs []string
 	dashPos := cmd.Flags().ArgsLenAtDash()
@@ -264,6 +337,13 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Build the intro message for the agent.
+	intro := fmt.Sprintf("You have joined a parley chat room. Topic: %s. Introduce yourself briefly.", topic)
+	history := driver.FormatHistory(roomState.Messages)
+	if history != "" {
+		intro = history + "\n" + intro
+	}
+
 	config := driver.AgentConfig{
 		Command:         command,
 		Args:            extraArgs,
@@ -273,6 +353,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		Repo:            repo,
 		Topic:           topic,
 		Participants:    participants,
+		InitialMessage:  intro,
 		ResumeSessionID: resumeSessionID,
 		AutoApprove:     roomState.AutoApprove,
 	}
@@ -288,20 +369,16 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 	defer d.Stop()
 
-	// Send initial prompt with conversation history if available.
-	intro := fmt.Sprintf("You have joined a parley chat room. Topic: %s. Introduce yourself briefly.", topic)
-	history := driver.FormatHistory(roomState.Messages)
-	if history != "" {
-		if err := d.Send(history + "\n" + intro); err != nil {
-			return fmt.Errorf("join: send initial prompt: %w", err)
-		}
-	} else {
+	// For drivers that don't consume InitialMessage in Start() (e.g. Claude),
+	// send the intro explicitly.
+	if _, isGemini := d.(*driver.GeminiDriver); !isGemini {
 		if err := d.Send(intro); err != nil {
 			return fmt.Errorf("join: send initial prompt: %w", err)
 		}
 	}
 
 	app := tui.NewApp(topic, joinPort, tui.InputModeAgent, joinName, nil, roomState.Participants...)
+	app.SetAgent(joinName, joinRole)
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	// Bridge network → TUI + agent driver.
@@ -360,6 +437,9 @@ func runJoin(cmd *cobra.Command, args []string) error {
 			pendingTimer.Stop()
 		}
 		flushPending()
+
+		// Server disconnected — quit the TUI and stop the agent.
+		p.Send(tui.ServerDisconnectedMsg{})
 	}()
 
 	// Bridge agent → network.
@@ -427,4 +507,47 @@ func contentText(content []protocol.Content) string {
 		}
 	}
 	return strings.Join(parts, "")
+}
+
+// RoomAdapter wraps *server.Room to implement command.RoomQuerier.
+type RoomAdapter struct {
+	room *server.Room
+	port int
+}
+
+func (a *RoomAdapter) GetID() string    { return a.room.ID }
+func (a *RoomAdapter) GetTopic() string { return a.room.Topic }
+func (a *RoomAdapter) GetPort() int     { return a.port }
+func (a *RoomAdapter) GetMessageCount() int { return a.room.MessageCount() }
+
+func (a *RoomAdapter) GetParticipantSnapshot() []command.ParticipantInfo {
+	conns := a.room.GetParticipants()
+	out := make([]command.ParticipantInfo, len(conns))
+	for i, cc := range conns {
+		out[i] = command.ParticipantInfo{
+			Name:      cc.Name,
+			Role:      cc.Role,
+			Directory: cc.Directory,
+			AgentType: cc.AgentType,
+		}
+	}
+	return out
+}
+
+func (a *RoomAdapter) GetSavedAgents() []command.SavedAgentInfo {
+	saved := a.room.SavedAgents
+	out := make([]command.SavedAgentInfo, 0, len(saved))
+	for _, sa := range saved {
+		// Only include non-human agents (humans don't resume).
+		if sa.Source == "human" {
+			continue
+		}
+		out = append(out, command.SavedAgentInfo{
+			Name:      sa.Name,
+			Role:      sa.Role,
+			Directory: sa.Directory,
+			AgentType: sa.AgentType,
+		})
+	}
+	return out
 }
