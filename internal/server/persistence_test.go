@@ -318,6 +318,45 @@ func TestUpdateAgentSessionID_CreatesFileWhenMissing(t *testing.T) {
 	}
 }
 
+func TestSaveLoadRoom_AutoApprove(t *testing.T) {
+	dir := t.TempDir()
+
+	room := NewRoom("yolo-topic")
+	room.AutoApprove = true
+
+	if err := SaveRoom(dir, room); err != nil {
+		t.Fatalf("SaveRoom: %v", err)
+	}
+
+	loaded, err := LoadRoom(dir)
+	if err != nil {
+		t.Fatalf("LoadRoom: %v", err)
+	}
+
+	if !loaded.AutoApprove {
+		t.Error("expected AutoApprove to be true after load")
+	}
+}
+
+func TestSaveLoadRoom_AutoApproveFalse(t *testing.T) {
+	dir := t.TempDir()
+
+	room := NewRoom("normal-topic")
+
+	if err := SaveRoom(dir, room); err != nil {
+		t.Fatalf("SaveRoom: %v", err)
+	}
+
+	loaded, err := LoadRoom(dir)
+	if err != nil {
+		t.Fatalf("LoadRoom: %v", err)
+	}
+
+	if loaded.AutoApprove {
+		t.Error("expected AutoApprove to be false after load")
+	}
+}
+
 func TestSaveRoom_AgentsIncludeSessionID(t *testing.T) {
 	dir := t.TempDir()
 
