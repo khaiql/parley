@@ -1,0 +1,33 @@
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - gocognit
+    - cyclop
+    - gosec
+    - tparallel
+    - testifylint
+    - exhaustive
+    - revive
+
+linters-settings:
+  cyclop:
+    max-complexity: 15
+    package-average: 10.0
+  gocognit:
+    min-complexity: 20
+  exhaustive:
+    default-signifies-exhaustive: true
+
+run:
+  timeout: 5m
+
+issues:
+  new-from-rev: origin/main
+  exclude-use-default: false
