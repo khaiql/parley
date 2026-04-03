@@ -19,6 +19,7 @@ func TestBuildGeminiArgs_ContainsRequiredFlags(t *testing.T) {
 		Directory:    "/tmp",
 		Topic:        "topic",
 		SystemPrompt: "you are helpful",
+		AutoApprove:  true,
 	}
 	args := BuildGeminiArgs(cfg, "hello")
 
@@ -365,6 +366,58 @@ echo '{"type":"result","status":"success","stats":{}}'
 	err = d.Send("hello")
 	if err != nil {
 		t.Fatalf("Send() failed: %v", err)
+	}
+}
+
+func TestBuildGeminiArgs_YoloOnlyWhenAutoApprove(t *testing.T) {
+	cfg := AgentConfig{AutoApprove: false}
+	args := BuildGeminiArgs(cfg, "hello")
+
+	for _, a := range args {
+		if a == "--yolo" {
+			t.Errorf("expected no --yolo when AutoApprove is false, got: %v", args)
+		}
+	}
+}
+
+func TestBuildGeminiArgs_YoloPresentWhenAutoApprove(t *testing.T) {
+	cfg := AgentConfig{AutoApprove: true}
+	args := BuildGeminiArgs(cfg, "hello")
+
+	found := false
+	for _, a := range args {
+		if a == "--yolo" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected --yolo when AutoApprove is true, got: %v", args)
+	}
+}
+
+func TestBuildGeminiArgsWithResume_YoloConditional(t *testing.T) {
+	cfg := AgentConfig{AutoApprove: false}
+	args := BuildGeminiArgsWithResume(cfg, "msg", "sess-1")
+
+	for _, a := range args {
+		if a == "--yolo" {
+			t.Errorf("expected no --yolo when AutoApprove is false, got: %v", args)
+		}
+	}
+
+	cfg.AutoApprove = true
+	args = BuildGeminiArgsWithResume(cfg, "msg", "sess-1")
+
+	found := false
+	for _, a := range args {
+		if a == "--yolo" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected --yolo when AutoApprove is true, got: %v", args)
 	}
 }
 
