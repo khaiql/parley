@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/khaiql/parley/internal/client"
+	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/driver"
 	"github.com/khaiql/parley/internal/protocol"
 	"github.com/khaiql/parley/internal/server"
@@ -170,6 +171,25 @@ func runHost(cmd *cobra.Command, args []string) error {
 	}
 
 	app := tui.NewApp(hostTopic, port, tui.InputModeHuman, name, sendFn)
+
+	// Set up slash command registry.
+	reg := command.NewRegistry()
+	reg.Register(command.InfoCommand)
+	reg.Register(command.SaveCommand)
+	reg.Register(command.SendCommandCommand)
+
+	cmdCtx := command.Context{
+		Room: &RoomAdapter{room: srv.Room(), port: port},
+		SaveFn: func() error {
+			return server.SaveRoom(roomDir, srv.Room())
+		},
+		SendFn: func(to, text string) {
+			// Send the command text as a message mentioning the target agent.
+			_ = c.Send(protocol.Content{Type: "text", Text: fmt.Sprintf("@%s %s", to, text)}, []string{to})
+		},
+	}
+	app.SetCommandRegistry(reg, cmdCtx)
+
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	// Bridge network → TUI. Join is done here (not before p.Run) so that
@@ -480,4 +500,47 @@ func contentText(content []protocol.Content) string {
 		}
 	}
 	return strings.Join(parts, "")
+}
+
+// RoomAdapter wraps *server.Room to implement command.RoomQuerier.
+type RoomAdapter struct {
+	room *server.Room
+	port int
+}
+
+func (a *RoomAdapter) GetID() string    { return a.room.ID }
+func (a *RoomAdapter) GetTopic() string { return a.room.Topic }
+func (a *RoomAdapter) GetPort() int     { return a.port }
+func (a *RoomAdapter) GetMessageCount() int { return a.room.MessageCount() }
+
+func (a *RoomAdapter) GetParticipantSnapshot() []command.ParticipantInfo {
+	conns := a.room.GetParticipants()
+	out := make([]command.ParticipantInfo, len(conns))
+	for i, cc := range conns {
+		out[i] = command.ParticipantInfo{
+			Name:      cc.Name,
+			Role:      cc.Role,
+			Directory: cc.Directory,
+			AgentType: cc.AgentType,
+		}
+	}
+	return out
+}
+
+func (a *RoomAdapter) GetSavedAgents() []command.SavedAgentInfo {
+	saved := a.room.SavedAgents
+	out := make([]command.SavedAgentInfo, 0, len(saved))
+	for _, sa := range saved {
+		// Only include non-human agents (humans don't resume).
+		if sa.Source == "human" {
+			continue
+		}
+		out = append(out, command.SavedAgentInfo{
+			Name:      sa.Name,
+			Role:      sa.Role,
+			Directory: sa.Directory,
+			AgentType: sa.AgentType,
+		})
+	}
+	return out
 }
