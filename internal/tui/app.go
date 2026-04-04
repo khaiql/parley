@@ -137,7 +137,35 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC:
 			return a, tea.Quit
 
+		case tea.KeyUp:
+			if a.suggestions.Visible() {
+				a.suggestions.MoveUp()
+				return a, nil
+			}
+		case tea.KeyDown:
+			if a.suggestions.Visible() {
+				a.suggestions.MoveDown()
+				return a, nil
+			}
+		case tea.KeyTab:
+			if a.suggestions.Visible() {
+				a.acceptSuggestion()
+				a.layout()
+				return a, nil
+			}
+		case tea.KeyEsc:
+			if a.suggestions.Visible() {
+				a.dismissSuggestions()
+				a.layout()
+				return a, nil
+			}
+
 		case tea.KeyEnter:
+			if a.suggestions.Visible() {
+				a.acceptSuggestion()
+				a.layout()
+				return a, nil
+			}
 			if a.input.mode == InputModeHuman {
 				text := a.input.Value()
 				// Check for backslash-newline
@@ -217,6 +245,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, a.chat.Update(msg))
 	}
 
+	// Check for suggestion triggers and update filter after input changes.
+	if _, ok := msg.(tea.KeyMsg); ok && a.input.mode == InputModeHuman {
+		if a.suggestions.Visible() {
+			a.updateSuggestionFilter()
+		} else {
+			a.checkSuggestionTrigger()
+		}
+	}
+
 	// Re-layout only if input height actually changed.
 	if a.width > 0 && a.height > 0 {
 		if a.input.Height() != a.lastInputHeight {
@@ -238,13 +275,12 @@ func (a App) View() string {
 		a.chat.View(),
 		a.sidebar.View(),
 	)
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		a.topbar.View(),
-		middle,
-		a.input.View(),
-		a.statusbar.View(),
-	)
+	parts := []string{a.topbar.View(), middle}
+	if a.suggestions.Visible() {
+		parts = append(parts, a.suggestions.View())
+	}
+	parts = append(parts, a.input.View(), a.statusbar.View())
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 // layout recalculates and applies component sizes based on the current
@@ -253,7 +289,8 @@ func (a *App) layout() {
 	topbarHeight := 1
 	inputHeight := a.input.Height()
 	statusbarHeight := 1
-	chatHeight := a.height - topbarHeight - inputHeight - statusbarHeight
+	suggestionsHeight := a.suggestions.Height()
+	chatHeight := a.height - topbarHeight - inputHeight - statusbarHeight - suggestionsHeight
 	if chatHeight < 0 {
 		chatHeight = 0
 	}
@@ -268,6 +305,7 @@ func (a *App) layout() {
 	a.sidebar.SetSize(sidebarWidth, chatHeight)
 	a.input.SetWidth(a.width)
 	a.statusbar.SetWidth(a.width)
+	a.suggestions.SetWidth(a.width)
 }
 
 // maybeStartSpinner checks if any participant is generating and starts
