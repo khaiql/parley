@@ -4,7 +4,10 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:github.com)",
       "Bash(grep -n '^func \\(s Style\\)' *.go)",
-      "Bash(claude -p --input-format stream-json --output-format stream-json)"
+      "Bash(claude -p --input-format stream-json --output-format stream-json)",
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(golangci-lint run:*)"
     ]
   }
 }

@@ -222,7 +222,6 @@ func runHost(_ *cobra.Command, _ []string) error {
 	}
 
 	// Host is leaving — shut down the server so all agent connections drop.
-	// Agent processes will save their session IDs to agents.json after this.
 	srv.Close()
 
 	// Brief pause to let agent processes save their session IDs.
@@ -257,9 +256,18 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		agentArgs = args[dashPos:]
 	}
 
-	agentCmd := ""
+	agentCmd := protocol.AgentTypeClaude // default agent type
 	if len(agentArgs) > 0 {
-		agentCmd = strings.Join(agentArgs, " ")
+		// Detect agent type from the command name.
+		base := agentArgs[0]
+		switch {
+		case strings.Contains(base, "gemini"):
+			agentCmd = protocol.AgentTypeGemini
+		case strings.Contains(base, "codex"):
+			agentCmd = protocol.AgentTypeCodex
+		default:
+			agentCmd = protocol.AgentTypeClaude
+		}
 	}
 
 	addr := fmt.Sprintf("localhost:%d", joinPort)

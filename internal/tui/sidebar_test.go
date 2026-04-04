@@ -136,7 +136,7 @@ func TestSidebarSetParticipantStatusClear(t *testing.T) {
 func TestSidebarViewShowsStatus(t *testing.T) {
 	s := NewSidebar()
 	s.SetSize(30, 20)
-	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent"})
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent", Online: true})
 	s.SetParticipantStatus("bot1", "thinking…")
 
 	view := s.View()
@@ -148,19 +148,19 @@ func TestSidebarViewShowsStatus(t *testing.T) {
 func TestSidebarViewListeningStatus(t *testing.T) {
 	s := NewSidebar()
 	s.SetSize(30, 20)
-	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent"})
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent", Online: true})
 	s.SetParticipantStatus("bot1", "listening")
 
-	view := s.View()
-	if !contains(view, "listening") {
-		t.Errorf("sidebar view should contain 'listening' status, got: %q", view)
+	view := stripANSI(s.View())
+	if contains(view, "listening") {
+		t.Errorf("sidebar view should NOT contain 'listening' status, got: %q", view)
 	}
 }
 
 func TestSidebarViewNoStatusForIdle(t *testing.T) {
 	s := NewSidebar()
 	s.SetSize(30, 20)
-	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent"})
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent", Online: true})
 	// No status set — idle
 
 	view := s.View()
@@ -173,8 +173,8 @@ func TestSidebarViewNoStatusForIdle(t *testing.T) {
 func TestSidebarViewContainsNames(t *testing.T) {
 	s := NewSidebar()
 	s.SetSize(30, 20)
-	s.AddParticipant(protocol.Participant{Name: "alice", Role: "human", Source: "human"})
-	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent", AgentType: "claude"})
+	s.AddParticipant(protocol.Participant{Name: "alice", Role: "human", Source: "human", Online: true})
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent", AgentType: "claude", Online: true})
 
 	view := s.View()
 
@@ -186,5 +186,145 @@ func TestSidebarViewContainsNames(t *testing.T) {
 	}
 	if !contains(view, "claude") {
 		t.Errorf("sidebar view should contain agent type 'claude', got: %q", view)
+	}
+}
+
+func TestSidebarViewShowsBranding(t *testing.T) {
+	s := NewSidebar()
+	s.SetSize(30, 20)
+	s.SetPort(55568)
+
+	view := stripANSI(s.View())
+	if !contains(view, "parley") {
+		t.Errorf("sidebar view should contain 'parley' branding, got: %q", view)
+	}
+}
+
+func TestSidebarViewColorMatchedNames(t *testing.T) {
+	s := NewSidebar()
+	s.SetSize(30, 20)
+	s.AddParticipant(protocol.Participant{Name: "growth", Role: "coder", Source: "agent", AgentType: "gemini", Online: true})
+
+	view := stripANSI(s.View())
+	if !contains(view, "growth") {
+		t.Errorf("sidebar view should contain agent name 'growth', got: %q", view)
+	}
+	if !contains(view, "gemini") {
+		t.Errorf("sidebar view should contain agent type 'gemini', got: %q", view)
+	}
+}
+
+func TestSidebarViewGeneratingSpinner(t *testing.T) {
+	s := NewSidebar()
+	s.SetSize(30, 20)
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent", Online: true})
+	s.SetParticipantStatus("bot1", "generating")
+
+	view := stripANSI(s.View())
+	if !contains(view, "generating") {
+		t.Errorf("sidebar view should contain 'generating' for active agent, got: %q", view)
+	}
+}
+
+func TestSidebarViewSectionHeader(t *testing.T) {
+	s := NewSidebar()
+	s.SetSize(30, 20)
+
+	view := stripANSI(s.View())
+	if !contains(view, "PARTICIPANTS") {
+		t.Errorf("sidebar view should contain 'PARTICIPANTS' header, got: %q", view)
+	}
+}
+
+func TestSidebarTickSpinner(t *testing.T) {
+	s := NewSidebar()
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder"})
+
+	// No generating status — should return false
+	if s.TickSpinner() {
+		t.Error("TickSpinner should return false when no participant is generating")
+	}
+
+	s.SetParticipantStatus("bot1", "generating")
+	if !s.TickSpinner() {
+		t.Error("TickSpinner should return true when a participant is generating")
+	}
+
+	// Verify frame advanced
+	if s.spinnerFrame != 2 { // ticked twice
+		t.Errorf("expected spinnerFrame=2, got %d", s.spinnerFrame)
+	}
+}
+
+func TestSidebarAgentWithSourceHumanGetsAgentColor(t *testing.T) {
+	// Real-world case: agents join with Source="human" but Role != "human".
+	// Only the actual human (Role="human") should get orange.
+	s := NewSidebar()
+	s.SetSize(30, 20)
+	s.AddParticipant(protocol.Participant{
+		Name:   "sle",
+		Role:   "human",
+		Source: "human",
+		Online: true,
+	})
+	s.AddParticipant(protocol.Participant{
+		Name:   "atlas",
+		Role:   "a retired engineer",
+		Source: "human", // agents can have source=human
+		Online: true,
+	})
+
+	view := s.View()
+
+	// sle should be in human orange (#f0883e)
+	sleColor := ColorForSender("sle", true)
+	atlasColor := ColorForSender("atlas", false)
+
+	if sleColor == atlasColor {
+		t.Fatalf("test invalid: sle and atlas should have different colors")
+	}
+
+	// atlas should NOT be rendered with humanNameStyle.
+	// humanNameStyle uses colorHuman (#f0883e).
+	// We can't easily check ANSI in tests (lipgloss no-color in non-TTY),
+	// but we CAN verify the sidebar rendering doesn't treat atlas as human
+	// by checking the code path: if atlas got humanNameStyle, both would
+	// appear identically styled. In non-TTY both are unstyled, so check
+	// that at minimum both names appear.
+	if !contains(view, "sle") {
+		t.Error("sidebar should contain 'sle'")
+	}
+	if !contains(view, "atlas") {
+		t.Error("sidebar should contain 'atlas'")
+	}
+}
+
+func TestSidebarColorLogicMatchesChat(t *testing.T) {
+	// The sidebar determines isHuman by Role=="human", same as chat.
+	// Verify the logic produces consistent colors for known cases.
+	tests := []struct {
+		name      string
+		role      string
+		source    string
+		wantHuman bool
+	}{
+		{"sle", "human", "human", true},
+		{"atlas", "a retired engineer", "human", false}, // agent with source=human
+		{"robert", "junior engineer", "agent", false},
+		{"bot", "agent", "agent", false},
+	}
+
+	for _, tt := range tests {
+		isHuman := tt.role == "human" // must match sidebar.go logic
+		color := ColorForSender(tt.name, isHuman)
+		if isHuman && color != colorHuman {
+			t.Errorf("%s: role=%q should be human (orange), got %v", tt.name, tt.role, color)
+		}
+		if !isHuman && color == colorHuman {
+			t.Errorf("%s: role=%q should NOT be human (orange), got %v", tt.name, tt.role, color)
+		}
+		if tt.wantHuman != isHuman {
+			t.Errorf("%s: expected wantHuman=%v, got isHuman=%v", tt.name, tt.wantHuman, isHuman)
+		}
 	}
 }

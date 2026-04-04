@@ -1,33 +1,58 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"hash/fnv"
 
-var (
-	colorPrimary = lipgloss.Color("#58a6ff")
-	colorHuman   = lipgloss.Color("#f0883e")
-	colorAgent   = lipgloss.Color("#a5d6ff")
-	colorSystem  = lipgloss.Color("#8b949e")
-	colorBorder  = lipgloss.Color("#30363d")
-	colorText    = lipgloss.Color("#c9d1d9")
-	colorDimText = lipgloss.Color("#484f58")
-
-	// participantColors is a palette of distinct colors assigned to participants
-	// by their join order. The human always gets colorHuman; agents cycle through these.
-	participantColors = []lipgloss.Color{
-		lipgloss.Color("#a5d6ff"), // light blue
-		lipgloss.Color("#d2a8ff"), // purple
-		lipgloss.Color("#7ee787"), // green
-		lipgloss.Color("#f778ba"), // pink
-		lipgloss.Color("#79c0ff"), // sky blue
-		lipgloss.Color("#ff7b72"), // coral
-		lipgloss.Color("#d8e77e"), // lime
-		lipgloss.Color("#ffc680"), // peach
-	}
+	"github.com/charmbracelet/lipgloss"
 )
 
 var (
+	colorPrimary     = lipgloss.Color("#58a6ff")
+	colorHuman       = lipgloss.Color("#f0883e")
+	colorSystem      = lipgloss.Color("#8b949e")
+	colorText        = lipgloss.Color("#e1e4e8")
+	colorDimText     = lipgloss.Color("#6e7681")
+	colorBorder      = lipgloss.Color("#3b3f47")
+	colorSeparator   = lipgloss.Color("#21262d")
+	colorSidebarBg   = lipgloss.Color("#161b22")
+	colorConnected   = lipgloss.Color("#3fb950")
+	colorStatusBarBg = lipgloss.Color("#30363d")
+)
+
+var agentPalette = []lipgloss.Color{
+	"#a78bfa", "#7dd3fc", "#34d399", "#fbbf24",
+	"#f472b6", "#60a5fa", "#a3e635", "#fb923c",
+}
+
+// ColorForSender returns a deterministic color for a participant.
+// Humans always get colorHuman; agents get a color from the palette
+// based on an FNV hash of their name.
+func ColorForSender(name string, isHuman bool) lipgloss.Color {
+	if isHuman {
+		return colorHuman
+	}
+	h := fnv.New32a()
+	h.Write([]byte(name))
+	idx := int(h.Sum32()) % len(agentPalette)
+	return agentPalette[idx]
+}
+
+// agentNameStyleFor returns a bold style with the given foreground color.
+func agentNameStyleFor(c lipgloss.Color) lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(c)
+}
+
+// agentBadgeStyleFor returns a badge style with bg #30363d and the given foreground.
+func agentBadgeStyleFor(c lipgloss.Color) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color("#30363d")).
+		Foreground(c).
+		Padding(0, 1)
+}
+
+var (
 	topBarStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("#161b22")).
+			Background(colorSidebarBg).
 			Foreground(colorText).
 			Padding(0, 1).
 			Bold(true)
@@ -37,18 +62,27 @@ var (
 			BorderLeft(true).
 			BorderForeground(colorBorder).
 			Foreground(colorText).
-			Padding(0, 1)
+			Padding(0, 1).
+			Background(colorSidebarBg)
 
 	sidebarTitleStyle = lipgloss.NewStyle().
+				Foreground(colorDimText).
+				MarginBottom(1)
+
+	sidebarBrandStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(colorPrimary).
-				MarginBottom(1)
+				Align(lipgloss.Center)
 
 	inputStyle = lipgloss.NewStyle().
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderTop(true).
 			BorderForeground(colorBorder).
 			Padding(0, 1)
+
+	humanNameStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorHuman)
 
 	systemMsgStyle = lipgloss.NewStyle().
 			Foreground(colorSystem).
@@ -61,11 +95,10 @@ var (
 				Foreground(colorSystem).
 				Italic(true)
 
-	listeningStatusStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#3fb950")).
-				Italic(true)
-
 	offlineNameStyle = lipgloss.NewStyle().
 				Foreground(colorDimText).
 				Italic(true)
+
+	separatorStyle = lipgloss.NewStyle().
+			Foreground(colorSeparator)
 )
