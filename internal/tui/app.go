@@ -55,12 +55,12 @@ type App struct {
 	sidebar         Sidebar
 	input           Input
 	statusbar       StatusBar
-	modal           *Modal                    // non-nil when a modal overlay is active
-	sendFn          func(string, []string)    // callback to send messages over network
-	registry        *command.Registry         // slash command registry (nil = no commands)
-	cmdCtx          command.Context           // context passed to slash commands
-	lastInputHeight int                       // cached to avoid redundant re-layouts
-	pendingHistory  []protocol.MessageParams  // set during room.state, loaded async
+	modal           *Modal                   // non-nil when a modal overlay is active
+	sendFn          func(string, []string)   // callback to send messages over network
+	registry        *command.Registry        // slash command registry (nil = no commands)
+	cmdCtx          command.Context          // context passed to slash commands
+	lastInputHeight int                      // cached to avoid redundant re-layouts
+	pendingHistory  []protocol.MessageParams // set during room.state, loaded async
 	spinnerActive   bool
 	width           int
 	height          int

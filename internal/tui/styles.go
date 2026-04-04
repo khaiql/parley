@@ -113,7 +113,7 @@ var (
 			MarginBottom(1)
 
 	modalFooterStyle = lipgloss.NewStyle().
-			Foreground(colorDimText).
-			Italic(true).
-			MarginTop(1)
+				Foreground(colorDimText).
+				Italic(true).
+				MarginTop(1)
 )

@@ -29,15 +29,15 @@ func rawParams(t *testing.T, v interface{}) json.RawMessage {
 // fakeRoom is a minimal RoomQuerier for modal integration testing.
 type fakeRoom struct{}
 
-func (f *fakeRoom) GetID() string                              { return "room-1" }
-func (f *fakeRoom) GetTopic() string                           { return "test-topic" }
-func (f *fakeRoom) GetPort() int                               { return 9000 }
+func (f *fakeRoom) GetID() string    { return "room-1" }
+func (f *fakeRoom) GetTopic() string { return "test-topic" }
+func (f *fakeRoom) GetPort() int     { return 9000 }
 func (f *fakeRoom) GetParticipants() []command.ParticipantInfo {
 	return []command.ParticipantInfo{
 		{Name: "alice", Role: "agent", Directory: "/tmp/alice", AgentType: "claude", Online: true},
 	}
 }
-func (f *fakeRoom) GetMessageCount() int                       { return 0 }
+func (f *fakeRoom) GetMessageCount() int { return 0 }
 
 func makeAppWithRegistry() App {
 	app := makeApp()
@@ -49,7 +49,6 @@ func makeAppWithRegistry() App {
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	return model.(App)
 }
-
 
 func TestHandleServerMsg_RoomMessage_AddsToChat(t *testing.T) {
 	a := makeApp()
