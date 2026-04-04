@@ -50,17 +50,17 @@ type HistoryLoadedMsg struct {
 
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
-	topbar          TopBar
-	chat            Chat
-	sidebar         Sidebar
-	input           Input
-	statusbar       StatusBar
-	modal           *Modal                   // non-nil when a modal overlay is active
-	sendFn          func(string, []string)   // callback to send messages over network
-	registry        *command.Registry        // slash command registry (nil = no commands)
-	cmdCtx          command.Context          // context passed to slash commands
-	lastInputHeight int                      // cached to avoid redundant re-layouts
-	pendingHistory  []protocol.MessageParams // set during room.state, loaded async
+	topbar            TopBar
+	chat              Chat
+	sidebar           Sidebar
+	input             Input
+	statusbar         StatusBar
+	modal             *Modal                   // non-nil when a modal overlay is active
+	sendFn            func(string, []string)   // callback to send messages over network
+	registry          *command.Registry        // slash command registry (nil = no commands)
+	cmdCtx            command.Context          // context passed to slash commands
+	lastInputHeight   int                      // cached to avoid redundant re-layouts
+	pendingHistory    []protocol.MessageParams // set during room.state, loaded async
 	spinnerActive     bool
 	suggestions       Suggestions
 	completionTrigger rune // '/' or '@', or 0 if inactive
