@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"strings"
@@ -236,12 +238,14 @@ func runHost(_ *cobra.Command, _ []string) error {
 // randomName picks a random agent name from a curated list.
 func randomName() string {
 	names := []string{
-		"atlas", "nova", "cipher", "echo", "flux",
-		"helix", "iris", "juno", "kappa", "lumen",
-		"nexus", "onyx", "pixel", "quark", "rune",
-		"sage", "titan", "vega", "wren", "zephyr",
+		"babbage", "bramble", "cosmo", "dingo", "ember",
+		"ferris", "goblin", "hickory", "ibex", "junco",
+		"kitsune", "loki", "moss", "noodle", "orca",
+		"pascal", "pickle", "quokka", "ruckus", "sprocket",
+		"turing", "umbra", "vortex", "wombat", "yeti",
 	}
-	return names[time.Now().UnixNano()%int64(len(names))]
+	n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(names))))
+	return names[n.Int64()]
 }
 
 func runJoin(cmd *cobra.Command, args []string) error {

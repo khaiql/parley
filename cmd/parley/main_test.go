@@ -106,6 +106,18 @@ func TestHostResumeLoadsHistory(t *testing.T) {
 
 }
 
+func TestRandomNameDistribution(t *testing.T) {
+	// Call randomName many times and check we get more than one unique name.
+	// A properly seeded RNG should produce variety over 100 calls.
+	seen := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		seen[randomName()] = true
+	}
+	if len(seen) < 2 {
+		t.Errorf("randomName() produced only %d unique name(s) over 100 calls; expected variety", len(seen))
+	}
+}
+
 func TestIsMentioned(t *testing.T) {
 	tests := []struct {
 		name     string
