@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"math/rand/v2"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -241,7 +242,7 @@ func randomName() string {
 		"nexus", "onyx", "pixel", "quark", "rune",
 		"sage", "titan", "vega", "wren", "zephyr",
 	}
-	return names[time.Now().UnixNano()%int64(len(names))]
+	return names[rand.IntN(len(names))]
 }
 
 func runJoin(cmd *cobra.Command, args []string) error {
