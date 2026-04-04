@@ -22,7 +22,6 @@ func displayWidth(s string) int {
 	return lipgloss.Width(s)
 }
 
-
 func TestExtractText(t *testing.T) {
 	tests := []struct {
 		name    string

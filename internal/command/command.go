@@ -45,8 +45,8 @@ type Result struct {
 
 // Command describes a single slash command.
 type Command struct {
-	Name        string                          // e.g. "info"
-	Usage       string                          // e.g. "/info"
-	Description string                          // short help text
+	Name        string // e.g. "info"
+	Usage       string // e.g. "/info"
+	Description string // short help text
 	Execute     func(ctx Context, args string) Result
 }
