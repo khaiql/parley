@@ -86,6 +86,11 @@ func NewApp(topic string, port int, mode InputMode, _ string, sendFn func(string
 	return a
 }
 
+// SetYolo sets whether the room is in yolo/auto-approve mode on the status bar.
+func (a *App) SetYolo(y bool) {
+	a.statusbar.SetYolo(y)
+}
+
 // SetAgent configures the agent name and role shown in the topbar.
 func (a *App) SetAgent(name, role string) {
 	a.topbar.SetAgent(name, role)
@@ -315,6 +320,7 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 				Directory: params.Directory,
 				Repo:      params.Repo,
 				AgentType: params.AgentType,
+				Online:    true,
 			})
 		}
 

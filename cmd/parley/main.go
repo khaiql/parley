@@ -404,6 +404,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 	app := tui.NewApp(topic, joinPort, tui.InputModeAgent, joinName, nil, roomState.Participants...)
 	app.SetAgent(joinName, joinRole)
+	app.SetYolo(roomState.AutoApprove)
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	// Bridge network → TUI + agent driver.
