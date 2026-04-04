@@ -55,6 +55,7 @@ type App struct {
 	sidebar         Sidebar
 	input           Input
 	statusbar       StatusBar
+	modal           *Modal                   // non-nil when a modal overlay is active
 	sendFn          func(string, []string)   // callback to send messages over network
 	registry        *command.Registry        // slash command registry (nil = no commands)
 	cmdCtx          command.Context          // context passed to slash commands
@@ -113,8 +114,22 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width = m.Width
 		a.height = m.Height
 		a.layout()
+		if a.modal != nil {
+			a.modal.Resize(m.Width, m.Height)
+		}
 
 	case tea.KeyMsg:
+		// Modal intercepts all keyboard input while visible.
+		if a.modal != nil {
+			switch {
+			case m.Type == tea.KeyEsc, m.String() == "q":
+				a.modal = nil
+				return a, nil
+			default:
+				cmd := a.modal.Update(msg)
+				return a, cmd
+			}
+		}
 		switch m.Type {
 		case tea.KeyCtrlC:
 			return a, tea.Quit
@@ -135,6 +150,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						result := a.registry.Execute(a.cmdCtx, text)
 						if result.Error != nil {
 							a.chat.AddMessage(systemMessage(result.Error.Error()))
+						} else if result.Modal != nil {
+							modal := NewModal(result.Modal, a.width, a.height)
+							a.modal = &modal
 						} else if result.LocalMessage != "" {
 							a.chat.AddMessage(systemMessage(result.LocalMessage))
 						}
@@ -206,9 +224,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return a, tea.Batch(cmds...)
 }
 
-// View satisfies tea.Model. Renders topbar, chat+sidebar, and input stacked
-// vertically.
+// View satisfies tea.Model. When a modal is active it renders full-screen;
+// otherwise renders topbar, chat+sidebar, and input stacked vertically.
 func (a App) View() string {
+	if a.modal != nil {
+		return a.modal.View()
+	}
 	middle := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		a.chat.View(),

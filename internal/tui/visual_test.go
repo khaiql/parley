@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/protocol"
 )
 
@@ -108,4 +109,20 @@ func TestVisualLayoutSmall40x10(t *testing.T) {
 	app := buildTestApp(t, 40, 10)
 	output := app.View()
 	assertGolden(t, "layout_40x10", output)
+}
+
+func TestVisualModal80x24(t *testing.T) {
+	app := buildTestApp(t, 80, 24)
+
+	// Directly inject a modal to test the visual layout without needing
+	// a command registry wired up.
+	content := &command.ModalContent{
+		Title: "Room Info",
+		Body:  "Room: test-room\nTopic: test topic\nPort: 1234\nParticipants: 2\nMessages: 5\n\nParticipants:\n  • sle (human) [online]\n  • Alice (backend) [online] — /home/alice/project\n\nJoin command:\n  parley join --port 1234 -- claude\n",
+	}
+	modal := NewModal(content, 80, 24)
+	app.modal = &modal
+
+	output := app.View()
+	assertGolden(t, "modal_80x24", output)
 }

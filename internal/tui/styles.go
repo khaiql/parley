@@ -101,4 +101,19 @@ var (
 
 	separatorStyle = lipgloss.NewStyle().
 			Foreground(colorSeparator)
+
+	modalStyle = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(colorPrimary).
+			Padding(0, 1)
+
+	modalTitleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(colorPrimary).
+			MarginBottom(1)
+
+	modalFooterStyle = lipgloss.NewStyle().
+				Foreground(colorDimText).
+				Italic(true).
+				MarginTop(1)
 )

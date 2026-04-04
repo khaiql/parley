@@ -3,9 +3,11 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/protocol"
 )
 
@@ -22,6 +24,30 @@ func rawParams(t *testing.T, v interface{}) json.RawMessage {
 		t.Fatalf("marshal: %v", err)
 	}
 	return b
+}
+
+// fakeRoom is a minimal RoomQuerier for modal integration testing.
+type fakeRoom struct{}
+
+func (f *fakeRoom) GetID() string    { return "room-1" }
+func (f *fakeRoom) GetTopic() string { return "test-topic" }
+func (f *fakeRoom) GetPort() int     { return 9000 }
+func (f *fakeRoom) GetParticipants() []command.ParticipantInfo {
+	return []command.ParticipantInfo{
+		{Name: "alice", Role: "agent", Directory: "/tmp/alice", AgentType: "claude", Online: true},
+	}
+}
+func (f *fakeRoom) GetMessageCount() int { return 0 }
+
+func makeAppWithRegistry() App {
+	app := makeApp()
+	reg := command.NewRegistry()
+	reg.Register(command.InfoCommand)
+	ctx := command.Context{Room: &fakeRoom{}}
+	app.SetCommandRegistry(reg, ctx)
+	// Give the app a size so the modal can compute dimensions.
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	return model.(App)
 }
 
 func TestHandleServerMsg_RoomMessage_AddsToChat(t *testing.T) {
@@ -258,5 +284,90 @@ func TestHandleServerMsg_UnknownMethod_NoOp(t *testing.T) {
 	a.handleServerMsg(raw)
 	if len(a.sidebar.participants) != 0 {
 		t.Error("expected no participants after unknown method")
+	}
+}
+
+// ---- Modal integration -------------------------------------------------------
+
+func TestApp_InfoCommand_ShowsModal(t *testing.T) {
+	app := makeAppWithRegistry()
+
+	// Type "/info" and press Enter.
+	for _, ch := range "/info" {
+		model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		app = model.(App)
+	}
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+
+	if app.modal == nil {
+		t.Fatal("expected modal to be shown after /info command")
+	}
+	if len(app.chat.messages) != 0 {
+		t.Errorf("expected chat history to be clean, got %d messages", len(app.chat.messages))
+	}
+	view := app.View()
+	if !strings.Contains(view, "Room Info") {
+		t.Errorf("expected modal view to contain 'Room Info', got:\n%s", view)
+	}
+}
+
+func TestApp_ModalDismissedByEsc(t *testing.T) {
+	app := makeAppWithRegistry()
+
+	// Open modal via /info.
+	for _, ch := range "/info" {
+		model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		app = model.(App)
+	}
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.modal == nil {
+		t.Fatal("precondition: modal must be open")
+	}
+
+	// Dismiss with Esc.
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	app = model.(App)
+	if app.modal != nil {
+		t.Fatal("expected modal to be dismissed after Esc")
+	}
+}
+
+func TestApp_ModalDismissedByQ(t *testing.T) {
+	app := makeAppWithRegistry()
+
+	// Open modal via /info.
+	for _, ch := range "/info" {
+		model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		app = model.(App)
+	}
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+	if app.modal == nil {
+		t.Fatal("precondition: modal must be open")
+	}
+
+	// Dismiss with q.
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	app = model.(App)
+	if app.modal != nil {
+		t.Fatal("expected modal to be dismissed after q")
+	}
+}
+
+func TestApp_ModalView_ShowsModalContent(t *testing.T) {
+	app := makeAppWithRegistry()
+
+	for _, ch := range "/info" {
+		model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		app = model.(App)
+	}
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+
+	view := app.View()
+	if !strings.Contains(view, "Room Info") {
+		t.Errorf("expected modal view to contain 'Room Info', got:\n%s", view)
 	}
 }

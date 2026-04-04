@@ -44,6 +44,6 @@ var InfoCommand = &Command{
 		// Ready-to-copy join command.
 		info += fmt.Sprintf("\nJoin command:\n  parley join --port %d -- claude\n", port)
 
-		return Result{LocalMessage: info}
+		return Result{Modal: &ModalContent{Title: "Room Info", Body: info}}
 	},
 }
