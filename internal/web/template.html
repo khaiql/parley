@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parley — Chat History</title>
+<style>
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  height: 100vh;
+  overflow: hidden;
+  background: #f8f9fa;
+  color: #1a1a2e;
+  margin: 0;
+}
+
+#app {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 220px;
+  min-width: 220px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  border-right: 1px solid #2a2a4a;
+}
+
+.sidebar-logo {
+  padding: 20px 16px 12px;
+  border-bottom: 1px solid #2a2a4a;
+  text-align: center;
+}
+
+.sidebar-logo svg {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 8px;
+}
+
+.sidebar-logo .wordmark {
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+}
+
+.sidebar-logo .tagline {
+  font-size: 11px;
+  color: #8888aa;
+  margin-top: 2px;
+  text-transform: lowercase;
+}
+
+.sidebar-section {
+  padding: 16px 12px 8px;
+}
+
+.sidebar-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #6666aa;
+  margin-bottom: 10px;
+}
+
+.participant {
+  padding: 8px 10px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.participant:hover {
+  background: #2a2a4a;
+}
+
+.participant-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.participant-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #2a2a4a;
+  color: #aaaacc;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.participant-role {
+  font-size: 12px;
+  color: #8888aa;
+  margin-top: 2px;
+}
+
+.participant-dir {
+  font-size: 11px;
+  color: #666688;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-empty {
+  padding: 16px;
+  text-align: center;
+  color: #6666aa;
+  font-size: 12px;
+}
+
+/* Chat area */
+.chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.topic-bar {
+  padding: 12px 20px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a2e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.message {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.message + .message {
+  border-top: 1px solid #f0f0f0;
+}
+
+.message-avatar {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+  margin-top: 2px;
+}
+
+.message-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.message-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.message-name {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.message-time {
+  font-size: 12px;
+  color: #999;
+}
+
+.message-content {
+  font-size: 16px;
+  line-height: 1.6;
+  color: #333;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.message-content code {
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 14px;
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
+}
+
+.message-content pre {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  padding: 12px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 8px 0;
+  font-size: 14px;
+  line-height: 1.4;
+  font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
+}
+
+.message-content pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+.message-content strong {
+  font-weight: 700;
+}
+
+.message-content em {
+  font-style: italic;
+}
+
+.mention {
+  font-weight: 500;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.message-content p {
+  margin: 4px 0;
+}
+
+.message-content p:first-child {
+  margin-top: 0;
+}
+
+.message-content h1, .message-content h2, .message-content h3,
+.message-content h4, .message-content h5, .message-content h6 {
+  margin: 12px 0 6px;
+  font-weight: 600;
+  color: #1a1a2e;
+}
+
+.message-content h1 { font-size: 18px; }
+.message-content h2 { font-size: 16px; }
+.message-content h3 { font-size: 15px; }
+.message-content h4 { font-size: 14px; }
+
+.message-content ul, .message-content ol {
+  margin: 6px 0;
+  padding-left: 24px;
+}
+
+.message-content li {
+  margin: 3px 0;
+  line-height: 1.5;
+}
+
+.message-content table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+  width: auto;
+}
+
+.message-content th, .message-content td {
+  border: 1px solid #ddd;
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.message-content th {
+  background: #f5f5f5;
+  font-weight: 600;
+}
+
+.message-content tr:nth-child(even) {
+  background: #fafafa;
+}
+
+.system-message {
+  text-align: center;
+  padding: 6px 0;
+  font-size: 12px;
+  color: #999;
+  font-style: italic;
+}
+
+.chat-footer {
+  padding: 10px 20px;
+  border-top: 1px solid #e0e0e0;
+  background: #ffffff;
+  font-size: 11px;
+  color: #999;
+  text-align: center;
+}
+
+/* Empty state / drop zone */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+}
+
+.drop-zone {
+  width: 100%;
+  max-width: 480px;
+  border: 2px dashed #ccc;
+  border-radius: 12px;
+  padding: 48px 32px;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.drop-zone.dragover {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.drop-zone h2 {
+  font-size: 20px;
+  font-weight: 700;
+  color: #1a1a2e;
+  margin-bottom: 8px;
+}
+
+.drop-zone p {
+  font-size: 14px;
+  color: #666;
+  margin-bottom: 16px;
+}
+
+.drop-zone .file-hints {
+  font-size: 12px;
+  color: #999;
+  margin-top: 12px;
+}
+
+.drop-zone .file-hints code {
+  background: #f0f0f0;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.browse-btn {
+  display: inline-block;
+  padding: 8px 20px;
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: background 0.15s;
+}
+
+.browse-btn:hover {
+  background: #2563eb;
+}
+
+#file-input {
+  display: none;
+}
+</style>
+</head>
+<body>
+
+<script id="parley-data" type="application/json">{{PARLEY_DATA}}</script>
+<div id="app"></div>
+
+<script>
+(function() {
+  'use strict';
+
+  // ---------- Constants ----------
+
+  var HUMAN_COLORS = [
+    { solid: '#3b82f6', gradient: 'linear-gradient(135deg, #3b82f6, #60a5fa)' },
+    { solid: '#2563eb', gradient: 'linear-gradient(135deg, #2563eb, #3b82f6)' },
+    { solid: '#1d4ed8', gradient: 'linear-gradient(135deg, #1d4ed8, #2563eb)' }
+  ];
+
+  var AGENT_COLORS = [
+    { solid: '#8b5cf6', gradient: 'linear-gradient(135deg, #8b5cf6, #a78bfa)' },
+    { solid: '#059669', gradient: 'linear-gradient(135deg, #059669, #34d399)' },
+    { solid: '#d97706', gradient: 'linear-gradient(135deg, #d97706, #fbbf24)' },
+    { solid: '#dc2626', gradient: 'linear-gradient(135deg, #dc2626, #f87171)' },
+    { solid: '#0891b2', gradient: 'linear-gradient(135deg, #0891b2, #22d3ee)' },
+    { solid: '#7c3aed', gradient: 'linear-gradient(135deg, #7c3aed, #a78bfa)' }
+  ];
+
+  var LOGO_SVG = '<svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    + '<rect x="4" y="8" width="28" height="20" rx="4" fill="#6366f1" opacity="0.8"/>'
+    + '<rect x="16" y="16" width="28" height="20" rx="4" fill="#8b5cf6" opacity="0.9"/>'
+    + '<circle cx="24" cy="26" r="2" fill="#fff"/>'
+    + '<circle cx="30" cy="26" r="2" fill="#fff"/>'
+    + '<circle cx="36" cy="26" r="2" fill="#fff"/>'
+    + '<polygon points="18,36 22,42 26,36" fill="#8b5cf6" opacity="0.9"/>'
+    + '</svg>';
+
+  // ---------- Color assignment ----------
+
+  function hashName(name) {
+    var h = 0;
+    for (var i = 0; i < name.length; i++) {
+      h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+    }
+    return Math.abs(h);
+  }
+
+  function getColor(name, source) {
+    var palette = (source === 'human') ? HUMAN_COLORS : AGENT_COLORS;
+    return palette[hashName(name) % palette.length];
+  }
+
+  function buildColorMap(agents, messages) {
+    var map = {};
+    for (var i = 0; i < agents.length; i++) {
+      var a = agents[i];
+      map[a.name] = getColor(a.name, a.source);
+    }
+    // Also assign colors for message senders not in agents list
+    if (messages) {
+      for (var j = 0; j < messages.length; j++) {
+        var m = messages[j];
+        if (!map[m.from]) {
+          map[m.from] = getColor(m.from, m.source || 'agent');
+        }
+      }
+    }
+    return map;
+  }
+
+  // ---------- Markdown rendering ----------
+
+  function escapeHtml(text) {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderMarkdown(text, colorMap) {
+    // Extract fenced code blocks first (preserve raw content)
+    var codeBlocks = [];
+    text = text.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
+      var idx = codeBlocks.length;
+      codeBlocks.push('<pre><code>' + escapeHtml(code.replace(/\n$/, '')) + '</code></pre>');
+      return '\n\x00CODEBLOCK' + idx + '\x00\n';
+    });
+
+    // Process block-level elements line by line
+    var lines = text.split('\n');
+    var html = '';
+    var inList = false;
+    var listType = '';
+    var inTable = false;
+    var tableRows = [];
+
+    function closeList() {
+      if (inList) {
+        html += '</' + listType + '>';
+        inList = false;
+        listType = '';
+      }
+    }
+
+    function closeTable() {
+      if (inTable && tableRows.length > 0) {
+        html += renderTable(tableRows);
+        inTable = false;
+        tableRows = [];
+      }
+    }
+
+    function renderTable(rows) {
+      if (rows.length < 2) return rows.map(function(r) { return '<p>' + escapeHtml(r) + '</p>'; }).join('');
+      var out = '<table>';
+      // Header row
+      var headerCells = splitTableRow(rows[0]);
+      out += '<thead><tr>';
+      for (var h = 0; h < headerCells.length; h++) {
+        out += '<th>' + renderInline(escapeHtml(headerCells[h].trim()), colorMap) + '</th>';
+      }
+      out += '</tr></thead><tbody>';
+      // Skip separator row (index 1), render data rows
+      for (var r = 2; r < rows.length; r++) {
+        var cells = splitTableRow(rows[r]);
+        out += '<tr>';
+        for (var c = 0; c < cells.length; c++) {
+          out += '<td>' + renderInline(escapeHtml(cells[c].trim()), colorMap) + '</td>';
+        }
+        out += '</tr>';
+      }
+      out += '</tbody></table>';
+      return out;
+    }
+
+    function splitTableRow(row) {
+      // Remove leading/trailing pipes and split
+      var trimmed = row.replace(/^\|/, '').replace(/\|$/, '');
+      return trimmed.split('|');
+    }
+
+    function isTableSeparator(line) {
+      return /^\|?[\s:]*-{2,}[\s:]*(\|[\s:]*-{2,}[\s:]*)*\|?$/.test(line.trim());
+    }
+
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+
+      // Code block placeholder
+      var cbMatch = line.match(/^\x00CODEBLOCK(\d+)\x00$/);
+      if (cbMatch) {
+        closeList();
+        closeTable();
+        html += codeBlocks[parseInt(cbMatch[1], 10)];
+        continue;
+      }
+
+      // Table detection: line starts with | or next line is a separator
+      var trimmedLine = line.trim();
+      if (trimmedLine.indexOf('|') !== -1 && trimmedLine.charAt(0) === '|') {
+        // Check if this is a table row
+        if (!inTable) {
+          // Check if next line is a separator (confirms table)
+          if (i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+            closeList();
+            inTable = true;
+            tableRows = [trimmedLine];
+            continue;
+          }
+        }
+        if (inTable) {
+          if (isTableSeparator(trimmedLine)) {
+            tableRows.push(trimmedLine); // separator row
+          } else {
+            tableRows.push(trimmedLine);
+          }
+          continue;
+        }
+      } else if (inTable) {
+        closeTable();
+      }
+
+      // Headings
+      var headingMatch = trimmedLine.match(/^(#{1,6})\s+(.+)$/);
+      if (headingMatch) {
+        closeList();
+        var level = headingMatch[1].length;
+        html += '<h' + level + '>' + renderInline(escapeHtml(headingMatch[2]), colorMap) + '</h' + level + '>';
+        continue;
+      }
+
+      // Unordered list items
+      var ulMatch = trimmedLine.match(/^[-*+]\s+(.+)$/);
+      if (ulMatch) {
+        closeTable();
+        if (!inList || listType !== 'ul') {
+          closeList();
+          html += '<ul>';
+          inList = true;
+          listType = 'ul';
+        }
+        html += '<li>' + renderInline(escapeHtml(ulMatch[1]), colorMap) + '</li>';
+        continue;
+      }
+
+      // Ordered list items
+      var olMatch = trimmedLine.match(/^\d+[\.\)]\s+(.+)$/);
+      if (olMatch) {
+        closeTable();
+        if (!inList || listType !== 'ol') {
+          closeList();
+          html += '<ol>';
+          inList = true;
+          listType = 'ol';
+        }
+        html += '<li>' + renderInline(escapeHtml(olMatch[1]), colorMap) + '</li>';
+        continue;
+      }
+
+      // Empty line
+      if (trimmedLine === '') {
+        closeList();
+        closeTable();
+        continue;
+      }
+
+      // Normal paragraph line
+      closeList();
+      closeTable();
+      html += '<p>' + renderInline(escapeHtml(trimmedLine), colorMap) + '</p>';
+    }
+
+    closeList();
+    closeTable();
+
+    return html;
+  }
+
+  // Render inline markdown: code, bold, italic, mentions
+  function renderInline(text, colorMap) {
+    // Inline code (must be first to prevent further processing inside code)
+    text = text.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    // Bold
+    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+    // Italic
+    text = text.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+    // @mentions
+    text = text.replace(/@(\w[\w-]*)/g, function(match, name) {
+      var color = colorMap[name] || getColor(name, 'agent');
+      return '<span class="mention" style="color:' + color.solid + '">@' + name + '</span>';
+    });
+
+    return text;
+  }
+
+  // ---------- Time formatting ----------
+
+  function formatTime(ts) {
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function formatDate(ts) {
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  // ---------- Render functions ----------
+
+  function renderSidebar(agents) {
+    var html = '<div class="sidebar-logo">'
+      + LOGO_SVG
+      + '<div class="wordmark">Parley</div>'
+      + '<div class="tagline">multi-agent group chat</div>'
+      + '</div>';
+
+    html += '<div class="sidebar-section">';
+    html += '<div class="sidebar-section-title">Participants</div>';
+
+    if (!agents || agents.length === 0) {
+      html += '<div class="sidebar-empty">No data loaded</div>';
+    } else {
+      var colorMap = buildColorMap(agents);
+      for (var i = 0; i < agents.length; i++) {
+        var a = agents[i];
+        var color = colorMap[a.name];
+        html += '<div class="participant">';
+        html += '<div class="participant-name" style="color:' + color.solid + '">' + escapeHtml(a.name);
+        if (a.agent_type) {
+          html += '<span class="participant-badge">' + escapeHtml(a.agent_type) + '</span>';
+        }
+        html += '</div>';
+        if (a.role) {
+          html += '<div class="participant-role">' + escapeHtml(a.role) + '</div>';
+        }
+        if (a.directory) {
+          html += '<div class="participant-dir" title="' + escapeHtml(a.directory) + '">' + escapeHtml(a.directory) + '</div>';
+        }
+        html += '</div>';
+      }
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  function renderMessages(messages, colorMap) {
+    if (!messages || messages.length === 0) {
+      return '<div style="padding:40px;text-align:center;color:#999;">No messages yet.</div>';
+    }
+
+    var html = '';
+    var lastDate = '';
+
+    for (var i = 0; i < messages.length; i++) {
+      var msg = messages[i];
+      var msgDate = formatDate(msg.timestamp);
+      if (msgDate && msgDate !== lastDate) {
+        html += '<div style="text-align:center;padding:12px 0 8px;font-size:11px;color:#999;font-weight:600;">' + msgDate + '</div>';
+        lastDate = msgDate;
+      }
+
+      var color = colorMap[msg.from] || getColor(msg.from, msg.source || 'agent');
+      var initial = msg.from ? msg.from.charAt(0).toUpperCase() : '?';
+
+      // Extract only type=text content blocks (matches TUI extractText)
+      var text = '';
+      if (msg.content) {
+        for (var j = 0; j < msg.content.length; j++) {
+          if (msg.content[j].type === 'text' && msg.content[j].text) {
+            text += (text ? '\n' : '') + msg.content[j].text;
+          }
+        }
+      }
+
+      // System messages: render as muted inline text (matches TUI)
+      if (msg.source === 'system' || (!msg.source && msg.role === 'system')) {
+        html += '<div class="system-message">[system] ' + escapeHtml(text) + '</div>';
+        continue;
+      }
+
+      html += '<div class="message">';
+      html += '<div class="message-avatar" style="background:' + color.gradient + '">' + initial + '</div>';
+      html += '<div class="message-body">';
+      html += '<div class="message-header">';
+      html += '<span class="message-name" style="color:' + color.solid + '">' + escapeHtml(msg.from) + '</span>';
+      html += '<span class="message-time">' + formatTime(msg.timestamp) + '</span>';
+      html += '</div>';
+      html += '<div class="message-content">' + renderMarkdown(text, colorMap) + '</div>';
+      html += '</div>';
+      html += '</div>';
+    }
+
+    return html;
+  }
+
+  function renderApp(data) {
+    var agents = data.agents || [];
+    var messages = data.messages || [];
+    var room = data.room || {};
+    var colorMap = buildColorMap(agents, messages);
+
+    var topic = room.topic || 'Chat History';
+    var msgCount = messages.length;
+    var dateRange = '';
+    if (msgCount > 0) {
+      var first = formatDate(messages[0].timestamp);
+      var last = formatDate(messages[msgCount - 1].timestamp);
+      dateRange = first === last ? first : first + ' — ' + last;
+    }
+
+    document.getElementById('app').innerHTML = '<div class="sidebar">' + renderSidebar(agents) + '</div>'
+      + '<div class="chat-area">'
+      + '<div class="topic-bar">' + escapeHtml(topic) + '</div>'
+      + '<div class="messages">' + renderMessages(messages, colorMap) + '</div>'
+      + '<div class="chat-footer">'
+      + msgCount + ' message' + (msgCount !== 1 ? 's' : '')
+      + (dateRange ? ' &middot; ' + dateRange : '')
+      + ' &middot; Exported from Parley'
+      + '</div>'
+      + '</div>';
+  }
+
+  function renderEmpty() {
+    document.getElementById('app').innerHTML = '<div class="sidebar">' + renderSidebar(null) + '</div>'
+      + '<div class="chat-area">'
+      + '<div class="empty-state">'
+      + '<div class="drop-zone" id="drop-zone">'
+      + LOGO_SVG.replace('viewBox="0 0 48 48"', 'viewBox="0 0 48 48" width="64" height="64"')
+      + '<h2>View Chat History</h2>'
+      + '<p>Drop your Parley room files here to preview</p>'
+      + '<button class="browse-btn" onclick="document.getElementById(\'file-input\').click()">Browse Files</button>'
+      + '<input type="file" id="file-input" multiple accept=".json">'
+      + '<div class="file-hints">Expected files: <code>room.json</code> <code>messages.json</code> <code>agents.json</code></div>'
+      + '</div>'
+      + '</div>'
+      + '</div>';
+
+    setupDragDrop();
+  }
+
+  // ---------- Drag-and-drop ----------
+
+  function handleFiles(fileList) {
+    var data = { room: null, messages: null, agents: null };
+    var remaining = fileList.length;
+
+    if (remaining === 0) return;
+
+    for (var i = 0; i < fileList.length; i++) {
+      (function(file) {
+        var reader = new FileReader();
+        reader.onload = function(e) {
+          try {
+            var parsed = JSON.parse(e.target.result);
+            var name = file.name.toLowerCase();
+            if (name === 'room.json') {
+              data.room = parsed;
+            } else if (name === 'messages.json') {
+              data.messages = parsed;
+            } else if (name === 'agents.json') {
+              data.agents = parsed;
+            }
+          } catch (err) {
+            console.warn('Failed to parse ' + file.name + ':', err);
+          }
+          remaining--;
+          if (remaining === 0 && (data.room || data.messages || data.agents)) {
+            data.room = data.room || {};
+            data.messages = data.messages || [];
+            data.agents = data.agents || [];
+            renderApp(data);
+          }
+        };
+        reader.readAsText(file);
+      })(fileList[i]);
+    }
+  }
+
+  function setupDragDrop() {
+    var dropZone = document.getElementById('drop-zone');
+    var fileInput = document.getElementById('file-input');
+    if (!dropZone) return;
+
+    var dragCounter = 0;
+
+    document.addEventListener('dragenter', function(e) {
+      e.preventDefault();
+      dragCounter++;
+      dropZone.classList.add('dragover');
+    });
+
+    document.addEventListener('dragleave', function(e) {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter <= 0) {
+        dragCounter = 0;
+        dropZone.classList.remove('dragover');
+      }
+    });
+
+    document.addEventListener('dragover', function(e) {
+      e.preventDefault();
+    });
+
+    document.addEventListener('drop', function(e) {
+      e.preventDefault();
+      dragCounter = 0;
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer && e.dataTransfer.files.length > 0) {
+        handleFiles(e.dataTransfer.files);
+      }
+    });
+
+    if (fileInput) {
+      fileInput.addEventListener('change', function() {
+        if (fileInput.files.length > 0) {
+          handleFiles(fileInput.files);
+        }
+      });
+    }
+  }
+
+  // ---------- Init ----------
+
+  function init() {
+    var dataEl = document.getElementById('parley-data');
+    if (dataEl) {
+      var raw = dataEl.textContent.trim();
+      if (raw && raw !== '{{PARLEY_DATA}}' && raw.charAt(0) === '{') {
+        try {
+          var data = JSON.parse(raw);
+          renderApp(data);
+          return;
+        } catch (err) {
+          console.warn('Failed to parse embedded data:', err);
+        }
+      }
+    }
+    renderEmpty();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+</script>
+
+</body>
+</html>
