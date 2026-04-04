@@ -245,3 +245,23 @@ func TestResult_HasModalField(t *testing.T) {
 		t.Errorf("unexpected Title: %s", r.Modal.Title)
 	}
 }
+
+func TestRegistryCommands_ReturnsFullObjects(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(InfoCommand)
+	reg.Register(SaveCommand)
+
+	cmds := reg.Commands()
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2 commands, got %d", len(cmds))
+	}
+	if cmds[0].Name != "info" {
+		t.Errorf("expected first command 'info', got %q", cmds[0].Name)
+	}
+	if cmds[0].Description == "" {
+		t.Error("expected non-empty description for info command")
+	}
+	if cmds[1].Name != "save" {
+		t.Errorf("expected second command 'save', got %q", cmds[1].Name)
+	}
+}
