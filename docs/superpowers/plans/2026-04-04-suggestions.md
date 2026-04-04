@@ -594,7 +594,7 @@ git commit -m "feat(tui): add ReplaceRange method to Input"
 
 - [ ] **Step 1: Write failing tests for trigger detection and selection**
 
-Append to `internal/tui/app_test.go`:
+Append to `internal/tui/app_test.go`. Note: the file already imports `fmt`, `tea`, `protocol`, and `command` (via `"github.com/khaiql/parley/internal/command"`). Add the `command` import if not present.
 
 ```go
 func TestApp_SlashTrigger_ActivatesSuggestions(t *testing.T) {
@@ -741,15 +741,12 @@ Expected: FAIL — methods not defined
 
 Add new fields and methods to `internal/tui/app.go`.
 
-Add fields to the `App` struct:
+Add three new fields to the `App` struct in `internal/tui/app.go`, after the existing `spinnerActive` field:
 
 ```go
-type App struct {
-	// ... existing fields ...
-	suggestions      Suggestions
+	suggestions       Suggestions
 	completionTrigger rune // '/' or '@', or 0 if inactive
-	completionStart  int  // cursor position where trigger character was typed
-}
+	completionStart   int  // cursor position where trigger character was typed
 ```
 
 Add helper methods:
@@ -862,7 +859,21 @@ git commit -m "feat(tui): wire Suggestions into App with trigger detection"
 
 - [ ] **Step 1: Update App.Update to route keys when suggestions are visible**
 
-In `internal/tui/app.go`, modify the `Update` method's `tea.KeyMsg` handling. Replace the current `case tea.KeyMsg:` block with:
+In `internal/tui/app.go`, modify the `Update` method's `tea.KeyMsg` handling. The current code has this structure:
+
+```go
+case tea.KeyMsg:
+    switch m.Type {
+    case tea.KeyCtrlC:
+        return a, tea.Quit
+    case tea.KeyEnter:
+        // ... handleBackslashNewline + command dispatch + send
+    default:
+        // ignore other keys
+    }
+```
+
+Replace the entire `case tea.KeyMsg:` block with:
 
 ```go
 case tea.KeyMsg:
@@ -900,9 +911,16 @@ case tea.KeyMsg:
 			return a, nil
 		}
 		if a.input.mode == InputModeHuman {
-			text := strings.TrimSpace(a.input.Value())
+			text := a.input.Value()
+			// Check for backslash-newline
+			if newText, consumed := handleBackslashNewline(text); consumed {
+				a.input.ta.SetValue(newText)
+				return a, nil
+			}
+			text = strings.TrimSpace(text)
 			if text != "" {
 				a.input.Reset()
+				// Slash command dispatch.
 				if a.registry != nil && command.IsCommand(text) {
 					result := a.registry.Execute(a.cmdCtx, text)
 					if result.Error != nil {
@@ -924,7 +942,17 @@ case tea.KeyMsg:
 	}
 ```
 
-After the child component forwarding (after `cmds = append(cmds, a.input.Update(msg))` and `cmds = append(cmds, a.chat.Update(msg))`), add trigger detection and filter update:
+After the existing child component forwarding block (which currently forwards key events only to input, not chat):
+
+```go
+// Forward key events only to input, not chat (prevents scroll jumping).
+cmds = append(cmds, a.input.Update(msg))
+if _, isKey := msg.(tea.KeyMsg); !isKey {
+    cmds = append(cmds, a.chat.Update(msg))
+}
+```
+
+Add trigger detection and filter update right after:
 
 ```go
 // Check for suggestion triggers and update filter after input changes.
@@ -939,7 +967,7 @@ if _, ok := msg.(tea.KeyMsg); ok && a.input.mode == InputModeHuman {
 
 - [ ] **Step 2: Update App.View to render suggestions between chat and input**
 
-Replace the `View` method:
+Replace the `View` method. The current View renders: topbar, middle (chat+sidebar), input, statusbar. Insert suggestions between input and statusbar (just above the input visually makes sense, but since statusbar is at the very bottom, place suggestions between middle and input):
 
 ```go
 func (a App) View() string {
@@ -952,21 +980,22 @@ func (a App) View() string {
 	if a.suggestions.Visible() {
 		parts = append(parts, a.suggestions.View())
 	}
-	parts = append(parts, a.input.View())
+	parts = append(parts, a.input.View(), a.statusbar.View())
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 ```
 
 - [ ] **Step 3: Update App.layout to account for suggestions height**
 
-Replace the `layout` method:
+Replace the `layout` method. The current layout accounts for topbar (1), input, and statusbar (1). Add suggestionsHeight:
 
 ```go
 func (a *App) layout() {
 	topbarHeight := 1
 	inputHeight := a.input.Height()
+	statusbarHeight := 1
 	suggestionsHeight := a.suggestions.Height()
-	chatHeight := a.height - topbarHeight - inputHeight - suggestionsHeight
+	chatHeight := a.height - topbarHeight - inputHeight - statusbarHeight - suggestionsHeight
 	if chatHeight < 0 {
 		chatHeight = 0
 	}
@@ -980,6 +1009,7 @@ func (a *App) layout() {
 	a.chat.SetSize(chatWidth, chatHeight)
 	a.sidebar.SetSize(sidebarWidth, chatHeight)
 	a.input.SetWidth(a.width)
+	a.statusbar.SetWidth(a.width)
 	a.suggestions.SetWidth(a.width)
 }
 ```

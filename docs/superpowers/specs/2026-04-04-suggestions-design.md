@@ -99,8 +99,8 @@ Everything before the trigger character stays untouched. Example: `hello @clau` 
 
 ## Layout
 
-Current: `topbar | chat | input`
-With suggestions: `topbar | chat | suggestions | input`
+Current: `topbar | chat+sidebar | input | statusbar`
+With suggestions: `topbar | chat+sidebar | suggestions | input | statusbar`
 
 `App.layout()` subtracts suggestion box height from chat viewport when suggestions are visible, so chat shrinks temporarily.
 
