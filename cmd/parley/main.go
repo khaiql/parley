@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"strings"
-	"math/rand/v2"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -243,7 +244,8 @@ func randomName() string {
 		"pascal", "pickle", "quokka", "ruckus", "sprocket",
 		"turing", "umbra", "vortex", "wombat", "yeti",
 	}
-	return names[rand.IntN(len(names))]
+	n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(names))))
+	return names[n.Int64()]
 }
 
 func runJoin(cmd *cobra.Command, args []string) error {
