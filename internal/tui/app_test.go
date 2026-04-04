@@ -121,6 +121,9 @@ func TestHandleServerMsg_RoomJoined_AddsParticipant(t *testing.T) {
 	if a.sidebar.participants[0].Name != "carol" {
 		t.Errorf("unexpected participant name: %s", a.sidebar.participants[0].Name)
 	}
+	if !a.sidebar.participants[0].Online {
+		t.Errorf("expected joined participant to be online")
+	}
 }
 
 func TestHandleServerMsg_RoomLeft_SetsParticipantOffline(t *testing.T) {
