@@ -144,6 +144,24 @@ func (i Input) View() string {
 	return inputStyle.Width(i.width).Render(content)
 }
 
+// ReplaceRange replaces characters from position start to end with the given
+// text and positions the cursor after the inserted text.
+func (i *Input) ReplaceRange(start, end int, text string) {
+	val := i.ta.Value()
+	runes := []rune(val)
+	if start < 0 {
+		start = 0
+	}
+	if end > len(runes) {
+		end = len(runes)
+	}
+	newRunes := append(runes[:start], append([]rune(text), runes[end:]...)...)
+	i.ta.SetValue(string(newRunes))
+	// Position cursor after inserted text.
+	cursorPos := start + len([]rune(text))
+	i.ta.SetCursor(cursorPos)
+}
+
 // handleBackslashNewline checks if text ends with a backslash.
 // If so, returns the text with the backslash replaced by a newline and true.
 // Otherwise returns the original text and false.

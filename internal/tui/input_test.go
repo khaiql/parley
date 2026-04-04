@@ -118,3 +118,34 @@ func TestInputBackslashNewline_NoTrailingBackslash(t *testing.T) {
 		t.Error("should not consume when no trailing backslash")
 	}
 }
+
+func TestInput_ReplaceRange(t *testing.T) {
+	inp := NewInput()
+	inp.SetWidth(80)
+
+	// Simulate typing "hello @clau" by setting textarea value.
+	inp.ta.SetValue("hello @clau")
+
+	// Replace "@clau" (positions 6-11) with "@claude "
+	inp.ReplaceRange(6, 11, "@claude ")
+
+	got := inp.Value()
+	if got != "hello @claude " {
+		t.Errorf("expected 'hello @claude ', got %q", got)
+	}
+}
+
+func TestInput_ReplaceRange_AtStart(t *testing.T) {
+	inp := NewInput()
+	inp.SetWidth(80)
+
+	inp.ta.SetValue("/sa")
+
+	// Replace entire input (positions 0-3) with "/save "
+	inp.ReplaceRange(0, 3, "/save ")
+
+	got := inp.Value()
+	if got != "/save " {
+		t.Errorf("expected '/save ', got %q", got)
+	}
+}
