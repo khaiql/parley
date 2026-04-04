@@ -64,4 +64,8 @@ var (
 	listeningStatusStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#3fb950")).
 				Italic(true)
+
+	offlineNameStyle = lipgloss.NewStyle().
+				Foreground(colorDimText).
+				Italic(true)
 )

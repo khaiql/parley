@@ -69,6 +69,16 @@ func (s *Sidebar) RemoveParticipant(name string) {
 	s.participants = filtered
 }
 
+// SetParticipantOffline marks a participant as offline rather than removing them.
+func (s *Sidebar) SetParticipantOffline(name string) {
+	for i, p := range s.participants {
+		if p.Name == name {
+			s.participants[i].Online = false
+			break
+		}
+	}
+}
+
 // View renders the sidebar as a string.
 func (s Sidebar) View() string {
 	innerWidth := s.width - 4 // account for border + padding
@@ -79,9 +89,26 @@ func (s Sidebar) View() string {
 	title := sidebarTitleStyle.Render("participants")
 	lines := []string{title}
 
+	// Sort: online participants first, then offline.
+	online := make([]protocol.Participant, 0, len(s.participants))
+	offline := make([]protocol.Participant, 0)
 	for _, p := range s.participants {
-		nameLine := nameStyle(p.Name, s.nameColors).Render(p.Name)
-		lines = append(lines, nameLine)
+		if p.Online {
+			online = append(online, p)
+		} else {
+			offline = append(offline, p)
+		}
+	}
+	sorted := append(online, offline...)
+
+	for _, p := range sorted {
+		if p.Online {
+			nameLine := nameStyle(p.Name, s.nameColors).Render(p.Name)
+			lines = append(lines, nameLine)
+		} else {
+			nameLine := offlineNameStyle.Render(p.Name + " (offline)")
+			lines = append(lines, nameLine)
+		}
 
 		// Show per-participant status when non-empty.
 		if status := s.statuses[p.Name]; status != "" {

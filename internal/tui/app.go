@@ -275,7 +275,7 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 	case "room.left":
 		var params protocol.LeftParams
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.sidebar.RemoveParticipant(params.Name)
+			a.sidebar.SetParticipantOffline(params.Name)
 		}
 
 	case "room.status":

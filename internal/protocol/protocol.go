@@ -117,6 +117,7 @@ type Participant struct {
 	Repo      string `json:"repo,omitempty"`
 	AgentType string `json:"agent_type,omitempty"`
 	Source    string `json:"source,omitempty"`
+	Online    bool   `json:"online"`
 }
 
 // RoomStateParams is the params payload for a "room/state" notification.
