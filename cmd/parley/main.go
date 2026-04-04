@@ -513,7 +513,7 @@ func isMentioned(mentions []string, name string) bool {
 	return false
 }
 
-func runExport(cmd *cobra.Command, args []string) error {
+func runExport(_ *cobra.Command, args []string) error {
 	roomID := args[0]
 	dir := server.RoomDir(roomID)
 

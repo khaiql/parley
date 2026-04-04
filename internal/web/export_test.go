@@ -187,7 +187,7 @@ func TestExport_EscapesScriptTags(t *testing.T) {
 	messages := []map[string]any{
 		{
 			"id": "msg-1", "seq": 1, "from": "Attacker", "source": "agent",
-			"role": "assistant",
+			"role":    "assistant",
 			"content": []map[string]string{{"type": "text", "text": "</script><script>alert('xss')</script>"}},
 		},
 	}
@@ -211,9 +211,8 @@ func TestExport_EscapesScriptTags(t *testing.T) {
 	if strings.Contains(dataContent, `</script>`) && !strings.Contains(dataContent, `<\/script>`) {
 		t.Error("embedded data contains unescaped </script> tag — XSS vulnerability")
 	}
-	if !strings.Contains(dataContent, `<\\/script>`) {
-		// In JSON, the backslash is escaped, so </script> becomes <\/script>
-		// which in JSON string is <\\/script>
+	if !strings.Contains(dataContent, `<\/script>`) {
+		t.Error(`embedded data does not contain properly escaped <\/script> string`)
 	}
 
 	// The embedded JSON should still be valid after escaping.
@@ -230,11 +229,14 @@ func TestExport_EscapesScriptTags(t *testing.T) {
 
 func writeTestJSON(t *testing.T, path string, v any) {
 	t.Helper()
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
 		t.Fatalf("marshal JSON: %v", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }

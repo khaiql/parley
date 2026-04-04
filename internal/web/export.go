@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -52,16 +53,18 @@ func Export(dir string, w io.Writer) error {
 		Messages: messages,
 	}
 
-	bundleJSON, err := json.Marshal(bundle)
-	if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(bundle); err != nil {
 		return fmt.Errorf("marshal bundle: %w", err)
 	}
 
 	// Escape </script> sequences in the JSON to prevent breaking out of the
-	// <script> tag. The raw JSON is read from disk and not re-escaped by
-	// json.Marshal (since it's json.RawMessage), so literal </script> in
-	// message text would terminate the data tag early.
-	escaped := strings.ReplaceAll(string(bundleJSON), "</script>", `<\/script>`)
+	// <script> tag. By disabling SetEscapeHTML above, we avoid bloating the
+	// export with \u003c for every single '<' character in code blocks.
+	// We only need to escape </script> here to be safe from XSS breakout.
+	escaped := strings.ReplaceAll(buf.String(), "</script>", `<\/script>`)
 	output := strings.Replace(templateHTML, placeholder, escaped, 1)
 	_, err = io.WriteString(w, output)
 	return err
