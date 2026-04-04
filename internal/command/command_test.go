@@ -220,3 +220,21 @@ func TestSendCommandNoSubCommand(t *testing.T) {
 		t.Fatal("expected error when no sub-command specified")
 	}
 }
+
+func TestResult_HasModalField(t *testing.T) {
+	// Compile-time assertion that Result has a Modal field of the right type.
+	r := Result{
+		Modal: &ModalContent{
+			Title:  "Test",
+			Body:   "hello",
+			Width:  80,
+			Height: 24,
+		},
+	}
+	if r.Modal == nil {
+		t.Fatal("Modal field must not be nil")
+	}
+	if r.Modal.Title != "Test" {
+		t.Errorf("unexpected Title: %s", r.Modal.Title)
+	}
+}
