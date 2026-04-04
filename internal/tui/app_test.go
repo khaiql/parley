@@ -371,3 +371,129 @@ func TestApp_ModalView_ShowsModalContent(t *testing.T) {
 		t.Errorf("expected modal view to contain 'Room Info', got:\n%s", view)
 	}
 }
+
+func TestApp_SlashTrigger_ActivatesSuggestions(t *testing.T) {
+	a := makeApp()
+	reg := command.NewRegistry()
+	reg.Register(&command.Command{Name: "info", Usage: "/info", Description: "Room info"})
+	reg.Register(&command.Command{Name: "save", Usage: "/save", Description: "Save state"})
+	a.SetCommandRegistry(reg, command.Context{})
+
+	a.input.ta.SetValue("/")
+	a.checkSuggestionTrigger()
+
+	if !a.suggestions.Visible() {
+		t.Error("expected suggestions visible after typing /")
+	}
+	if a.completionTrigger != '/' {
+		t.Errorf("expected trigger '/', got %c", a.completionTrigger)
+	}
+}
+
+func TestApp_AtTrigger_ActivatesSuggestions(t *testing.T) {
+	a := makeApp()
+	a.sidebar.SetParticipants([]protocol.Participant{
+		{Name: "claude", Role: "agent", Online: true},
+		{Name: "gemini", Role: "agent", Online: true},
+	})
+
+	a.input.ta.SetValue("@")
+	a.checkSuggestionTrigger()
+
+	if !a.suggestions.Visible() {
+		t.Error("expected suggestions visible after typing @")
+	}
+	if a.completionTrigger != '@' {
+		t.Errorf("expected trigger '@', got %c", a.completionTrigger)
+	}
+}
+
+func TestApp_AtTrigger_MidMessage(t *testing.T) {
+	a := makeApp()
+	a.sidebar.SetParticipants([]protocol.Participant{
+		{Name: "claude", Role: "agent", Online: true},
+	})
+
+	a.input.ta.SetValue("hello @")
+	a.checkSuggestionTrigger()
+
+	if !a.suggestions.Visible() {
+		t.Error("expected suggestions visible after 'hello @'")
+	}
+	if a.completionStart != 6 {
+		t.Errorf("expected completionStart 6, got %d", a.completionStart)
+	}
+}
+
+func TestApp_AtTrigger_NotAfterAlpha(t *testing.T) {
+	a := makeApp()
+	a.sidebar.SetParticipants([]protocol.Participant{
+		{Name: "claude", Role: "agent", Online: true},
+	})
+
+	a.input.ta.SetValue("email@")
+	a.checkSuggestionTrigger()
+
+	if a.suggestions.Visible() {
+		t.Error("expected suggestions NOT visible after 'email@'")
+	}
+}
+
+func TestApp_SlashTrigger_NilRegistry_NoActivation(t *testing.T) {
+	a := makeApp()
+
+	a.input.ta.SetValue("/")
+	a.checkSuggestionTrigger()
+
+	if a.suggestions.Visible() {
+		t.Error("expected suggestions NOT visible when registry is nil")
+	}
+}
+
+func TestApp_AcceptSuggestion_InsertsText(t *testing.T) {
+	a := makeApp()
+	a.sidebar.SetParticipants([]protocol.Participant{
+		{Name: "claude", Role: "agent", Online: true},
+		{Name: "gemini", Role: "agent", Online: true},
+	})
+
+	a.input.ta.SetValue("hello @cl")
+	a.completionTrigger = '@'
+	a.completionStart = 6
+	a.suggestions.SetItems([]SuggestionItem{
+		{Label: "@claude", Description: "agent"},
+		{Label: "@gemini", Description: "agent"},
+	})
+	a.suggestions.Filter("cl")
+
+	a.acceptSuggestion()
+
+	got := a.input.Value()
+	if got != "hello @claude " {
+		t.Errorf("expected 'hello @claude ', got %q", got)
+	}
+	if a.suggestions.Visible() {
+		t.Error("expected suggestions hidden after accept")
+	}
+}
+
+func TestApp_FilterSuggestions_NarrowsList(t *testing.T) {
+	a := makeApp()
+	reg := command.NewRegistry()
+	reg.Register(&command.Command{Name: "info", Usage: "/info", Description: "Room info"})
+	reg.Register(&command.Command{Name: "save", Usage: "/save", Description: "Save state"})
+	a.SetCommandRegistry(reg, command.Context{})
+
+	a.input.ta.SetValue("/")
+	a.checkSuggestionTrigger()
+
+	a.input.ta.SetValue("/s")
+	a.updateSuggestionFilter()
+
+	if len(a.suggestions.filtered) != 1 {
+		t.Fatalf("expected 1 filtered item, got %d", len(a.suggestions.filtered))
+	}
+	if a.suggestions.filtered[0].Label != "/save" {
+		t.Errorf("expected /save, got %s", a.suggestions.filtered[0].Label)
+	}
+}

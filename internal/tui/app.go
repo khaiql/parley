@@ -61,9 +61,12 @@ type App struct {
 	cmdCtx          command.Context          // context passed to slash commands
 	lastInputHeight int                      // cached to avoid redundant re-layouts
 	pendingHistory  []protocol.MessageParams // set during room.state, loaded async
-	spinnerActive   bool
-	width           int
-	height          int
+	spinnerActive     bool
+	suggestions       Suggestions
+	completionTrigger rune // '/' or '@', or 0 if inactive
+	completionStart   int  // cursor position where trigger character was typed
+	width             int
+	height            int
 }
 
 // NewApp creates an App with the given topic, port, input mode, display name,
@@ -280,6 +283,91 @@ func (a *App) maybeStartSpinner() tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// checkSuggestionTrigger scans the current input value for a trigger character
+// and activates suggestions if found.
+func (a *App) checkSuggestionTrigger() {
+	if a.suggestions.Visible() {
+		return // already active
+	}
+	val := a.input.Value()
+	if val == "" {
+		return
+	}
+	runes := []rune(val)
+	last := runes[len(runes)-1]
+
+	switch last {
+	case '/':
+		// Only trigger at the very start of input.
+		if len(runes) == 1 && a.registry != nil {
+			a.completionTrigger = '/'
+			a.completionStart = 0
+			items := make([]SuggestionItem, 0)
+			for _, cmd := range a.registry.Commands() {
+				items = append(items, SuggestionItem{
+					Label:       "/" + cmd.Name,
+					Description: cmd.Description,
+				})
+			}
+			a.suggestions.SetItems(items)
+		}
+	case '@':
+		// Trigger at start of input or after whitespace.
+		pos := len(runes) - 1
+		if pos == 0 || runes[pos-1] == ' ' || runes[pos-1] == '\n' {
+			a.completionTrigger = '@'
+			a.completionStart = pos
+			items := make([]SuggestionItem, 0)
+			for _, p := range a.sidebar.participants {
+				if p.Online {
+					items = append(items, SuggestionItem{
+						Label:       "@" + p.Name,
+						Description: p.Role,
+					})
+				}
+			}
+			a.suggestions.SetItems(items)
+		}
+	}
+}
+
+// updateSuggestionFilter extracts the query from the current input and filters.
+func (a *App) updateSuggestionFilter() {
+	if !a.suggestions.Visible() {
+		return
+	}
+	val := a.input.Value()
+	runes := []rune(val)
+
+	// If user deleted back past the trigger, dismiss.
+	if len(runes) <= a.completionStart {
+		a.dismissSuggestions()
+		return
+	}
+
+	query := string(runes[a.completionStart+1:])
+	a.suggestions.Filter(query)
+}
+
+// acceptSuggestion inserts the selected suggestion into the input.
+func (a *App) acceptSuggestion() {
+	sel := a.suggestions.Selected()
+	if sel.Label == "" {
+		a.dismissSuggestions()
+		return
+	}
+	end := len([]rune(a.input.Value()))
+	a.input.ReplaceRange(a.completionStart, end, sel.Label+" ")
+	a.dismissSuggestions()
+}
+
+// dismissSuggestions hides the suggestion list and resets trigger state.
+func (a *App) dismissSuggestions() {
+	a.suggestions.Hide()
+	a.completionTrigger = 0
+	a.completionStart = 0
 }
 
 // handleServerMsg dispatches an incoming RawMessage to the appropriate handler
