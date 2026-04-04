@@ -1,0 +1,24 @@
+                                                                                
+                                                                                
+                                                                                
+         ╭────────────────────────────────────────────────────────────╮         
+         │ Room Info                                                  │         
+         │                                                            │         
+         │ Room: test-room                                            │         
+         │ Topic: test topic                                          │         
+         │ Port: 1234                                                 │         
+         │ Participants: 2                                            │         
+         │ Messages: 5                                                │         
+         │                                                            │         
+         │ Participants:                                              │         
+         │   • sle (human) [online]                                   │         
+         │   • Alice (backend) [online] — /home/alice/project         │         
+         │                                                            │         
+         │ Join command:                                              │         
+         │   parley join --port 1234 -- claude                        │         
+         │                                                            │         
+         │ esc · q  close                                             │         
+         ╰────────────────────────────────────────────────────────────╯         
+                                                                                
+                                                                                
+                                                                                
