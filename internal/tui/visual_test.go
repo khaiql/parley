@@ -48,12 +48,14 @@ func buildTestApp(t *testing.T, width, height int) App {
 		Name:   "sle",
 		Role:   "human",
 		Source: "human",
+		Online: true,
 	})
 	app.sidebar.AddParticipant(protocol.Participant{
 		Name:      "Alice",
 		Role:      "backend",
 		Directory: "/home/alice/project",
 		AgentType: "claude",
+		Online:    true,
 	})
 
 	// Fixed timestamp for determinism

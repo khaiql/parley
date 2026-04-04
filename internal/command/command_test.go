@@ -13,15 +13,13 @@ type mockRoom struct {
 	port         int
 	participants []ParticipantInfo
 	messageCount int
-	savedAgents  []SavedAgentInfo
 }
 
-func (m *mockRoom) GetID() string                             { return m.id }
-func (m *mockRoom) GetTopic() string                          { return m.topic }
-func (m *mockRoom) GetPort() int                              { return m.port }
-func (m *mockRoom) GetParticipantSnapshot() []ParticipantInfo { return m.participants }
-func (m *mockRoom) GetMessageCount() int                      { return m.messageCount }
-func (m *mockRoom) GetSavedAgents() []SavedAgentInfo          { return m.savedAgents }
+func (m *mockRoom) GetID() string                      { return m.id }
+func (m *mockRoom) GetTopic() string                   { return m.topic }
+func (m *mockRoom) GetPort() int                       { return m.port }
+func (m *mockRoom) GetParticipants() []ParticipantInfo { return m.participants }
+func (m *mockRoom) GetMessageCount() int               { return m.messageCount }
 
 func newTestRoom() *mockRoom {
 	return &mockRoom{
@@ -29,14 +27,12 @@ func newTestRoom() *mockRoom {
 		topic: "test-topic",
 		port:  9000,
 		participants: []ParticipantInfo{
-			{Name: "host-user", Role: "human", Directory: "/home/user"},
-			{Name: "atlas", Role: "agent", Directory: "/tmp/atlas", AgentType: "claude"},
+			{Name: "host-user", Role: "human", Directory: "/home/user", Online: true},
+			{Name: "atlas", Role: "agent", Directory: "/tmp/atlas", AgentType: "claude", Online: true},
+			{Name: "nova", Role: "agent", Directory: "/tmp/nova", AgentType: "claude", Online: false},
+			{Name: "echo", Role: "coder", Directory: "/tmp/echo", AgentType: "gemini", Online: false},
 		},
 		messageCount: 42,
-		savedAgents: []SavedAgentInfo{
-			{Name: "nova", Role: "agent", Directory: "/tmp/nova", AgentType: "claude"},
-			{Name: "echo", Role: "coder", Directory: "/tmp/echo", AgentType: "gemini"},
-		},
 	}
 }
 
@@ -117,11 +113,11 @@ func TestInfoCommand(t *testing.T) {
 	if !strings.Contains(msg, "parley join --port 9000 -- claude") {
 		t.Errorf("info output should contain join command, got:\n%s", msg)
 	}
-	// Should contain resume commands for saved agents.
-	if !strings.Contains(msg, "parley join --port 9000 --name nova --resume -- claude") {
+	// Should contain resume commands for offline agents.
+	if !strings.Contains(msg, "resume: parley join --port 9000 --name nova --resume -- claude") {
 		t.Errorf("info output should contain resume command for nova, got:\n%s", msg)
 	}
-	if !strings.Contains(msg, "parley join --port 9000 --name echo --resume -- gemini") {
+	if !strings.Contains(msg, "resume: parley join --port 9000 --name echo --resume -- gemini") {
 		t.Errorf("info output should contain resume command for echo, got:\n%s", msg)
 	}
 }

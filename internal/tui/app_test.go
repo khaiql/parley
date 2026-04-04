@@ -95,11 +95,11 @@ func TestHandleServerMsg_RoomJoined_AddsParticipant(t *testing.T) {
 	}
 }
 
-func TestHandleServerMsg_RoomLeft_RemovesParticipant(t *testing.T) {
+func TestHandleServerMsg_RoomLeft_SetsParticipantOffline(t *testing.T) {
 	a := makeApp()
 	a.sidebar.SetParticipants([]protocol.Participant{
-		{Name: "alice", Role: "human"},
-		{Name: "bot", Role: "agent"},
+		{Name: "alice", Role: "human", Online: true},
+		{Name: "bot", Role: "agent", Online: true},
 	})
 
 	left := protocol.LeftParams{Name: "bot"}
@@ -110,11 +110,11 @@ func TestHandleServerMsg_RoomLeft_RemovesParticipant(t *testing.T) {
 
 	a.handleServerMsg(raw)
 
-	if len(a.sidebar.participants) != 1 {
-		t.Fatalf("expected 1 participant after leave, got %d", len(a.sidebar.participants))
+	if len(a.sidebar.participants) != 2 {
+		t.Fatalf("expected 2 participants after leave, got %d", len(a.sidebar.participants))
 	}
-	if a.sidebar.participants[0].Name != "alice" {
-		t.Errorf("wrong participant remains: %s", a.sidebar.participants[0].Name)
+	if a.sidebar.participants[1].Name != "bot" || a.sidebar.participants[1].Online != false {
+		t.Errorf("expected bot to be marked offline: %+v", a.sidebar.participants[1])
 	}
 }
 

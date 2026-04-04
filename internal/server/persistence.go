@@ -60,8 +60,8 @@ func SaveRoom(dir string, room *Room) error {
 		return fmt.Errorf("write messages.json: %w", err)
 	}
 
-	// Write agents.json (participants snapshot), preserving any session IDs
-	// that were previously saved by agent processes.
+	// Write agents.json — all participants (online + offline), preserving
+	// session IDs that were previously saved by agent processes.
 	existing, _ := LoadAgents(dir)
 	sessionIDs := make(map[string]string)
 	for _, a := range existing {
@@ -72,7 +72,6 @@ func SaveRoom(dir string, room *Room) error {
 
 	participants := room.GetParticipants()
 	pdata := make([]ParticipantData, 0, len(participants))
-	seen := make(map[string]bool)
 	for _, cc := range participants {
 		pd := ParticipantData{
 			Name:      cc.Name,
@@ -82,25 +81,10 @@ func SaveRoom(dir string, room *Room) error {
 			AgentType: cc.AgentType,
 			Source:    cc.Source,
 		}
-		// Preserve existing session ID.
 		if sid, ok := sessionIDs[cc.Name]; ok {
 			pd.SessionID = sid
 		}
 		pdata = append(pdata, pd)
-		seen[cc.Name] = true
-	}
-
-	// Preserve saved agents that haven't reconnected yet (e.g. after resume).
-	for _, sa := range room.SavedAgents {
-		if !seen[sa.Name] {
-			pd := sa
-			// Use latest session ID from disk if available.
-			if sid, ok := sessionIDs[sa.Name]; ok {
-				pd.SessionID = sid
-			}
-			pdata = append(pdata, pd)
-			seen[sa.Name] = true
-		}
 	}
 
 	if err := writeJSON(filepath.Join(dir, "agents.json"), pdata); err != nil {
@@ -111,8 +95,7 @@ func SaveRoom(dir string, room *Room) error {
 }
 
 // LoadRoom loads a Room from a previously saved directory.
-// It restores the topic and message history. Participants are not restored
-// (the room starts empty).
+// It restores the topic, message history, and all participants as offline.
 func LoadRoom(dir string) (*Room, error) {
 	var rd RoomData
 	if err := readJSON(filepath.Join(dir, "room.json"), &rd); err != nil {
@@ -132,9 +115,19 @@ func LoadRoom(dir string) (*Room, error) {
 		room.seq = msgs[len(msgs)-1].Seq
 	}
 
-	// Load saved agents so rejoining agents can recover their role.
+	// Restore all saved agents as offline participants.
 	agents, _ := LoadAgents(dir)
-	room.SavedAgents = agents
+	for _, a := range agents {
+		room.Participants[a.Name] = &ClientConn{
+			Name:      a.Name,
+			Role:      a.Role,
+			Directory: a.Directory,
+			Repo:      a.Repo,
+			AgentType: a.AgentType,
+			Source:    a.Source,
+			Online:    false,
+		}
+	}
 
 	return room, nil
 }

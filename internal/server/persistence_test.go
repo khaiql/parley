@@ -369,9 +369,17 @@ func TestSaveRoom_PreservesSavedAgentsWhenNoParticipants(t *testing.T) {
 		t.Fatalf("SaveAgents: %v", err)
 	}
 
-	// Resume: LoadRoom populates SavedAgents but Participants is empty.
+	// Resume: Add them back as offline participants representing previously saved agents.
 	room := NewRoom("topic")
-	room.SavedAgents = prev
+	for _, a := range prev {
+		room.Participants[a.Name] = &ClientConn{
+			Name:      a.Name,
+			Role:      a.Role,
+			AgentType: a.AgentType,
+			Source:    a.Source,
+			Online:    false,
+		}
+	}
 
 	// SaveRoom should NOT destroy the saved agents even though no one is connected.
 	if err := SaveRoom(dir, room); err != nil {
@@ -412,7 +420,15 @@ func TestSaveRoom_PreservesPartialReconnect(t *testing.T) {
 	}
 
 	room := NewRoom("topic")
-	room.SavedAgents = prev
+	for _, a := range prev {
+		room.Participants[a.Name] = &ClientConn{
+			Name:      a.Name,
+			Role:      a.Role,
+			AgentType: a.AgentType,
+			Source:    a.Source,
+			Online:    false,
+		}
+	}
 
 	// Only claude reconnects.
 	cc := &ClientConn{Name: "claude", Role: "agent", AgentType: "claude", Source: "agent"}

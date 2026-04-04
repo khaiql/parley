@@ -29,7 +29,7 @@ var SendCommandCommand = &Command{
 
 		// Validate agent exists.
 		found := false
-		for _, p := range ctx.Room.GetParticipantSnapshot() {
+		for _, p := range ctx.Room.GetParticipants() {
 			if p.Name == agentName {
 				found = true
 				break

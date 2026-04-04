@@ -18,7 +18,6 @@ type Room struct {
 	AutoApprove  bool
 	Participants map[string]*ClientConn
 	Messages     []protocol.MessageParams
-	SavedAgents  []ParticipantData // loaded from agents.json on resume
 	seq          int
 	mu           sync.RWMutex
 }
@@ -31,6 +30,7 @@ type ClientConn struct {
 	Repo      string
 	AgentType string
 	Source    string
+	Online    bool
 	Send      chan []byte
 	Done      chan struct{}
 }
@@ -56,7 +56,9 @@ func newUUID() string {
 // Join adds cc to the room and returns a snapshot of the current room state,
 // including recent message history (up to 50 messages).
 // If cc.Send or cc.Done are nil they are initialized here.
-// Returns an error if a participant with the same name already exists.
+// If a participant with the same name exists and is offline, they are
+// reconnected (brought back online). If they are online, an error is returned.
+// When reconnecting, an empty Role in cc preserves the previously saved role.
 func (r *Room) Join(cc *ClientConn) (protocol.RoomStateParams, error) {
 	if cc.Send == nil {
 		cc.Send = make(chan []byte, 64)
@@ -66,11 +68,26 @@ func (r *Room) Join(cc *ClientConn) (protocol.RoomStateParams, error) {
 	}
 
 	r.mu.Lock()
-	if _, exists := r.Participants[cc.Name]; exists {
-		r.mu.Unlock()
-		return protocol.RoomStateParams{}, fmt.Errorf("name already taken: %q", cc.Name)
+	if existing, exists := r.Participants[cc.Name]; exists {
+		if existing.Online {
+			r.mu.Unlock()
+			return protocol.RoomStateParams{}, fmt.Errorf("name already taken: %q", cc.Name)
+		}
+		// Reconnecting offline participant — update and bring online.
+		if cc.Role != "" {
+			existing.Role = cc.Role
+		}
+		existing.Directory = cc.Directory
+		existing.Repo = cc.Repo
+		existing.AgentType = cc.AgentType
+		existing.Source = cc.Source
+		existing.Online = true
+		existing.Send = cc.Send
+		existing.Done = cc.Done
+	} else {
+		cc.Online = true
+		r.Participants[cc.Name] = cc
 	}
-	r.Participants[cc.Name] = cc
 	participants := r.snapshot()
 	topic := r.Topic
 	recent := r.recentMessages(50)
@@ -137,12 +154,14 @@ func (r *Room) RecentMessages(n int) []protocol.MessageParams {
 	return r.recentMessages(n)
 }
 
-// Leave removes the named participant from the room and closes their Done channel.
+// Leave marks the named participant as offline and closes their Done channel.
+// The participant remains in the map so mentions, colors, and persistence
+// continue to work.
 func (r *Room) Leave(name string) {
 	r.mu.Lock()
 	cc, ok := r.Participants[name]
 	if ok {
-		delete(r.Participants, name)
+		cc.Online = false
 	}
 	r.mu.Unlock()
 
@@ -168,10 +187,12 @@ func (r *Room) Broadcast(from, source, role string, content protocol.Content, _ 
 	}
 	r.Messages = append(r.Messages, msg)
 
-	// Collect send channels while holding the lock to avoid races.
+	// Collect send channels for online participants only.
 	targets := make([]chan []byte, 0, len(r.Participants))
 	for _, cc := range r.Participants {
-		targets = append(targets, cc.Send)
+		if cc.Online {
+			targets = append(targets, cc.Send)
+		}
 	}
 	r.mu.Unlock()
 
@@ -271,6 +292,7 @@ func (r *Room) snapshot() []protocol.Participant {
 			Repo:      cc.Repo,
 			AgentType: cc.AgentType,
 			Source:    cc.Source,
+			Online:    cc.Online,
 		})
 	}
 	return out
@@ -285,13 +307,28 @@ func (r *Room) GetMessages() []protocol.MessageParams {
 	return out
 }
 
-// GetParticipants returns a snapshot of the current participants, safe for concurrent use.
+// GetParticipants returns a snapshot of all participants (online and offline),
+// safe for concurrent use.
 func (r *Room) GetParticipants() []*ClientConn {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]*ClientConn, 0, len(r.Participants))
 	for _, cc := range r.Participants {
 		out = append(out, cc)
+	}
+	return out
+}
+
+// GetOnlineParticipants returns only the online participants, safe for
+// concurrent use.
+func (r *Room) GetOnlineParticipants() []*ClientConn {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*ClientConn, 0, len(r.Participants))
+	for _, cc := range r.Participants {
+		if cc.Online {
+			out = append(out, cc)
+		}
 	}
 	return out
 }

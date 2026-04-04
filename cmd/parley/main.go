@@ -522,7 +522,7 @@ func (a *RoomAdapter) GetTopic() string     { return a.room.Topic }
 func (a *RoomAdapter) GetPort() int         { return a.port }
 func (a *RoomAdapter) GetMessageCount() int { return a.room.MessageCount() }
 
-func (a *RoomAdapter) GetParticipantSnapshot() []command.ParticipantInfo {
+func (a *RoomAdapter) GetParticipants() []command.ParticipantInfo {
 	conns := a.room.GetParticipants()
 	out := make([]command.ParticipantInfo, len(conns))
 	for i, cc := range conns {
@@ -531,25 +531,8 @@ func (a *RoomAdapter) GetParticipantSnapshot() []command.ParticipantInfo {
 			Role:      cc.Role,
 			Directory: cc.Directory,
 			AgentType: cc.AgentType,
+			Online:    cc.Online,
 		}
-	}
-	return out
-}
-
-func (a *RoomAdapter) GetSavedAgents() []command.SavedAgentInfo {
-	saved := a.room.SavedAgents
-	out := make([]command.SavedAgentInfo, 0, len(saved))
-	for _, sa := range saved {
-		// Only include non-human agents (humans don't resume).
-		if sa.Source == "human" {
-			continue
-		}
-		out = append(out, command.SavedAgentInfo{
-			Name:      sa.Name,
-			Role:      sa.Role,
-			Directory: sa.Directory,
-			AgentType: sa.AgentType,
-		})
 	}
 	return out
 }
