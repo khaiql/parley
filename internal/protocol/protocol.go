@@ -77,6 +77,13 @@ type SendParams struct {
 	Mentions []string  `json:"mentions,omitempty"`
 }
 
+// Known agent types.
+const (
+	AgentTypeClaude = "claude"
+	AgentTypeGemini = "gemini"
+	AgentTypeCodex  = "codex"
+)
+
 // JoinParams is the params payload for a "room/join" notification.
 type JoinParams struct {
 	Name      string `json:"name"`
@@ -118,6 +125,23 @@ type Participant struct {
 	AgentType string `json:"agent_type,omitempty"`
 	Source    string `json:"source,omitempty"`
 	Online    bool   `json:"online"`
+}
+
+// IsHuman returns true if this participant is a human (not an AI agent).
+// The canonical check is Role == "human" — only the host sets this value.
+// Source is unreliable because agents joining via `parley join` get Source="human".
+func (p Participant) IsHuman() bool {
+	return p.Role == "human"
+}
+
+// IsHuman returns true if the message was sent by a human participant.
+func (m MessageParams) IsHuman() bool {
+	return m.Role == "human"
+}
+
+// IsSystem returns true if the message is a system-generated notification.
+func (m MessageParams) IsSystem() bool {
+	return m.Source == "system" || (m.Source == "" && m.Role == "system")
 }
 
 // RoomStateParams is the params payload for a "room/state" notification.

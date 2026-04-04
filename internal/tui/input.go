@@ -20,7 +20,7 @@ const (
 )
 
 const (
-	minInputLines = 1
+	minInputLines = 2
 	maxInputLines = 6
 )
 
@@ -46,7 +46,7 @@ func NewInput() Input {
 // SetWidth updates the available width.
 func (i *Input) SetWidth(w int) {
 	i.width = w
-	i.ta.SetWidth(w - 4) // account for inputStyle padding + border
+	i.ta.SetWidth(w - 4 - 2) // border/padding (4) + prompt (2)
 }
 
 // SetMode switches between human and agent input modes.
@@ -132,13 +132,24 @@ func (i Input) View() string {
 			wrapped := lipgloss.NewStyle().Width(cw).Render(i.agentText)
 			lines := strings.Split(wrapped, "\n")
 			lastLine := lines[len(lines)-1]
-			content = lipgloss.NewStyle().Foreground(colorAgent).Render(lastLine) +
+			content = lipgloss.NewStyle().Foreground(colorPrimary).Render(lastLine) +
 				systemMsgStyle.Render(" ▊")
 		} else {
 			content = lipgloss.NewStyle().Foreground(colorDimText).Render("(waiting for messages…)")
 		}
 	default:
-		content = i.ta.View()
+		prompt := lipgloss.NewStyle().Foreground(colorPrimary).Render("❯ ")
+		content = prompt + i.ta.View()
 	}
 	return inputStyle.Width(i.width).Render(content)
+}
+
+// handleBackslashNewline checks if text ends with a backslash.
+// If so, returns the text with the backslash replaced by a newline and true.
+// Otherwise returns the original text and false.
+func handleBackslashNewline(text string) (string, bool) {
+	if len(text) > 0 && text[len(text)-1] == '\\' {
+		return text[:len(text)-1] + "\n", true
+	}
+	return text, false
 }

@@ -133,15 +133,31 @@ func isNameChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
 }
 
-// recentMessages returns up to n most recent messages. Must be called with r.mu held.
+// recentMessages returns up to n most recent non-system messages, plus any
+// system messages interspersed. This prevents a flood of join/leave events
+// from pushing all real messages out of the history window.
 func (r *Room) recentMessages(n int) []protocol.MessageParams {
-	msgs := r.Messages
-	if len(msgs) > n {
-		msgs = msgs[len(msgs)-n:]
-	}
-	if len(msgs) == 0 {
+	if len(r.Messages) == 0 {
 		return nil
 	}
+
+	// Walk backward to find enough non-system messages.
+	contentCount := 0
+	start := len(r.Messages)
+	for i := len(r.Messages) - 1; i >= 0; i-- {
+		if !r.Messages[i].IsSystem() {
+			contentCount++
+			if contentCount >= n {
+				start = i
+				break
+			}
+		}
+		if i == 0 {
+			start = 0
+		}
+	}
+
+	msgs := r.Messages[start:]
 	out := make([]protocol.MessageParams, len(msgs))
 	copy(out, msgs)
 	return out

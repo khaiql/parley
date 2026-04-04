@@ -7,18 +7,39 @@ import (
 	"github.com/khaiql/parley/internal/protocol"
 )
 
+// spinnerFrames are braille characters used for the generating animation.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
 // Sidebar renders the participant list panel.
 type Sidebar struct {
 	participants []protocol.Participant
-	statuses     map[string]string         // per-participant status text
-	nameColors   map[string]lipgloss.Color // per-participant name color
+	statuses     map[string]string // per-participant status text
 	width        int
 	height       int
+	port         int
+	spinnerFrame int
 }
 
 // NewSidebar creates an empty Sidebar.
 func NewSidebar() Sidebar {
 	return Sidebar{statuses: make(map[string]string)}
+}
+
+// SetPort sets the port number displayed in the branding section.
+func (s *Sidebar) SetPort(port int) {
+	s.port = port
+}
+
+// TickSpinner advances the spinner frame and returns true if any participant
+// has "generating" status (caller should keep ticking).
+func (s *Sidebar) TickSpinner() bool {
+	s.spinnerFrame = (s.spinnerFrame + 1) % len(spinnerFrames)
+	for _, p := range s.participants {
+		if s.statuses[p.Name] == "generating" {
+			return true
+		}
+	}
+	return false
 }
 
 // SetSize updates the sidebar dimensions.
@@ -53,11 +74,6 @@ func (s *Sidebar) SetParticipantStatus(name, status string) {
 	s.statuses[name] = status
 }
 
-// SetNameColors updates the per-participant color map.
-func (s *Sidebar) SetNameColors(colors map[string]lipgloss.Color) {
-	s.nameColors = colors
-}
-
 // RemoveParticipant removes a participant by name.
 func (s *Sidebar) RemoveParticipant(name string) {
 	filtered := s.participants[:0]
@@ -86,8 +102,14 @@ func (s Sidebar) View() string {
 		innerWidth = 1
 	}
 
-	title := sidebarTitleStyle.Render("participants")
-	lines := []string{title}
+	var lines []string
+
+	// Branding section
+	brand := sidebarBrandStyle.Width(innerWidth).Render("parley")
+	lines = append(lines, brand)
+
+	// Section header
+	lines = append(lines, sidebarTitleStyle.Render("PARTICIPANTS"))
 
 	// Sort: online participants first, then offline.
 	online := make([]protocol.Participant, 0, len(s.participants))
@@ -102,35 +124,52 @@ func (s Sidebar) View() string {
 	sorted := append(online, offline...)
 
 	for _, p := range sorted {
-		if p.Online {
-			nameLine := nameStyle(p.Name, s.nameColors).Render(p.Name)
-			lines = append(lines, nameLine)
-		} else {
+		// Separator between participants
+		lines = append(lines, separatorStyle.Render(strings.Repeat("─", innerWidth)))
+
+		if !p.Online {
 			nameLine := offlineNameStyle.Render(p.Name + " (offline)")
 			lines = append(lines, nameLine)
+			continue
 		}
 
-		// Show per-participant status when non-empty.
-		if status := s.statuses[p.Name]; status != "" {
-			if status == "listening" {
-				lines = append(lines, listeningStatusStyle.Render("  👂 listening"))
-			} else {
-				lines = append(lines, participantStatusStyle.Render("  "+status))
-			}
+		// Name line
+		var nameLine string
+		if p.IsHuman() {
+			nameLine = humanNameStyle.Render(p.Name)
+		} else {
+			senderColor := ColorForSender(p.Name, false)
+			nameLine = agentNameStyleFor(senderColor).Render(p.Name)
 		}
 
+		// AgentType badge (instead of Role badge)
 		if p.AgentType != "" {
-			lines = append(lines, systemMsgStyle.Render("  "+p.AgentType))
+			senderColor := ColorForSender(p.Name, false)
+			badge := agentBadgeStyleFor(senderColor).Render(p.AgentType)
+			nameLine = lipgloss.JoinHorizontal(lipgloss.Top, nameLine, " ", badge)
 		}
+		lines = append(lines, nameLine)
+
+		// Status display
+		status := s.statuses[p.Name]
+		if status == "generating" {
+			senderColor := ColorForSender(p.Name, false)
+			frame := spinnerFrames[s.spinnerFrame%len(spinnerFrames)]
+			statusText := agentNameStyleFor(senderColor).Render(frame + " generating")
+			lines = append(lines, "  "+statusText)
+		} else if status != "" && status != "listening" {
+			lines = append(lines, participantStatusStyle.Render("  "+status))
+		}
+
+		// Directory
 		if p.Directory != "" {
 			dir := p.Directory
 			maxLen := innerWidth - 2
 			if maxLen > 4 && len(dir) > maxLen {
-				dir = "…" + dir[len(dir)-(maxLen-1):]
+				dir = dir[:maxLen-1] + "…"
 			}
 			lines = append(lines, timestampStyle.Render("  "+dir))
 		}
-		lines = append(lines, "") // blank line between participants
 	}
 
 	content := strings.Join(lines, "\n")

@@ -57,6 +57,18 @@ go test ./... -timeout 30s         # Run all tests
 go test ./... -timeout 30s -v      # Verbose test output
 ```
 
+### CI Quality Gates
+
+Before creating a PR or finalizing work, ensure CI will pass by running:
+
+```bash
+go build ./...                                                                    # Must compile
+go run github.com/golangci/golangci-lint/cmd/golangci-lint@latest run ./... --timeout=5m  # Lint (gofmt, unused, etc.)
+go test ./... -timeout 30s -race                                                  # Tests with race detector
+```
+
+All three must pass. The CI workflow (`.github/workflows/ci.yml`) runs these exact steps.
+
 ### VHS Visual Testing
 
 ```bash

@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,11 +12,21 @@ import (
 	"github.com/khaiql/parley/internal/protocol"
 )
 
-const sidebarWidth = 28
+const sidebarWidth = 30
 
 // ServerMsg wraps an incoming raw protocol message from the network.
 type ServerMsg struct {
 	Raw *protocol.RawMessage
+}
+
+// SpinnerTickMsg triggers a sidebar spinner frame advance.
+type SpinnerTickMsg struct{}
+
+// spinnerTick returns a tea.Cmd that sends a SpinnerTickMsg after 100ms.
+func spinnerTick() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
+		return SpinnerTickMsg{}
+	})
 }
 
 // AgentTypingMsg carries text to display in agent-typing mode.
@@ -43,13 +54,13 @@ type App struct {
 	chat            Chat
 	sidebar         Sidebar
 	input           Input
-	sendFn          func(string, []string)    // callback to send messages over network
-	registry        *command.Registry         // slash command registry (nil = no commands)
-	cmdCtx          command.Context           // context passed to slash commands
-	nameColors      map[string]lipgloss.Color // stable color per participant
-	colorIdx        int                       // next color index to assign
-	lastInputHeight int                       // cached to avoid redundant re-layouts
-	pendingHistory  []protocol.MessageParams  // set during room.state, loaded async
+	statusbar       StatusBar
+	sendFn          func(string, []string)   // callback to send messages over network
+	registry        *command.Registry        // slash command registry (nil = no commands)
+	cmdCtx          command.Context          // context passed to slash commands
+	lastInputHeight int                      // cached to avoid redundant re-layouts
+	pendingHistory  []protocol.MessageParams // set during room.state, loaded async
+	spinnerActive   bool
 	width           int
 	height          int
 }
@@ -57,21 +68,19 @@ type App struct {
 // NewApp creates an App with the given topic, port, input mode, display name,
 // send callback, and optional initial participants (may be nil).
 func NewApp(topic string, port int, mode InputMode, _ string, sendFn func(string, []string), participants ...protocol.Participant) App {
+	sb := NewSidebar()
+	sb.SetPort(port)
 	a := App{
-		topbar:     NewTopBar(topic, port),
-		chat:       NewChat(0, 0),
-		sidebar:    NewSidebar(),
-		input:      NewInput(),
-		sendFn:     sendFn,
-		nameColors: make(map[string]lipgloss.Color),
+		topbar:    NewTopBar(topic, port),
+		chat:      NewChat(0, 0),
+		sidebar:   sb,
+		input:     NewInput(),
+		statusbar: NewStatusBar(),
+		sendFn:    sendFn,
 	}
 	a.input.SetMode(mode)
 	if len(participants) > 0 {
-		for _, p := range participants {
-			a.assignColor(p.Name, p.Role)
-		}
 		a.sidebar.SetParticipants(participants)
-		a.sidebar.SetNameColors(a.nameColors)
 	}
 	return a
 }
@@ -90,6 +99,7 @@ func (a *App) SetCommandRegistry(reg *command.Registry, ctx command.Context) {
 
 // Init satisfies tea.Model. Returns textarea.Blink to animate the cursor.
 func (a App) Init() tea.Cmd {
+
 	return textarea.Blink
 }
 
@@ -111,7 +121,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyEnter:
 			if a.input.mode == InputModeHuman {
-				text := strings.TrimSpace(a.input.Value())
+				text := a.input.Value()
+				// Check for backslash-newline
+				if newText, consumed := handleBackslashNewline(text); consumed {
+					a.input.ta.SetValue(newText)
+					return a, nil
+				}
+				text = strings.TrimSpace(text)
 				if text != "" {
 					a.input.Reset()
 					// Slash command dispatch.
@@ -138,17 +154,27 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ServerDisconnectedMsg:
 		return a, tea.Quit
 
+	case SpinnerTickMsg:
+		if a.sidebar.TickSpinner() {
+			return a, spinnerTick()
+		}
+		a.spinnerActive = false
+		return a, nil
+
 	case ServerMsg:
 		a.handleServerMsg(m.Raw)
 		// If history is pending, dispatch async load.
 		if len(a.pendingHistory) > 0 {
 			msgs := a.pendingHistory
 			a.pendingHistory = nil
-			return a, func() tea.Msg {
-				return HistoryLoadedMsg{Messages: msgs}
-			}
+			return a, tea.Batch(
+				func() tea.Msg {
+					return HistoryLoadedMsg{Messages: msgs}
+				},
+				a.maybeStartSpinner(),
+			)
 		}
-		return a, nil
+		return a, a.maybeStartSpinner()
 
 	case HistoryLoadedMsg:
 		a.chat.SetLoading(false)
@@ -164,9 +190,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
-	// Forward to child components.
+	// Forward key events only to input, not chat (prevents scroll jumping).
 	cmds = append(cmds, a.input.Update(msg))
-	cmds = append(cmds, a.chat.Update(msg))
+	if _, isKey := msg.(tea.KeyMsg); !isKey {
+		cmds = append(cmds, a.chat.Update(msg))
+	}
 
 	// Re-layout only if input height actually changed.
 	if a.width > 0 && a.height > 0 {
@@ -191,6 +219,7 @@ func (a App) View() string {
 		a.topbar.View(),
 		middle,
 		a.input.View(),
+		a.statusbar.View(),
 	)
 }
 
@@ -199,7 +228,8 @@ func (a App) View() string {
 func (a *App) layout() {
 	topbarHeight := 1
 	inputHeight := a.input.Height()
-	chatHeight := a.height - topbarHeight - inputHeight
+	statusbarHeight := 1
+	chatHeight := a.height - topbarHeight - inputHeight - statusbarHeight
 	if chatHeight < 0 {
 		chatHeight = 0
 	}
@@ -213,20 +243,22 @@ func (a *App) layout() {
 	a.chat.SetSize(chatWidth, chatHeight)
 	a.sidebar.SetSize(sidebarWidth, chatHeight)
 	a.input.SetWidth(a.width)
+	a.statusbar.SetWidth(a.width)
 }
 
-// assignColor gives a participant a stable color. Humans get colorHuman;
-// agents cycle through participantColors.
-func (a *App) assignColor(name, role string) {
-	if _, ok := a.nameColors[name]; ok {
-		return
+// maybeStartSpinner checks if any participant is generating and starts
+// the spinner tick if not already running.
+func (a *App) maybeStartSpinner() tea.Cmd {
+	if a.spinnerActive {
+		return nil
 	}
-	if role == "human" {
-		a.nameColors[name] = colorHuman
-	} else {
-		a.nameColors[name] = participantColors[a.colorIdx%len(participantColors)]
-		a.colorIdx++
+	for _, status := range a.sidebar.statuses {
+		if status == "generating" {
+			a.spinnerActive = true
+			return spinnerTick()
+		}
 	}
+	return nil
 }
 
 // handleServerMsg dispatches an incoming RawMessage to the appropriate handler
@@ -239,12 +271,7 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 	case "room.state":
 		var params protocol.RoomStateParams
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			for _, p := range params.Participants {
-				a.assignColor(p.Name, p.Role)
-			}
 			a.sidebar.SetParticipants(params.Participants)
-			a.sidebar.SetNameColors(a.nameColors)
-			a.chat.SetNameColors(a.nameColors)
 			if len(params.Messages) > 0 {
 				a.chat.SetLoading(true)
 				a.pendingHistory = params.Messages
@@ -260,7 +287,6 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 	case "room.joined":
 		var params protocol.JoinedParams
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.assignColor(params.Name, params.Role)
 			a.sidebar.AddParticipant(protocol.Participant{
 				Name:      params.Name,
 				Role:      params.Role,
@@ -268,8 +294,6 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 				Repo:      params.Repo,
 				AgentType: params.AgentType,
 			})
-			a.sidebar.SetNameColors(a.nameColors)
-			a.chat.SetNameColors(a.nameColors)
 		}
 
 	case "room.left":

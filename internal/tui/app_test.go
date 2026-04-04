@@ -2,8 +2,10 @@ package tui
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/khaiql/parley/internal/protocol"
 )
 
@@ -197,6 +199,49 @@ func TestHandleServerMsg_RoomState_ReplayesMessageHistory(t *testing.T) {
 	}
 	if a.chat.messages[1].Content[0].Text != "world" {
 		t.Errorf("unexpected second message text: %s", a.chat.messages[1].Content[0].Text)
+	}
+}
+
+func TestTypingDoesNotScrollChat(t *testing.T) {
+	a := makeApp()
+
+	// Add enough messages to make the viewport scrollable.
+	for i := 0; i < 50; i++ {
+		a.chat.AddMessage(protocol.MessageParams{
+			ID:   fmt.Sprintf("msg-%d", i),
+			From: "alice",
+			Role: "human",
+			Content: []protocol.Content{
+				{Type: "text", Text: fmt.Sprintf("Message number %d with some text", i)},
+			},
+		})
+	}
+
+	// Simulate a window size to trigger layout.
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	a = model.(App)
+
+	// Record viewport scroll position after layout.
+	scrollBefore := a.chat.vp.YOffset
+
+	// Send key events that the viewport's default KeyMap would interpret as
+	// scroll commands: 'k' maps to Up in the viewport's KeyMap.
+	// When the user types these characters into the input, the chat viewport
+	// should NOT scroll.
+	scrollKeys := []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'k'}}, // viewport: scroll up
+		{Type: tea.KeyRunes, Runes: []rune{'u'}}, // viewport: half page up
+		{Type: tea.KeyRunes, Runes: []rune{'b'}}, // viewport: page up
+	}
+	for _, k := range scrollKeys {
+		model, _ = a.Update(k)
+		a = model.(App)
+	}
+
+	scrollAfter := a.chat.vp.YOffset
+
+	if scrollAfter != scrollBefore {
+		t.Errorf("typing changed viewport scroll position: before=%d, after=%d", scrollBefore, scrollAfter)
 	}
 }
 
