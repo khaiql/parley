@@ -46,8 +46,8 @@ func TestRegistryDispatch(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("unexpected error: %v", result.Error)
 	}
-	if result.LocalMessage == "" {
-		t.Fatal("expected non-empty local message from /info")
+	if result.Modal == nil {
+		t.Fatal("expected non-nil Modal from /info dispatch")
 	}
 }
 
@@ -103,22 +103,29 @@ func TestInfoCommand(t *testing.T) {
 	if result.Error != nil {
 		t.Fatalf("unexpected error: %v", result.Error)
 	}
-	msg := result.LocalMessage
+	if result.LocalMessage != "" {
+		t.Error("InfoCommand should not set LocalMessage; use Modal instead")
+	}
+	if result.Modal == nil {
+		t.Fatal("expected non-nil Modal from InfoCommand")
+	}
+	if result.Modal.Title == "" {
+		t.Error("Modal.Title must not be empty")
+	}
+	body := result.Modal.Body
 	for _, want := range []string{"room-abc", "test-topic", "9000", "42", "host-user", "atlas"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("info output should contain %q, got:\n%s", want, msg)
+		if !strings.Contains(body, want) {
+			t.Errorf("Modal.Body should contain %q, got:\n%s", want, body)
 		}
 	}
-	// Should contain a ready-to-copy join command.
-	if !strings.Contains(msg, "parley join --port 9000 -- claude") {
-		t.Errorf("info output should contain join command, got:\n%s", msg)
+	if !strings.Contains(body, "parley join --port 9000 -- claude") {
+		t.Errorf("Modal.Body should contain join command, got:\n%s", body)
 	}
-	// Should contain resume commands for offline agents.
-	if !strings.Contains(msg, "resume: parley join --port 9000 --name nova --resume -- claude") {
-		t.Errorf("info output should contain resume command for nova, got:\n%s", msg)
+	if !strings.Contains(body, "resume: parley join --port 9000 --name nova --resume -- claude") {
+		t.Errorf("Modal.Body should contain resume command for nova, got:\n%s", body)
 	}
-	if !strings.Contains(msg, "resume: parley join --port 9000 --name echo --resume -- gemini") {
-		t.Errorf("info output should contain resume command for echo, got:\n%s", msg)
+	if !strings.Contains(body, "resume: parley join --port 9000 --name echo --resume -- gemini") {
+		t.Errorf("Modal.Body should contain resume command for echo, got:\n%s", body)
 	}
 }
 
