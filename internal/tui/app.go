@@ -50,20 +50,23 @@ type HistoryLoadedMsg struct {
 
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
-	topbar          TopBar
-	chat            Chat
-	sidebar         Sidebar
-	input           Input
-	statusbar       StatusBar
-	modal           *Modal                   // non-nil when a modal overlay is active
-	sendFn          func(string, []string)   // callback to send messages over network
-	registry        *command.Registry        // slash command registry (nil = no commands)
-	cmdCtx          command.Context          // context passed to slash commands
-	lastInputHeight int                      // cached to avoid redundant re-layouts
-	pendingHistory  []protocol.MessageParams // set during room.state, loaded async
-	spinnerActive   bool
-	width           int
-	height          int
+	topbar            TopBar
+	chat              Chat
+	sidebar           Sidebar
+	input             Input
+	statusbar         StatusBar
+	modal             *Modal                   // non-nil when a modal overlay is active
+	sendFn            func(string, []string)   // callback to send messages over network
+	registry          *command.Registry        // slash command registry (nil = no commands)
+	cmdCtx            command.Context          // context passed to slash commands
+	lastInputHeight   int                      // cached to avoid redundant re-layouts
+	pendingHistory    []protocol.MessageParams // set during room.state, loaded async
+	spinnerActive     bool
+	suggestions       Suggestions
+	completionTrigger rune // '/' or '@', or 0 if inactive
+	completionStart   int  // cursor position where trigger character was typed
+	width             int
+	height            int
 }
 
 // NewApp creates an App with the given topic, port, input mode, display name,
@@ -134,7 +137,34 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyCtrlC:
 			return a, tea.Quit
 
+		case tea.KeyUp:
+			if a.suggestions.Visible() {
+				a.suggestions.MoveUp()
+				return a, nil
+			}
+		case tea.KeyDown:
+			if a.suggestions.Visible() {
+				a.suggestions.MoveDown()
+				return a, nil
+			}
+		case tea.KeyTab:
+			if a.suggestions.Visible() {
+				a.acceptSuggestion()
+				a.layout()
+				return a, nil
+			}
+		case tea.KeyEsc:
+			if a.suggestions.Visible() {
+				a.dismissSuggestions()
+				a.layout()
+				return a, nil
+			}
+
 		case tea.KeyEnter:
+			if a.suggestions.Visible() {
+				a.dismissSuggestions()
+				a.layout()
+			}
 			if a.input.mode == InputModeHuman {
 				text := a.input.Value()
 				// Check for backslash-newline
@@ -214,6 +244,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, a.chat.Update(msg))
 	}
 
+	// Check for suggestion triggers and update filter after input changes.
+	if _, ok := msg.(tea.KeyMsg); ok && a.input.mode == InputModeHuman {
+		wasVisible := a.suggestions.Visible()
+		if wasVisible {
+			a.updateSuggestionFilter()
+		} else {
+			a.checkSuggestionTrigger()
+		}
+		if wasVisible != a.suggestions.Visible() {
+			a.layout()
+		}
+	}
+
 	// Re-layout only if input height actually changed.
 	if a.width > 0 && a.height > 0 {
 		if a.input.Height() != a.lastInputHeight {
@@ -235,13 +278,12 @@ func (a App) View() string {
 		a.chat.View(),
 		a.sidebar.View(),
 	)
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		a.topbar.View(),
-		middle,
-		a.input.View(),
-		a.statusbar.View(),
-	)
+	parts := []string{a.topbar.View(), middle}
+	if a.suggestions.Visible() {
+		parts = append(parts, a.suggestions.View())
+	}
+	parts = append(parts, a.input.View(), a.statusbar.View())
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 // layout recalculates and applies component sizes based on the current
@@ -250,7 +292,8 @@ func (a *App) layout() {
 	topbarHeight := 1
 	inputHeight := a.input.Height()
 	statusbarHeight := 1
-	chatHeight := a.height - topbarHeight - inputHeight - statusbarHeight
+	suggestionsHeight := a.suggestions.Height()
+	chatHeight := a.height - topbarHeight - inputHeight - statusbarHeight - suggestionsHeight
 	if chatHeight < 0 {
 		chatHeight = 0
 	}
@@ -265,6 +308,7 @@ func (a *App) layout() {
 	a.sidebar.SetSize(sidebarWidth, chatHeight)
 	a.input.SetWidth(a.width)
 	a.statusbar.SetWidth(a.width)
+	a.suggestions.SetWidth(a.width)
 }
 
 // maybeStartSpinner checks if any participant is generating and starts
@@ -280,6 +324,91 @@ func (a *App) maybeStartSpinner() tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// checkSuggestionTrigger scans the current input value for a trigger character
+// and activates suggestions if found.
+func (a *App) checkSuggestionTrigger() {
+	if a.suggestions.Visible() {
+		return // already active
+	}
+	val := a.input.Value()
+	if val == "" {
+		return
+	}
+	runes := []rune(val)
+	last := runes[len(runes)-1]
+
+	switch last {
+	case '/':
+		// Only trigger at the very start of input.
+		if len(runes) == 1 && a.registry != nil {
+			a.completionTrigger = '/'
+			a.completionStart = 0
+			items := make([]SuggestionItem, 0)
+			for _, cmd := range a.registry.Commands() {
+				items = append(items, SuggestionItem{
+					Label:       "/" + cmd.Name,
+					Description: cmd.Description,
+				})
+			}
+			a.suggestions.SetItems(items)
+		}
+	case '@':
+		// Trigger at start of input or after whitespace.
+		pos := len(runes) - 1
+		if pos == 0 || runes[pos-1] == ' ' || runes[pos-1] == '\n' {
+			a.completionTrigger = '@'
+			a.completionStart = pos
+			items := make([]SuggestionItem, 0)
+			for _, p := range a.sidebar.participants {
+				if p.Online {
+					items = append(items, SuggestionItem{
+						Label:       "@" + p.Name,
+						Description: p.Role,
+					})
+				}
+			}
+			a.suggestions.SetItems(items)
+		}
+	}
+}
+
+// updateSuggestionFilter extracts the query from the current input and filters.
+func (a *App) updateSuggestionFilter() {
+	if !a.suggestions.Visible() {
+		return
+	}
+	val := a.input.Value()
+	runes := []rune(val)
+
+	// If user deleted back past the trigger, dismiss.
+	if len(runes) <= a.completionStart {
+		a.dismissSuggestions()
+		return
+	}
+
+	query := string(runes[a.completionStart+1:])
+	a.suggestions.Filter(query)
+}
+
+// acceptSuggestion inserts the selected suggestion into the input.
+func (a *App) acceptSuggestion() {
+	sel := a.suggestions.Selected()
+	if sel.Label == "" {
+		a.dismissSuggestions()
+		return
+	}
+	end := len([]rune(a.input.Value()))
+	a.input.ReplaceRange(a.completionStart, end, sel.Label+" ")
+	a.dismissSuggestions()
+}
+
+// dismissSuggestions hides the suggestion list and resets trigger state.
+func (a *App) dismissSuggestions() {
+	a.suggestions.Hide()
+	a.completionTrigger = 0
+	a.completionStart = 0
 }
 
 // handleServerMsg dispatches an incoming RawMessage to the appropriate handler

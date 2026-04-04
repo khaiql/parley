@@ -64,6 +64,15 @@ func (r *Registry) Available() []string {
 	return out
 }
 
+// Commands returns the registered commands in insertion order.
+func (r *Registry) Commands() []*Command {
+	out := make([]*Command, len(r.order))
+	for i, name := range r.order {
+		out[i] = r.commands[name]
+	}
+	return out
+}
+
 // availableString returns a comma-separated list of /commands.
 func (r *Registry) availableString() string {
 	parts := make([]string, len(r.order))
