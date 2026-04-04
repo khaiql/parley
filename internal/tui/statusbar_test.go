@@ -30,3 +30,23 @@ func TestStatusBarShowsHelp(t *testing.T) {
 		t.Errorf("expected '? help' in output, got: %q", stripANSI(out))
 	}
 }
+
+func TestStatusBarShowsYoloBadgeWhenActive(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetWidth(80)
+	sb.SetYolo(true)
+	out := sb.View()
+	if !contains(out, "YOLO") {
+		t.Errorf("expected 'YOLO' badge in output when yolo=true, got: %q", stripANSI(out))
+	}
+}
+
+func TestStatusBarHidesYoloBadgeWhenInactive(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetWidth(80)
+	sb.SetYolo(false)
+	out := sb.View()
+	if contains(out, "YOLO") {
+		t.Errorf("expected no 'YOLO' badge when yolo=false, got: %q", stripANSI(out))
+	}
+}

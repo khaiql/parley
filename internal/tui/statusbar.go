@@ -9,6 +9,7 @@ import (
 // StatusBar renders the bottom status line.
 type StatusBar struct {
 	connected bool
+	yolo      bool
 	width     int
 }
 
@@ -27,6 +28,11 @@ func (s *StatusBar) SetConnected(c bool) {
 	s.connected = c
 }
 
+// SetYolo sets whether the room is in yolo/auto-approve mode.
+func (s *StatusBar) SetYolo(y bool) {
+	s.yolo = y
+}
+
 // View renders the status bar as a single line.
 func (s StatusBar) View() string {
 	barBg := lipgloss.NewStyle().Background(colorSidebarBg)
@@ -37,8 +43,16 @@ func (s StatusBar) View() string {
 		Foreground(colorText).
 		Padding(0, 1)
 
-	// Left: just help.
+	// Left: help, plus optional YOLO badge.
 	left := helpStyle.Render("? help")
+	if s.yolo {
+		yoloStyle := lipgloss.NewStyle().
+			Bold(true).
+			Background(colorStatusBarBg).
+			Foreground(lipgloss.Color("#d29922")).
+			Padding(0, 1)
+		left += yoloStyle.Render("⚡ YOLO")
+	}
 
 	// Right: connection status.
 	var right string

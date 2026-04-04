@@ -272,6 +272,7 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 		var params protocol.RoomStateParams
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
 			a.sidebar.SetParticipants(params.Participants)
+			a.statusbar.SetYolo(params.AutoApprove)
 			if len(params.Messages) > 0 {
 				a.chat.SetLoading(true)
 				a.pendingHistory = params.Messages
