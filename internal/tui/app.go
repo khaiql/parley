@@ -247,10 +247,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Check for suggestion triggers and update filter after input changes.
 	if _, ok := msg.(tea.KeyMsg); ok && a.input.mode == InputModeHuman {
-		if a.suggestions.Visible() {
+		wasVisible := a.suggestions.Visible()
+		if wasVisible {
 			a.updateSuggestionFilter()
 		} else {
 			a.checkSuggestionTrigger()
+		}
+		if wasVisible != a.suggestions.Visible() {
+			a.layout()
 		}
 	}
 
