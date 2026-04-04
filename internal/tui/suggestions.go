@@ -2,6 +2,8 @@ package tui
 
 import (
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 const maxSuggestionItems = 5
@@ -80,4 +82,80 @@ func (s Suggestions) Selected() SuggestionItem {
 // SetWidth updates the rendering width.
 func (s *Suggestions) SetWidth(width int) {
 	s.width = width
+}
+
+// MoveDown advances the cursor, wrapping at the end.
+func (s *Suggestions) MoveDown() {
+	if len(s.filtered) == 0 {
+		return
+	}
+	s.cursor = (s.cursor + 1) % len(s.filtered)
+}
+
+// MoveUp moves the cursor back, wrapping to the end.
+func (s *Suggestions) MoveUp() {
+	if len(s.filtered) == 0 {
+		return
+	}
+	s.cursor = (s.cursor - 1 + len(s.filtered)) % len(s.filtered)
+}
+
+// Height returns the total rendered height (0 when hidden).
+func (s Suggestions) Height() int {
+	if !s.visible || len(s.filtered) == 0 {
+		return 0
+	}
+	n := len(s.filtered)
+	if n > maxSuggestionItems {
+		n = maxSuggestionItems
+	}
+	return n + 2 // items + top/bottom border
+}
+
+// View renders the suggestion list.
+func (s Suggestions) View() string {
+	if !s.visible || len(s.filtered) == 0 {
+		return ""
+	}
+
+	// Determine the visible window of items.
+	n := len(s.filtered)
+	start := 0
+	visible := n
+	if visible > maxSuggestionItems {
+		visible = maxSuggestionItems
+		// Scroll so the cursor is always visible.
+		if s.cursor >= start+visible {
+			start = s.cursor - visible + 1
+		}
+		if s.cursor < start {
+			start = s.cursor
+		}
+	}
+
+	labelStyle := lipgloss.NewStyle().Foreground(colorText).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(colorDimText)
+	selectedStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+
+	var rows []string
+	for i := start; i < start+visible && i < n; i++ {
+		item := s.filtered[i]
+		if i == s.cursor {
+			row := selectedStyle.Render(item.Label + "  " + item.Description)
+			rows = append(rows, row)
+		} else {
+			row := labelStyle.Render(item.Label) + "  " + descStyle.Render(item.Description)
+			rows = append(rows, row)
+		}
+	}
+
+	content := strings.Join(rows, "\n")
+
+	boxStyle := lipgloss.NewStyle().
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 1).
+		Width(s.width)
+
+	return boxStyle.Render(content)
 }
