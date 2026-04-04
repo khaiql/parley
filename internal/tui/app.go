@@ -162,9 +162,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case tea.KeyEnter:
 			if a.suggestions.Visible() {
-				a.acceptSuggestion()
+				a.dismissSuggestions()
 				a.layout()
-				return a, nil
 			}
 			if a.input.mode == InputModeHuman {
 				text := a.input.Value()
