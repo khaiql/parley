@@ -67,8 +67,14 @@ type App struct {
 	completionTrigger rune // '/' or '@', or 0 if inactive
 	completionStart   int  // cursor position where trigger character was typed
 	roomState         *room.State
-	width             int
-	height            int
+
+	// TUI-owned state, built from room events.
+	localMessages     []protocol.MessageParams
+	localParticipants []protocol.Participant
+	localActivities   map[string]room.Activity
+
+	width  int
+	height int
 }
 
 // SetRoomState sets the room.State that the App will use for event-sourced
@@ -83,12 +89,13 @@ func NewApp(topic string, port int, mode InputMode, _ string, sendFn func(string
 	sb := NewSidebar()
 	sb.SetPort(port)
 	a := App{
-		topbar:    NewTopBar(topic, port),
-		chat:      NewChat(0, 0),
-		sidebar:   sb,
-		input:     NewInput(),
-		statusbar: NewStatusBar(),
-		sendFn:    sendFn,
+		topbar:          NewTopBar(topic, port),
+		chat:            NewChat(0, 0),
+		sidebar:         sb,
+		input:           NewInput(),
+		statusbar:       NewStatusBar(),
+		sendFn:          sendFn,
+		localActivities: make(map[string]room.Activity),
 	}
 	a.input.SetMode(mode)
 	if len(participants) > 0 {
@@ -212,6 +219,38 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// ignore other keys
 		}
 
+	// ---- Room events (from room.State via channel bridge) ----
+
+	case room.HistoryLoaded:
+		a.localMessages = m.Messages
+		a.localParticipants = m.Participants
+		a.localActivities = m.Activities
+		// Forward to existing components for rendering.
+		a.sidebar.SetParticipants(m.Participants)
+		a.chat.SetLoading(false)
+		a.chat.LoadMessages(m.Messages)
+		a.statusbar.SetYolo(a.roomState != nil && a.roomState.AutoApprove())
+		return a, a.maybeStartSpinnerFromActivities()
+
+	case room.MessageReceived:
+		a.localMessages = append(a.localMessages, m.Message)
+		a.chat.AddMessage(m.Message)
+		return a, nil
+
+	case room.ParticipantsChanged:
+		a.localParticipants = m.Participants
+		a.sidebar.SetParticipants(m.Participants)
+		return a, a.maybeStartSpinnerFromActivities()
+
+	case room.ParticipantActivityChanged:
+		a.localActivities[m.Name] = m.Activity
+		a.sidebar.SetParticipantStatus(m.Name, activityToString(m.Activity))
+		return a, a.maybeStartSpinnerFromActivities()
+
+	case room.ErrorOccurred:
+		a.chat.AddMessage(systemMessage(m.Error.Error()))
+		return a, nil
+
 	case ServerDisconnectedMsg:
 		return a, tea.Quit
 
@@ -223,8 +262,13 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case ServerMsg:
+		if a.roomState != nil {
+			// room.State handles this via HandleServerMessage → emits events
+			// which arrive through the event bridge goroutine. Nothing to do here.
+			return a, nil
+		}
+		// Fallback for tests/contexts without room.State.
 		a.handleServerMsg(m.Raw)
-		// If history is pending, dispatch async load.
 		if len(a.pendingHistory) > 0 {
 			msgs := a.pendingHistory
 			a.pendingHistory = nil
@@ -472,6 +516,43 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
 			a.sidebar.SetParticipantStatus(params.Name, params.Status)
 		}
+	}
+}
+
+// maybeStartSpinnerFromActivities checks if any participant is generating and
+// starts the spinner tick if not already running. Used by room event handlers.
+func (a *App) maybeStartSpinnerFromActivities() tea.Cmd {
+	if a.spinnerActive {
+		return nil
+	}
+	if isAnyGenerating(a.localActivities) {
+		a.spinnerActive = true
+		return spinnerTick()
+	}
+	return nil
+}
+
+// isAnyGenerating returns true if any participant has ActivityGenerating.
+func isAnyGenerating(activities map[string]room.Activity) bool {
+	for _, a := range activities {
+		if a == room.ActivityGenerating {
+			return true
+		}
+	}
+	return false
+}
+
+// activityToString converts a room.Activity to a display string for the sidebar.
+func activityToString(a room.Activity) string {
+	switch a {
+	case room.ActivityGenerating:
+		return "generating"
+	case room.ActivityThinking:
+		return "thinking"
+	case room.ActivityUsingTool:
+		return "using tool"
+	default:
+		return ""
 	}
 }
 

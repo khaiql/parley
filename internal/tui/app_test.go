@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 )
 
 // ---- handleServerMsg ---------------------------------------------------------
@@ -498,5 +499,112 @@ func TestApp_FilterSuggestions_NarrowsList(t *testing.T) {
 	}
 	if a.suggestions.filtered[0].Label != "/save" {
 		t.Errorf("expected /save, got %s", a.suggestions.filtered[0].Label)
+	}
+}
+
+// ---- Room event handlers (Task 7) ------------------------------------------
+
+func TestApp_RoomMessageReceived_AddsToChat(t *testing.T) {
+	a := makeApp()
+	msg := protocol.MessageParams{
+		From:    "alice",
+		Content: []protocol.Content{{Type: "text", Text: "hello"}},
+	}
+	model, _ := a.Update(room.MessageReceived{Message: msg})
+	a = model.(App)
+
+	// Verify local state
+	if len(a.localMessages) != 1 {
+		t.Fatalf("expected 1 local message, got %d", len(a.localMessages))
+	}
+	if a.localMessages[0].From != "alice" {
+		t.Fatalf("expected from alice, got %s", a.localMessages[0].From)
+	}
+	// Verify dual-write to chat component
+	if len(a.chat.messages) != 1 {
+		t.Fatalf("expected 1 chat message, got %d", len(a.chat.messages))
+	}
+}
+
+func TestApp_RoomHistoryLoaded_BulkReplacesState(t *testing.T) {
+	a := makeApp()
+	model, _ := a.Update(room.HistoryLoaded{
+		Messages: []protocol.MessageParams{
+			{From: "alice", Content: []protocol.Content{{Type: "text", Text: "hi"}}},
+			{From: "bob", Content: []protocol.Content{{Type: "text", Text: "hey"}}},
+		},
+		Participants: []protocol.Participant{
+			{Name: "alice", Online: true},
+			{Name: "bob", Online: true},
+		},
+		Activities: map[string]room.Activity{
+			"bob": room.ActivityGenerating,
+		},
+	})
+	a = model.(App)
+
+	// Verify local state
+	if len(a.localMessages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(a.localMessages))
+	}
+	if len(a.localParticipants) != 2 {
+		t.Fatalf("expected 2 participants, got %d", len(a.localParticipants))
+	}
+	if a.localActivities["bob"] != room.ActivityGenerating {
+		t.Fatal("expected bob to be generating")
+	}
+	// Verify dual-write to components
+	if len(a.chat.messages) != 2 {
+		t.Fatalf("expected 2 chat messages, got %d", len(a.chat.messages))
+	}
+	if len(a.sidebar.participants) != 2 {
+		t.Fatalf("expected 2 sidebar participants, got %d", len(a.sidebar.participants))
+	}
+}
+
+func TestApp_RoomParticipantsChanged_UpdatesLocal(t *testing.T) {
+	a := makeApp()
+	model, _ := a.Update(room.ParticipantsChanged{
+		Participants: []protocol.Participant{
+			{Name: "alice", Online: true},
+		},
+	})
+	a = model.(App)
+
+	if len(a.localParticipants) != 1 {
+		t.Fatalf("expected 1 participant, got %d", len(a.localParticipants))
+	}
+	// Verify dual-write to sidebar
+	if len(a.sidebar.participants) != 1 {
+		t.Fatalf("expected 1 sidebar participant, got %d", len(a.sidebar.participants))
+	}
+}
+
+func TestApp_RoomParticipantActivityChanged_UpdatesLocal(t *testing.T) {
+	a := makeApp()
+	model, _ := a.Update(room.ParticipantActivityChanged{
+		Name:     "claude",
+		Activity: room.ActivityGenerating,
+	})
+	a = model.(App)
+
+	if a.localActivities["claude"] != room.ActivityGenerating {
+		t.Fatal("expected claude to be generating")
+	}
+	// Verify dual-write to sidebar
+	if a.sidebar.statuses["claude"] != "generating" {
+		t.Fatalf("expected sidebar status 'generating', got %q", a.sidebar.statuses["claude"])
+	}
+}
+
+func TestApp_RoomErrorOccurred_AddsSystemMessage(t *testing.T) {
+	a := makeApp()
+	model, _ := a.Update(room.ErrorOccurred{
+		Error: fmt.Errorf("test error"),
+	})
+	a = model.(App)
+
+	if len(a.chat.messages) == 0 {
+		t.Fatal("expected error message in chat")
 	}
 }
