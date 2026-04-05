@@ -433,11 +433,26 @@ func TestApp_AtTrigger_MidMessage(t *testing.T) {
 }
 
 func TestApp_AtTrigger_NotAfterAlpha(t *testing.T) {
-	// Trigger detection in Update prevents firing for "email@".
-	// FSM stays in Normal — no TriggerMention is fired.
 	a := makeApp()
+	a.localParticipants = []protocol.Participant{
+		{Name: "claude", Role: "agent", Online: true},
+	}
+	// Give the app a size so key events are processed.
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
+
+	// Simulate typing "email@" — the '@' follows an alpha character,
+	// so the trigger detection should NOT fire.
+	a.input.ta.SetValue("email@")
+	// Run the post-key trigger check by sending a key event.
+	model, _ = a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	a = model.(App)
+
 	if a.inputFSM.Current() != StateNormal {
-		t.Error("expected FSM in StateNormal by default")
+		t.Error("expected FSM in StateNormal — '@' after alpha should not trigger")
+	}
+	if a.suggestions.Visible() {
+		t.Error("expected suggestions NOT visible after 'email@'")
 	}
 }
 

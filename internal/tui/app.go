@@ -101,6 +101,10 @@ func NewApp(topic string, port int, mode InputMode, _ string, sendFn func(string
 	if len(participants) > 0 {
 		a.sidebar.SetParticipants(participants)
 	}
+	// Callbacks are no-ops because Bubble Tea uses value semantics — the App
+	// is copied on every Update call, so closures captured here would mutate
+	// a stale copy. Suggestion population and hiding happen inline at the
+	// call sites in Update instead.
 	a.inputFSM = NewInputFSM(func(InputTrigger) {}, func() {})
 	return a
 }
@@ -421,8 +425,6 @@ func (a *App) maybeStartSpinner() tea.Cmd {
 	return nil
 }
 
-// checkSuggestionTrigger scans the current input value for a trigger character
-// and activates suggestions if found.
 // handleServerMsg dispatches an incoming RawMessage to the appropriate handler
 // based on its method.
 func (a *App) handleServerMsg(raw *protocol.RawMessage) {
