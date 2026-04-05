@@ -18,6 +18,7 @@ import (
 	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/driver"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 	"github.com/khaiql/parley/internal/server"
 	"github.com/khaiql/parley/internal/tui"
 	"github.com/khaiql/parley/internal/web"
@@ -211,7 +212,24 @@ func runHost(_ *cobra.Command, _ []string) error {
 	}
 	app.SetCommandRegistry(reg, cmdCtx)
 
+	// Create room.State for event-sourced state management.
+	roomState := room.New(reg, cmdCtx)
+	roomState.SetSendFn(sendFn)
+	if hostYolo {
+		roomState.SetAutoApprove(true)
+	}
+	app.SetRoomState(roomState)
+
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	// Subscribe to room events before starting the incoming loop so no
+	// events are lost.
+	events := roomState.Subscribe()
+	go func() {
+		for e := range events {
+			p.Send(e)
+		}
+	}()
 
 	// Bridge network → TUI. Join is done here (not before p.Run) so that
 	// the room.state response arrives after the TUI event loop is running.
@@ -224,7 +242,8 @@ func runHost(_ *cobra.Command, _ []string) error {
 			Repo:      repo,
 		})
 		for msg := range c.Incoming() {
-			p.Send(tui.ServerMsg{Raw: msg})
+			roomState.HandleServerMessage(msg)
+			p.Send(tui.ServerMsg{Raw: msg}) // keep old path working
 		}
 	}()
 
@@ -340,10 +359,10 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	command := "claude"
+	cmdName := "claude"
 	var extraArgs []string
 	if len(agentArgs) > 0 {
-		command = agentArgs[0]
+		cmdName = agentArgs[0]
 		extraArgs = agentArgs[1:]
 	}
 
@@ -370,7 +389,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	config := driver.AgentConfig{
-		Command:         command,
+		Command:         cmdName,
 		Args:            extraArgs,
 		Name:            joinName,
 		Role:            joinRole,
@@ -385,7 +404,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	config.SystemPrompt = driver.BuildSystemPrompt(config)
 
 	ctx := context.Background()
-	d, err := driver.NewDriver(command)
+	d, err := driver.NewDriver(cmdName)
 	if err != nil {
 		return fmt.Errorf("join: %w", err)
 	}
@@ -405,7 +424,28 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	app := tui.NewApp(topic, joinPort, tui.InputModeAgent, joinName, nil, roomState.Participants...)
 	app.SetAgent(joinName, joinRole)
 	app.SetYolo(roomState.AutoApprove)
+
+	// Create room.State for event-sourced state management (join has no commands).
+	rs := room.New(nil, command.Context{})
+	app.SetRoomState(rs)
+
+	// Replay the room.state we already consumed during the join handshake.
+	stateJSON, _ := json.Marshal(roomState)
+	rs.HandleServerMessage(&protocol.RawMessage{
+		Method: "room.state",
+		Params: stateJSON,
+	})
+
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	// Subscribe to room events before starting the incoming loop so no
+	// events are lost.
+	rsEvents := rs.Subscribe()
+	go func() {
+		for e := range rsEvents {
+			p.Send(e)
+		}
+	}()
 
 	// Bridge network → TUI + agent driver.
 	go func() {
@@ -421,6 +461,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		}
 
 		for msg := range c.Incoming() {
+			rs.HandleServerMessage(msg)
 			p.Send(tui.ServerMsg{Raw: msg})
 
 			if msg.Method == "room.message" {
