@@ -149,6 +149,7 @@ type RoomStateParams struct {
 	RoomID       string          `json:"room_id,omitempty"`
 	Topic        string          `json:"topic,omitempty"`
 	AutoApprove  bool            `json:"auto_approve,omitempty"`
+	Debug        bool            `json:"debug,omitempty"`
 	Participants []Participant   `json:"participants"`
 	Messages     []MessageParams `json:"messages,omitempty"`
 }

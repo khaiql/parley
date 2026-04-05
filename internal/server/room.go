@@ -16,6 +16,7 @@ type Room struct {
 	ID           string
 	Topic        string
 	AutoApprove  bool
+	Debug        bool
 	Participants map[string]*ClientConn
 	Messages     []protocol.MessageParams
 	seq          int
@@ -97,6 +98,7 @@ func (r *Room) Join(cc *ClientConn) (protocol.RoomStateParams, error) {
 		RoomID:       r.ID,
 		Topic:        topic,
 		AutoApprove:  r.AutoApprove,
+		Debug:        r.Debug,
 		Participants: participants,
 		Messages:     recent,
 	}, nil
