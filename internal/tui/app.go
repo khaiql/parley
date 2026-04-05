@@ -62,7 +62,6 @@ type App struct {
 	cmdCtx            command.Context          // context passed to slash commands
 	lastInputHeight   int                      // cached to avoid redundant re-layouts
 	pendingHistory    []protocol.MessageParams // set during room.state, loaded async
-	spinnerActive     bool
 	suggestions      Suggestions
 	inputFSM         *InputFSM
 	completionStart  int // cursor position where trigger character was typed
@@ -263,10 +262,11 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 
 	case SpinnerTickMsg:
-		if a.sidebar.TickSpinner() {
+		a.sidebar.TickSpinner()
+		if isAnyGenerating(a.localActivities) {
 			return a, spinnerTick()
 		}
-		a.spinnerActive = false
+		// Self-terminates when no one is generating.
 		return a, nil
 
 	case ServerMsg:
@@ -406,14 +406,10 @@ func (a *App) layout() {
 }
 
 // maybeStartSpinner checks if any participant is generating and starts
-// the spinner tick if not already running.
+// the spinner tick. Used by the legacy ServerMsg fallback path.
 func (a *App) maybeStartSpinner() tea.Cmd {
-	if a.spinnerActive {
-		return nil
-	}
 	for _, status := range a.sidebar.statuses {
 		if status == "generating" {
-			a.spinnerActive = true
 			return spinnerTick()
 		}
 	}
@@ -500,14 +496,11 @@ func (a *App) populateMentionSuggestions() {
 	a.suggestions.SetItems(items)
 }
 
-// maybeStartSpinnerFromActivities checks if any participant is generating and
-// starts the spinner tick if not already running. Used by room event handlers.
+// maybeStartSpinnerFromActivities returns a spinnerTick command if any
+// participant is generating. The spinner self-terminates in SpinnerTickMsg
+// when no one is generating — no flag needed.
 func (a *App) maybeStartSpinnerFromActivities() tea.Cmd {
-	if a.spinnerActive {
-		return nil
-	}
 	if isAnyGenerating(a.localActivities) {
-		a.spinnerActive = true
 		return spinnerTick()
 	}
 	return nil
