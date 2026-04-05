@@ -449,65 +449,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	})
 
 	// Bridge network → TUI + agent driver.
-	go func() {
-		var pendingMsg string
-		var pendingTimer *time.Timer
-
-		flushPending := func() {
-			if pendingMsg != "" {
-				_ = d.Send(pendingMsg)
-				pendingMsg = ""
-			}
-			pendingTimer = nil
-		}
-
-		for msg := range c.Incoming() {
-			rs.HandleServerMessage(msg)
-
-			if msg.Method == "room.message" {
-				var params protocol.MessageParams
-				if err := json.Unmarshal(msg.Params, &params); err == nil {
-					if params.From != joinName {
-						// Format message and decide whether to delay.
-						formatted := fmt.Sprintf("%s: %s", params.From, contentText(params.Content))
-						if isMentioned(params.Mentions, joinName) {
-							// @-mentioned: flush any pending messages and send immediately.
-							if pendingTimer != nil {
-								pendingTimer.Stop()
-								pendingTimer = nil
-							}
-							if pendingMsg != "" {
-								_ = d.Send(pendingMsg)
-								pendingMsg = ""
-							}
-							_ = d.Send(formatted)
-						} else {
-							// Not mentioned: batch with a 2-second debounce timer.
-							if pendingMsg != "" {
-								pendingMsg += "\n" + formatted
-							} else {
-								pendingMsg = formatted
-							}
-							if pendingTimer == nil {
-								pendingTimer = time.AfterFunc(2*time.Second, flushPending)
-							} else {
-								pendingTimer.Reset(2 * time.Second)
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Flush any remaining pending message when the channel closes.
-		if pendingTimer != nil {
-			pendingTimer.Stop()
-		}
-		flushPending()
-
-		// Server disconnected — quit the TUI and stop the agent.
-		p.Send(tui.ServerDisconnectedMsg{})
-	}()
+	go bridgeNetworkToAgent(c, rs, d, p, joinName)
 
 	// Bridge agent → network.
 	go func() {
@@ -616,6 +558,62 @@ func (a *RoomAdapter) GetID() string        { return a.room.ID }
 func (a *RoomAdapter) GetTopic() string     { return a.room.Topic }
 func (a *RoomAdapter) GetPort() int         { return a.port }
 func (a *RoomAdapter) GetMessageCount() int { return a.room.MessageCount() }
+
+// bridgeNetworkToAgent reads incoming server messages, feeds them to room.State,
+// and routes chat messages to the agent driver with debouncing.
+func bridgeNetworkToAgent(c *client.Client, rs *room.State, d driver.AgentDriver, p *tea.Program, agentName string) {
+	var pendingMsg string
+	var pendingTimer *time.Timer
+
+	flushPending := func() {
+		if pendingMsg != "" {
+			_ = d.Send(pendingMsg)
+			pendingMsg = ""
+		}
+		pendingTimer = nil
+	}
+
+	for msg := range c.Incoming() {
+		rs.HandleServerMessage(msg)
+
+		if msg.Method == "room.message" {
+			var params protocol.MessageParams
+			if err := json.Unmarshal(msg.Params, &params); err == nil {
+				if params.From != agentName {
+					formatted := fmt.Sprintf("%s: %s", params.From, contentText(params.Content))
+					if isMentioned(params.Mentions, agentName) {
+						if pendingTimer != nil {
+							pendingTimer.Stop()
+							pendingTimer = nil
+						}
+						if pendingMsg != "" {
+							_ = d.Send(pendingMsg)
+							pendingMsg = ""
+						}
+						_ = d.Send(formatted)
+					} else {
+						if pendingMsg != "" {
+							pendingMsg += "\n" + formatted
+						} else {
+							pendingMsg = formatted
+						}
+						if pendingTimer == nil {
+							pendingTimer = time.AfterFunc(2*time.Second, flushPending)
+						} else {
+							pendingTimer.Reset(2 * time.Second)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if pendingTimer != nil {
+		pendingTimer.Stop()
+	}
+	flushPending()
+	p.Send(tui.ServerDisconnectedMsg{})
+}
 
 func (a *RoomAdapter) GetParticipants() []command.ParticipantInfo {
 	conns := a.room.GetParticipants()

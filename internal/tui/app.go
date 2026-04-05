@@ -152,36 +152,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Layer 3: Input FSM routing.
-		switch a.inputFSM.Current() {
-		case StateCompleting:
-			switch m.Type {
-			case tea.KeyUp:
-				a.suggestions.MoveUp()
-				return a, nil
-			case tea.KeyDown:
-				a.suggestions.MoveDown()
-				return a, nil
-			case tea.KeyTab:
-				sel := a.suggestions.Selected()
-				if sel.Label != "" {
-					end := len([]rune(a.input.Value()))
-					a.input.ReplaceRange(a.completionStart, end, sel.Label+" ")
-				}
-				_ = a.inputFSM.Fire(TriggerAccept)
-				a.suggestions.Hide()
-				a.layout()
-				return a, nil
-			case tea.KeyEsc:
-				_ = a.inputFSM.Fire(TriggerDismiss)
-				a.suggestions.Hide()
-				a.layout()
-				return a, nil
-			case tea.KeyEnter:
-				_ = a.inputFSM.Fire(TriggerSubmit)
-				a.suggestions.Hide()
-				a.layout()
-				// Fall through to normal Enter handling below.
-			}
+		if cmd, handled := a.handleCompletingKeys(m); handled {
+			return a, cmd
 		}
 
 		// Normal input handling (StateNormal, or Enter fell through from StateCompleting).
@@ -369,6 +341,45 @@ func (a *App) layout() {
 }
 
 // populateSlashSuggestions fills the suggestion list with available commands.
+// handleCompletingKeys handles key events when the input FSM is in StateCompleting.
+// Returns (cmd, handled). If handled is true, the key was consumed.
+func (a *App) handleCompletingKeys(m tea.KeyMsg) (tea.Cmd, bool) {
+	if a.inputFSM.Current() != StateCompleting {
+		return nil, false
+	}
+	switch m.Type {
+	case tea.KeyUp:
+		a.suggestions.MoveUp()
+		return nil, true
+	case tea.KeyDown:
+		a.suggestions.MoveDown()
+		return nil, true
+	case tea.KeyTab:
+		sel := a.suggestions.Selected()
+		if sel.Label != "" {
+			end := len([]rune(a.input.Value()))
+			a.input.ReplaceRange(a.completionStart, end, sel.Label+" ")
+		}
+		_ = a.inputFSM.Fire(TriggerAccept)
+		a.suggestions.Hide()
+		a.layout()
+		return nil, true
+	case tea.KeyEsc:
+		_ = a.inputFSM.Fire(TriggerDismiss)
+		a.suggestions.Hide()
+		a.layout()
+		return nil, true
+	case tea.KeyEnter:
+		_ = a.inputFSM.Fire(TriggerSubmit)
+		a.suggestions.Hide()
+		a.layout()
+		// Not handled — fall through to normal Enter handling in Update.
+		return nil, false
+	default:
+		return nil, false
+	}
+}
+
 func (a *App) populateSlashSuggestions() {
 	if a.registry == nil {
 		return
