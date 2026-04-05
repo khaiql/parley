@@ -194,6 +194,36 @@ func TestStatusParamsEmptyStatus(t *testing.T) {
 	}
 }
 
+func TestParticipantColorIndexRoundTrip(t *testing.T) {
+	p := protocol.Participant{Name: "cosmo", ColorIndex: 5}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got protocol.Participant
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.ColorIndex != 5 {
+		t.Errorf("ColorIndex = %d, want 5", got.ColorIndex)
+	}
+}
+
+func TestJoinedParamsColorIndexRoundTrip(t *testing.T) {
+	jp := protocol.JoinedParams{Name: "cosmo", ColorIndex: 3}
+	b, err := json.Marshal(jp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got protocol.JoinedParams
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.ColorIndex != 3 {
+		t.Errorf("ColorIndex = %d, want 3", got.ColorIndex)
+	}
+}
+
 func TestJoinParamsEncodeDecodeRoundTrip(t *testing.T) {
 	params := protocol.JoinParams{
 		Name:      "agent-x",
