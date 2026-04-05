@@ -77,6 +77,10 @@ vhs <tape-file>.tape               # Record TUI to GIF
 
 VHS tapes live in the project root. Use them to visually verify TUI changes.
 
+### End-to-End Testing
+
+Use `/e2e-test` to run a full smoke test of the TUI using `agent-tui`. It builds the binary, hosts a room, joins an agent, and verifies message exchange. See `.claude/skills/e2e-test/SKILL.md` for details.
+
 ## Architecture Overview
 
 **Parley** is a TUI group chat where a human and coding agents (Claude Code, Gemini CLI, etc.) collaborate as peers.
@@ -88,8 +92,9 @@ cmd/parley/main.go          — CLI entrypoint (Cobra), wires host + join comman
 internal/protocol/           — JSON-RPC 2.0 types, NDJSON encoding
 internal/server/             — TCP server, room state, broadcast, persistence
 internal/client/             — TCP client, send/receive
+internal/room/               — Room business logic, event types, channel pub/sub (no TUI deps)
 internal/driver/             — AgentDriver interface + Claude Code driver
-internal/tui/                — Bubble Tea TUI (app, chat, sidebar, input, topbar, styles)
+internal/tui/                — Bubble Tea TUI shell (renders from room events)
 ```
 
 ### Communication
