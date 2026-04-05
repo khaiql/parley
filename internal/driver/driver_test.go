@@ -787,6 +787,11 @@ func TestBuildArgs_NoAutoApproveByDefault(t *testing.T) {
 // TestClaudeDriver_DebugLogging
 // ---------------------------------------------------------------------------
 
+// nopWriteCloser wraps an io.Writer as an io.WriteCloser with a no-op Close.
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
 func TestClaudeDriver_DebugLogging(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, "test.wal")
@@ -796,24 +801,48 @@ func TestClaudeDriver_DebugLogging(t *testing.T) {
 		t.Fatalf("wal.New: %v", err)
 	}
 
-	d := &ClaudeDriver{}
-	_ = AgentConfig{
-		Command:     "echo",
-		Name:        "test-agent",
-		DebugWriter: w,
+	// Use a bytes.Buffer as a fake stdin so Send() doesn't block.
+	var fakeBuf strings.Builder
+	d := &ClaudeDriver{
+		debugLog: w,
+		stdin:    nopWriteCloser{&fakeBuf},
+		events:   make(chan AgentEvent, 64),
 	}
 
-	if err := w.Log("out", []byte(`{"type":"result"}`)); err != nil {
-		t.Fatalf("Log: %v", err)
+	// Test Send() logs "in" entries.
+	if err := d.Send("hello"); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
+
+	// Test readLoop() logs "out" entries by feeding it a line.
+	input := strings.NewReader(`{"type":"result"}` + "\n")
+	d.wg.Add(1)
+	d.readLoop(input)
+
 	_ = w.Close()
-	_ = d
 
 	data, err := os.ReadFile(walPath)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	if len(data) == 0 {
-		t.Error("WAL file is empty")
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 WAL lines (1 in + 1 out), got %d:\n%s", len(lines), string(data))
+	}
+
+	// Verify directions.
+	var entry wal.Entry
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("unmarshal line 0: %v", err)
+	}
+	if entry.Direction != "in" {
+		t.Errorf("line 0: dir = %q, want %q", entry.Direction, "in")
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &entry); err != nil {
+		t.Fatalf("unmarshal line 1: %v", err)
+	}
+	if entry.Direction != "out" {
+		t.Errorf("line 1: dir = %q, want %q", entry.Direction, "out")
 	}
 }

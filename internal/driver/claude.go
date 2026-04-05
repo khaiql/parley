@@ -81,6 +81,8 @@ func (d *ClaudeDriver) Send(text string) error {
 		return fmt.Errorf("driver: not started")
 	}
 	msg := BuildInputMessage(text)
+	// Debug logging errors are intentionally discarded — WAL is a passive
+	// observer and must never interrupt the agent I/O path.
 	if d.debugLog != nil {
 		_ = d.debugLog.Log("in", msg)
 	}
