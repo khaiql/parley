@@ -230,10 +230,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.chat.SetLoading(false)
 		a.chat.LoadMessages(m.Messages)
 		a.statusbar.SetYolo(a.roomState != nil && a.roomState.AutoApprove())
-		if isAnyGenerating(a.localActivities) {
-			return a, spinnerTick()
-		}
-		return a, nil
+		return a, a.maybeStartSpinnerFromActivities()
 
 	case room.MessageReceived:
 		a.localMessages = append(a.localMessages, m.Message)
@@ -243,21 +240,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case room.ParticipantsChanged:
 		a.localParticipants = m.Participants
 		a.sidebar.SetParticipants(m.Participants)
-		if isAnyGenerating(a.localActivities) {
-			return a, spinnerTick()
-		}
-		return a, nil
+		return a, a.maybeStartSpinnerFromActivities()
 
 	case room.ParticipantActivityChanged:
 		a.localActivities[m.Name] = m.Activity
 		a.sidebar.SetParticipantStatus(m.Name, activityToString(m.Activity))
-		if m.Activity == room.ActivityGenerating {
-			if !a.spinnerActive {
-				a.spinnerActive = true
-				return a, spinnerTick()
-			}
-		}
-		return a, nil
+		return a, a.maybeStartSpinnerFromActivities()
 
 	case room.ErrorOccurred:
 		a.chat.AddMessage(systemMessage(m.Error.Error()))
@@ -529,6 +517,19 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 			a.sidebar.SetParticipantStatus(params.Name, params.Status)
 		}
 	}
+}
+
+// maybeStartSpinnerFromActivities checks if any participant is generating and
+// starts the spinner tick if not already running. Used by room event handlers.
+func (a *App) maybeStartSpinnerFromActivities() tea.Cmd {
+	if a.spinnerActive {
+		return nil
+	}
+	if isAnyGenerating(a.localActivities) {
+		a.spinnerActive = true
+		return spinnerTick()
+	}
+	return nil
 }
 
 // isAnyGenerating returns true if any participant has ActivityGenerating.
