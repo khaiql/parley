@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 )
 
 const sidebarWidth = 30
@@ -65,8 +66,15 @@ type App struct {
 	suggestions       Suggestions
 	completionTrigger rune // '/' or '@', or 0 if inactive
 	completionStart   int  // cursor position where trigger character was typed
+	roomState         *room.State
 	width             int
 	height            int
+}
+
+// SetRoomState sets the room.State that the App will use for event-sourced
+// state management. The TUI does not use this yet (wired in Task 7).
+func (a *App) SetRoomState(s *room.State) {
+	a.roomState = s
 }
 
 // NewApp creates an App with the given topic, port, input mode, display name,
