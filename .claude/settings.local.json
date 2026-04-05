@@ -7,7 +7,8 @@
       "Bash(claude -p --input-format stream-json --output-format stream-json)",
       "Bash(go build:*)",
       "Bash(go test:*)",
-      "Bash(golangci-lint run:*)"
+      "Bash(golangci-lint run:*)",
+      "Bash(gh issue:*)"
     ]
   }
 }
