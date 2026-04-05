@@ -19,6 +19,7 @@ const timestampGap = 5 * time.Minute
 type Chat struct {
 	vp       viewport.Model
 	messages []protocol.MessageParams
+	colors   map[string]int // sender name → server-assigned color index
 	loading  bool
 	width    int
 	height   int
@@ -57,9 +58,24 @@ func (c *Chat) LoadMessages(msgs []protocol.MessageParams) {
 	c.vp.GotoBottom()
 }
 
+// SetColors replaces the sender→colorIndex map and rebuilds the viewport.
+func (c *Chat) SetColors(m map[string]int) {
+	c.colors = m
+	c.rebuildContent()
+}
+
+// AddColor adds or updates a single sender's color index and rebuilds the viewport.
+func (c *Chat) AddColor(name string, colorIndex int) {
+	if c.colors == nil {
+		c.colors = make(map[string]int)
+	}
+	c.colors[name] = colorIndex
+	c.rebuildContent()
+}
+
 // rebuildContent re-renders all messages into the viewport.
 func (c *Chat) rebuildContent() {
-	c.vp.SetContent(renderMessages(c.messages, c.width))
+	c.vp.SetContent(renderMessages(c.messages, c.width, c.colors))
 }
 
 // Update passes tea.Msg events to the underlying viewport (for scrolling).
@@ -149,8 +165,21 @@ func summarizeSystemRun(msgs []protocol.MessageParams) string {
 	return fmt.Sprintf("%d system events", len(msgs))
 }
 
+// resolveAgentColor returns the color for an agent sender. It uses the
+// server-assigned index from the colors map when available, falling back to
+// the FNV hash for senders not in the map (e.g. historical messages from
+// disconnected participants).
+func resolveAgentColor(name string, colors map[string]int) lipgloss.Color {
+	if colors != nil {
+		if idx, ok := colors[name]; ok {
+			return ColorForIndex(idx)
+		}
+	}
+	return ColorForSender(name, false)
+}
+
 // renderMessages renders a slice of messages with grouping, borders, and separators.
-func renderMessages(msgs []protocol.MessageParams, width int) string {
+func renderMessages(msgs []protocol.MessageParams, width int, colors map[string]int) string {
 	if len(msgs) == 0 {
 		return ""
 	}
@@ -177,7 +206,12 @@ func renderMessages(msgs []protocol.MessageParams, width int) string {
 
 		text := extractText(msg.Content)
 		isHuman := msg.IsHuman()
-		senderColor := ColorForSender(msg.From, isHuman)
+		var senderColor lipgloss.Color
+		if isHuman {
+			senderColor = colorHuman
+		} else {
+			senderColor = resolveAgentColor(msg.From, colors)
+		}
 		sameSender := msg.From == lastSender && lastSender != ""
 
 		// Determine whether to show timestamp.
@@ -198,7 +232,7 @@ func renderMessages(msgs []protocol.MessageParams, width int) string {
 		if bodyWidth < 1 {
 			bodyWidth = 1
 		}
-		body := highlightMentions(renderMarkdown(text, bodyWidth))
+		body := highlightMentions(renderMarkdown(text, bodyWidth), colors)
 		var content string
 		if !sameSender {
 			// First message in group: show header + blank line + body.
@@ -263,7 +297,7 @@ func renderHeader(msg protocol.MessageParams, isHuman bool, senderColor lipgloss
 // Handles Glamour-rendered text where ANSI codes may be interleaved with the @mention.
 var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-func highlightMentions(text string) string {
+func highlightMentions(text string, colors map[string]int) string {
 	// Strip ANSI to find mention positions in plain text.
 	plain := ansiSeq.ReplaceAllString(text, "")
 	mentionRe := regexp.MustCompile(`@(\w+)`)
@@ -300,7 +334,7 @@ func highlightMentions(text string) string {
 		oStart := plainToOrig[pStart]
 		oEnd := plainToOrig[pEnd]
 
-		c := ColorForSender(name, false)
+		c := resolveAgentColor(name, colors)
 		styled := lipgloss.NewStyle().Bold(true).Foreground(c).Render("@" + name)
 		result = result[:oStart] + styled + result[oEnd:]
 	}
