@@ -69,7 +69,7 @@ func TestParticipants_ReturnsCopy(t *testing.T) {
 
 	// Mutate the returned slice
 	got[0].Name = "mutated"
-	got = append(got, protocol.Participant{Name: "extra"})
+	_ = append(got, protocol.Participant{Name: "extra"})
 
 	// Internal state must be unchanged
 	if s.participants[0].Name != "alice" {

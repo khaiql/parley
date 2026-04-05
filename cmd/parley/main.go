@@ -243,7 +243,6 @@ func runHost(_ *cobra.Command, _ []string) error {
 		})
 		for msg := range c.Incoming() {
 			roomState.HandleServerMessage(msg)
-			p.Send(tui.ServerMsg{Raw: msg}) // keep old path working
 		}
 	}()
 
@@ -464,7 +463,6 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 		for msg := range c.Incoming() {
 			rs.HandleServerMessage(msg)
-			p.Send(tui.ServerMsg{Raw: msg})
 
 			if msg.Method == "room.message" {
 				var params protocol.MessageParams
