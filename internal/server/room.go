@@ -24,15 +24,16 @@ type Room struct {
 
 // ClientConn represents a connected participant.
 type ClientConn struct {
-	Name      string
-	Role      string
-	Directory string
-	Repo      string
-	AgentType string
-	Source    string
-	Online    bool
-	Send      chan []byte
-	Done      chan struct{}
+	Name       string
+	Role       string
+	Directory  string
+	Repo       string
+	AgentType  string
+	Source     string
+	Online     bool
+	ColorIndex int
+	Send       chan []byte
+	Done       chan struct{}
 }
 
 // NewRoom creates a new Room with the given topic and a fresh UUID as its ID.
@@ -51,6 +52,30 @@ func newUUID() string {
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// numColorSlots is the number of distinct agent colors available (must match
+// len(agentPalette) in internal/tui/styles.go).
+const numColorSlots = 8
+
+// assignColorIndex returns the first color index (0..numColorSlots-1) not
+// already held by an online participant. Must be called with r.mu held.
+// If all slots are taken (more than numColorSlots online agents), it wraps
+// using the current participant count so the assignment is still deterministic.
+func (r *Room) assignColorIndex() int {
+	used := make([]bool, numColorSlots)
+	for _, cc := range r.Participants {
+		if cc.Online && cc.ColorIndex >= 0 && cc.ColorIndex < numColorSlots {
+			used[cc.ColorIndex] = true
+		}
+	}
+	for i, inUse := range used {
+		if !inUse {
+			return i
+		}
+	}
+	// All slots taken — overflow by participant count (best-effort).
+	return len(r.Participants) % numColorSlots
 }
 
 // Join adds cc to the room and returns a snapshot of the current room state,
@@ -81,11 +106,13 @@ func (r *Room) Join(cc *ClientConn) (protocol.RoomStateParams, error) {
 		existing.Repo = cc.Repo
 		existing.AgentType = cc.AgentType
 		existing.Source = cc.Source
+		existing.ColorIndex = r.assignColorIndex() // old slot may have been taken
 		existing.Online = true
 		existing.Send = cc.Send
 		existing.Done = cc.Done
 	} else {
 		cc.Online = true
+		cc.ColorIndex = r.assignColorIndex()
 		r.Participants[cc.Name] = cc
 	}
 	participants := r.snapshot()
@@ -302,13 +329,14 @@ func (r *Room) snapshot() []protocol.Participant {
 	out := make([]protocol.Participant, 0, len(r.Participants))
 	for _, cc := range r.Participants {
 		out = append(out, protocol.Participant{
-			Name:      cc.Name,
-			Role:      cc.Role,
-			Directory: cc.Directory,
-			Repo:      cc.Repo,
-			AgentType: cc.AgentType,
-			Source:    cc.Source,
-			Online:    cc.Online,
+			Name:       cc.Name,
+			Role:       cc.Role,
+			Directory:  cc.Directory,
+			Repo:       cc.Repo,
+			AgentType:  cc.AgentType,
+			Source:     cc.Source,
+			Online:     cc.Online,
+			ColorIndex: cc.ColorIndex,
 		})
 	}
 	return out

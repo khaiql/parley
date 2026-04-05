@@ -8,6 +8,80 @@ import (
 
 // TestJoinDuplicateNameReturnsError verifies that Room.Join returns an error
 // when a participant with the same name is already in the room.
+func TestJoinAssignsUniqueColorIndices(t *testing.T) {
+	r := NewRoom("test")
+
+	cc1 := &ClientConn{Name: "agent1", Role: "agent"}
+	cc2 := &ClientConn{Name: "agent2", Role: "agent"}
+	cc3 := &ClientConn{Name: "agent3", Role: "agent"}
+
+	if _, err := r.Join(cc1); err != nil {
+		t.Fatalf("join cc1: %v", err)
+	}
+	if _, err := r.Join(cc2); err != nil {
+		t.Fatalf("join cc2: %v", err)
+	}
+	if _, err := r.Join(cc3); err != nil {
+		t.Fatalf("join cc3: %v", err)
+	}
+
+	if cc1.ColorIndex == cc2.ColorIndex {
+		t.Errorf("cc1 and cc2 share ColorIndex %d", cc1.ColorIndex)
+	}
+	if cc1.ColorIndex == cc3.ColorIndex {
+		t.Errorf("cc1 and cc3 share ColorIndex %d", cc1.ColorIndex)
+	}
+	if cc2.ColorIndex == cc3.ColorIndex {
+		t.Errorf("cc2 and cc3 share ColorIndex %d", cc2.ColorIndex)
+	}
+}
+
+func TestJoinColorIndexFreedOnLeave(t *testing.T) {
+	r := NewRoom("test")
+
+	cc1 := &ClientConn{Name: "agent1", Role: "agent"}
+	cc2 := &ClientConn{Name: "agent2", Role: "agent"}
+
+	r.Join(cc1) //nolint:errcheck
+	r.Join(cc2) //nolint:errcheck
+
+	freedIdx := cc1.ColorIndex
+	r.Leave("agent1")
+
+	cc3 := &ClientConn{Name: "agent3", Role: "agent"}
+	r.Join(cc3) //nolint:errcheck
+
+	if cc2.ColorIndex == cc3.ColorIndex {
+		t.Errorf("cc2 and cc3 share ColorIndex %d after cc1 left", cc2.ColorIndex)
+	}
+	if cc3.ColorIndex != freedIdx {
+		t.Errorf("cc3 ColorIndex = %d, want freed slot %d", cc3.ColorIndex, freedIdx)
+	}
+}
+
+func TestJoinColorIndexInSnapshot(t *testing.T) {
+	r := NewRoom("test")
+	cc := &ClientConn{Name: "agent1", Role: "agent"}
+	state, err := r.Join(cc)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	var found *protocol.Participant
+	for i := range state.Participants {
+		if state.Participants[i].Name == "agent1" {
+			found = &state.Participants[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("agent1 not found in snapshot")
+	}
+	if found.ColorIndex != cc.ColorIndex {
+		t.Errorf("snapshot ColorIndex = %d, want %d", found.ColorIndex, cc.ColorIndex)
+	}
+}
+
 func TestJoinDuplicateNameReturnsError(t *testing.T) {
 	room := NewRoom("test-topic")
 
