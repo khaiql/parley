@@ -429,23 +429,25 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	rs := room.New(nil, command.Context{})
 	app.SetRoomState(rs)
 
-	// Replay the room.state we already consumed during the join handshake.
-	stateJSON, _ := json.Marshal(roomState)
-	rs.HandleServerMessage(&protocol.RawMessage{
-		Method: "room.state",
-		Params: stateJSON,
-	})
-
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
-	// Subscribe to room events before starting the incoming loop so no
-	// events are lost.
+	// Subscribe to room events BEFORE replaying state so no events are lost.
 	rsEvents := rs.Subscribe()
 	go func() {
 		for e := range rsEvents {
 			p.Send(e)
 		}
 	}()
+
+	// Replay the room.state we already consumed during the join handshake.
+	stateJSON, err := json.Marshal(roomState)
+	if err != nil {
+		return fmt.Errorf("join: marshal room state for replay: %w", err)
+	}
+	rs.HandleServerMessage(&protocol.RawMessage{
+		Method: "room.state",
+		Params: stateJSON,
+	})
 
 	// Bridge network → TUI + agent driver.
 	go func() {
