@@ -26,6 +26,7 @@ type ClaudeDriver struct {
 	events    chan AgentEvent
 	cancel    context.CancelFunc
 	sessionID string
+	debugLog  DebugLogger
 }
 
 // Start spawns the claude subprocess and begins streaming events.
@@ -59,6 +60,7 @@ func (d *ClaudeDriver) Start(ctx context.Context, config AgentConfig) error {
 	}
 
 	d.events = make(chan AgentEvent, 64)
+	d.debugLog = config.DebugWriter
 
 	if err := d.cmd.Start(); err != nil {
 		cancel()
@@ -79,6 +81,9 @@ func (d *ClaudeDriver) Send(text string) error {
 		return fmt.Errorf("driver: not started")
 	}
 	msg := BuildInputMessage(text)
+	if d.debugLog != nil {
+		_ = d.debugLog.Log("in", msg)
+	}
 	_, err := d.stdin.Write(msg)
 	return err
 }
@@ -117,6 +122,9 @@ func (d *ClaudeDriver) readLoop(r io.Reader) {
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
+		if d.debugLog != nil {
+			_ = d.debugLog.Log("out", line)
+		}
 		d.parseAndEmitLine(line, d.events)
 	}
 }

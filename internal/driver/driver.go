@@ -29,6 +29,12 @@ type AgentEvent struct {
 	ToolName string
 }
 
+// DebugLogger is the interface for debug WAL logging.
+// It is satisfied by *wal.Writer but defined here to avoid a circular import.
+type DebugLogger interface {
+	Log(direction string, raw []byte) error
+}
+
 // AgentConfig holds all configuration needed to start an agent process.
 type AgentConfig struct {
 	Command         string   // e.g., "claude"
@@ -42,7 +48,8 @@ type AgentConfig struct {
 	SystemPrompt    string
 	InitialMessage  string // if set, used as the first prompt (for drivers that need one in Start)
 	ResumeSessionID string // if set, pass --resume <id> to the driver
-	AutoApprove     bool   // if set, append driver-specific auto-approve flag
+	AutoApprove     bool        // if set, append driver-specific auto-approve flag
+	DebugWriter     DebugLogger // if set, log all raw I/O to this writer
 }
 
 // ParticipantInfo describes one participant in the room (used for system prompt).

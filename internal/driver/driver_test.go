@@ -4,11 +4,14 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/wal"
 )
 
 // ---------------------------------------------------------------------------
@@ -777,5 +780,40 @@ func TestBuildArgs_NoAutoApproveByDefault(t *testing.T) {
 		if a == "--dangerously-skip-permissions" {
 			t.Errorf("expected no --dangerously-skip-permissions when AutoApprove is false, got: %v", args)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestClaudeDriver_DebugLogging
+// ---------------------------------------------------------------------------
+
+func TestClaudeDriver_DebugLogging(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, "test.wal")
+
+	w, err := wal.New(walPath, "test-agent")
+	if err != nil {
+		t.Fatalf("wal.New: %v", err)
+	}
+
+	d := &ClaudeDriver{}
+	_ = AgentConfig{
+		Command:     "echo",
+		Name:        "test-agent",
+		DebugWriter: w,
+	}
+
+	if err := w.Log("out", []byte(`{"type":"result"}`)); err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	_ = w.Close()
+	_ = d
+
+	data, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("WAL file is empty")
 	}
 }
