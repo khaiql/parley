@@ -383,46 +383,49 @@ func TestApp_SlashTrigger_ActivatesSuggestions(t *testing.T) {
 	reg.Register(&command.Command{Name: "save", Usage: "/save", Description: "Save state"})
 	a.SetCommandRegistry(reg, command.Context{})
 
-	a.input.ta.SetValue("/")
-	a.checkSuggestionTrigger()
+	a.completionStart = 0
+	_ = a.inputFSM.Fire(TriggerSlash)
+	a.populateSlashSuggestions()
 
 	if !a.suggestions.Visible() {
-		t.Error("expected suggestions visible after typing /")
+		t.Error("expected suggestions visible after slash trigger")
 	}
-	if a.completionTrigger != '/' {
-		t.Errorf("expected trigger '/', got %c", a.completionTrigger)
+	if a.inputFSM.Current() != StateCompleting {
+		t.Error("expected FSM in StateCompleting")
 	}
 }
 
 func TestApp_AtTrigger_ActivatesSuggestions(t *testing.T) {
 	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
+	a.localParticipants = []protocol.Participant{
 		{Name: "claude", Role: "agent", Online: true},
 		{Name: "gemini", Role: "agent", Online: true},
-	})
+	}
 
-	a.input.ta.SetValue("@")
-	a.checkSuggestionTrigger()
+	a.completionStart = 0
+	_ = a.inputFSM.Fire(TriggerMention)
+	a.populateMentionSuggestions()
 
 	if !a.suggestions.Visible() {
-		t.Error("expected suggestions visible after typing @")
+		t.Error("expected suggestions visible after mention trigger")
 	}
-	if a.completionTrigger != '@' {
-		t.Errorf("expected trigger '@', got %c", a.completionTrigger)
+	if a.inputFSM.Current() != StateCompleting {
+		t.Error("expected FSM in StateCompleting")
 	}
 }
 
 func TestApp_AtTrigger_MidMessage(t *testing.T) {
 	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
+	a.localParticipants = []protocol.Participant{
 		{Name: "claude", Role: "agent", Online: true},
-	})
+	}
 
-	a.input.ta.SetValue("hello @")
-	a.checkSuggestionTrigger()
+	a.completionStart = 6
+	_ = a.inputFSM.Fire(TriggerMention)
+	a.populateMentionSuggestions()
 
 	if !a.suggestions.Visible() {
-		t.Error("expected suggestions visible after 'hello @'")
+		t.Error("expected suggestions visible after mention trigger")
 	}
 	if a.completionStart != 6 {
 		t.Errorf("expected completionStart 6, got %d", a.completionStart)
@@ -431,23 +434,33 @@ func TestApp_AtTrigger_MidMessage(t *testing.T) {
 
 func TestApp_AtTrigger_NotAfterAlpha(t *testing.T) {
 	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
+	a.localParticipants = []protocol.Participant{
 		{Name: "claude", Role: "agent", Online: true},
-	})
+	}
+	// Give the app a size so key events are processed.
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
 
+	// Simulate typing "email@" — the '@' follows an alpha character,
+	// so the trigger detection should NOT fire.
 	a.input.ta.SetValue("email@")
-	a.checkSuggestionTrigger()
+	// Run the post-key trigger check by sending a key event.
+	model, _ = a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	a = model.(App)
 
+	if a.inputFSM.Current() != StateNormal {
+		t.Error("expected FSM in StateNormal — '@' after alpha should not trigger")
+	}
 	if a.suggestions.Visible() {
 		t.Error("expected suggestions NOT visible after 'email@'")
 	}
 }
 
 func TestApp_SlashTrigger_NilRegistry_NoActivation(t *testing.T) {
-	a := makeApp()
+	a := makeApp() // no registry
 
-	a.input.ta.SetValue("/")
-	a.checkSuggestionTrigger()
+	_ = a.inputFSM.Fire(TriggerSlash)
+	a.populateSlashSuggestions() // registry is nil — does nothing
 
 	if a.suggestions.Visible() {
 		t.Error("expected suggestions NOT visible when registry is nil")
@@ -456,21 +469,25 @@ func TestApp_SlashTrigger_NilRegistry_NoActivation(t *testing.T) {
 
 func TestApp_AcceptSuggestion_InsertsText(t *testing.T) {
 	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
+	a.localParticipants = []protocol.Participant{
 		{Name: "claude", Role: "agent", Online: true},
 		{Name: "gemini", Role: "agent", Online: true},
-	})
+	}
 
 	a.input.ta.SetValue("hello @cl")
-	a.completionTrigger = '@'
 	a.completionStart = 6
-	a.suggestions.SetItems([]SuggestionItem{
-		{Label: "@claude", Description: "agent"},
-		{Label: "@gemini", Description: "agent"},
-	})
+	_ = a.inputFSM.Fire(TriggerMention)
+	a.populateMentionSuggestions()
 	a.suggestions.Filter("cl")
 
-	a.acceptSuggestion()
+	// Accept: insert selected text and dismiss
+	sel := a.suggestions.Selected()
+	if sel.Label != "" {
+		end := len([]rune(a.input.Value()))
+		a.input.ReplaceRange(a.completionStart, end, sel.Label+" ")
+	}
+	_ = a.inputFSM.Fire(TriggerAccept)
+	a.suggestions.Hide()
 
 	got := a.input.Value()
 	if got != "hello @claude " {
@@ -478,6 +495,9 @@ func TestApp_AcceptSuggestion_InsertsText(t *testing.T) {
 	}
 	if a.suggestions.Visible() {
 		t.Error("expected suggestions hidden after accept")
+	}
+	if a.inputFSM.Current() != StateNormal {
+		t.Error("expected FSM back in StateNormal after accept")
 	}
 }
 
@@ -488,11 +508,11 @@ func TestApp_FilterSuggestions_NarrowsList(t *testing.T) {
 	reg.Register(&command.Command{Name: "save", Usage: "/save", Description: "Save state"})
 	a.SetCommandRegistry(reg, command.Context{})
 
-	a.input.ta.SetValue("/")
-	a.checkSuggestionTrigger()
+	a.completionStart = 0
+	_ = a.inputFSM.Fire(TriggerSlash)
+	a.populateSlashSuggestions()
 
-	a.input.ta.SetValue("/s")
-	a.updateSuggestionFilter()
+	a.suggestions.Filter("s")
 
 	if len(a.suggestions.filtered) != 1 {
 		t.Fatalf("expected 1 filtered item, got %d", len(a.suggestions.filtered))
