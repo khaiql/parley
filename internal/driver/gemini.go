@@ -30,6 +30,7 @@ type GeminiDriver struct {
 	sessionSet chan struct{} // closed when sessionID is first set
 	cancel     context.CancelFunc
 	ctx        context.Context
+	debugLog   DebugLogger
 }
 
 // Start saves the config, creates the events channel, and sends the initial
@@ -39,6 +40,7 @@ func (d *GeminiDriver) Start(ctx context.Context, config AgentConfig) error {
 	d.cancel = cancel
 	d.ctx = ctx
 	d.config = config
+	d.debugLog = config.DebugWriter
 
 	if config.SystemPrompt == "" {
 		config.SystemPrompt = BuildSystemPrompt(config)
@@ -114,6 +116,7 @@ func (d *GeminiDriver) invoke(message string, isFirst bool) error {
 	d.mu.Lock()
 	sessionID := d.sessionID
 	cfg := d.config
+	debugLog := d.debugLog
 	d.mu.Unlock()
 
 	var args []string
@@ -121,6 +124,10 @@ func (d *GeminiDriver) invoke(message string, isFirst bool) error {
 		args = BuildGeminiArgs(cfg, message)
 	} else {
 		args = BuildGeminiArgsWithResume(cfg, message, sessionID)
+	}
+
+	if debugLog != nil {
+		_ = debugLog.Log("in", []byte(message))
 	}
 
 	command := cfg.Command
@@ -154,6 +161,10 @@ func (d *GeminiDriver) readLoop(r io.Reader, cmd *exec.Cmd) {
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
+
+		if d.debugLog != nil {
+			_ = d.debugLog.Log("out", line)
+		}
 
 		// Try to capture session_id from init event.
 		if sid := extractGeminiSessionID(line); sid != "" {
