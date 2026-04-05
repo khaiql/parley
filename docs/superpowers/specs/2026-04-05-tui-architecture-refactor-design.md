@@ -18,17 +18,19 @@ The spinner animation has a race condition: `spinnerActive` flag can get out of 
 
 ### Principle: Core/Shell separation with channel-based events
 
-Separate business logic from rendering. The core (`internal/room/`) is pure Go with no TUI dependency. The shell (`internal/tui/`) is a thin Bubble Tea adapter that reacts to state changes. Communication flows through Go channels.
+Separate business logic from rendering. The core (`internal/room/`) is pure Go with no TUI dependency. The shell (`internal/tui/`) is a thin Bubble Tea adapter that builds its own local state from events. Communication flows through Go channels.
 
 ```
 TCP Server (broadcasts protocol messages)
     │
     ├── TUI Client
-    │     └── room.State ──▶ chan Event ──▶ Bubble Tea views
+    │     └── room.State ──▶ chan Event ──▶ Bubble Tea Update ──▶ TUI-local state ──▶ View
     │
     └── Web Server (parley serve, also a TCP client)
           └── room.State ──▶ chan Event ──▶ WebSocket ──▶ Browser
 ```
+
+The TUI never reads from `*room.State` during rendering. It builds and owns its own local state incrementally from events. This eliminates shared mutable state between core and shell — no mutexes needed in the render path. Bubble Tea's `Update`/`View` run on the same goroutine in `eventLoop`, so the TUI side is naturally single-threaded.
 
 ### Layer 1: `internal/room/` — Business Logic
 
@@ -36,14 +38,14 @@ A pure Go package. No Bubble Tea imports. No rendering. Fully testable with stan
 
 #### `room.State`
 
-Holds all room data. Mutations emit events through channels.
+Holds all room data. Mutations emit events through channels. Consumers never read from `room.State` during rendering — they build their own local state from events.
 
 ```go
 package room
 
 type State struct {
     participants []protocol.Participant
-    statuses     map[string]string
+    activities   map[string]Activity
     messages     []protocol.MessageParams
     permissions  []PermissionRequest
     commands     *command.Registry
@@ -58,7 +60,7 @@ func New(registry *command.Registry, ctx command.Context) *State
 
 #### Events
 
-Events carry data so remote consumers (web) can render without querying back.
+Events carry data so consumers can build local state without querying back. Each event type maps to a specific state mutation — no monolithic "state updated" event. Granular types let each `Update` case respond to exactly what changed (e.g., `MessageReceived` triggers scroll-to-bottom, `ParticipantsChanged` refreshes the sidebar).
 
 ```go
 type Event interface{}
@@ -72,7 +74,23 @@ type MessageReceived struct {
 }
 
 type HistoryLoaded struct {
-    Messages []protocol.MessageParams
+    Messages     []protocol.MessageParams
+    Participants []protocol.Participant
+    Activities   map[string]Activity
+}
+
+type Activity int
+
+const (
+    ActivityListening   Activity = iota
+    ActivityThinking
+    ActivityGenerating
+    ActivityUsingTool
+)
+
+type ParticipantActivityChanged struct {
+    Name     string
+    Activity Activity
 }
 
 type PermissionRequested struct {
@@ -83,11 +101,30 @@ type PermissionResolved struct {
     RequestID string
     Approved  bool
 }
+
+type ErrorOccurred struct {
+    Error error
+}
 ```
 
 Events only represent room-level concerns. No UI events (no overlay, suggestion, or input mode events).
 
+**Event ordering contract**: The core guarantees that participant events emit before their messages. A participant's `ParticipantsChanged` event always arrives before any `MessageReceived` from that participant. This is enforced in `HandleServerMessage()` — one invariant, one place. Consumers should still render defensively (fallback for unknown senders) as a safety net, but should never hit that path in normal operation.
+
+**Semantic distinction**: `HistoryLoaded` (bulk init on join) and `MessageReceived` (live tail) are separate types not just for performance — they carry different semantics. History replay should not trigger scroll animations, notification sounds, or unread indicators. Having separate event types makes that behavior difference explicit in the code.
+
+#### Protocol-to-event translation table
+
+| Server Method | Room Event |
+|---|---|
+| `room.state` | `HistoryLoaded` (carries messages, participants, activities) |
+| `room.message` | `MessageReceived` |
+| `room.joined` / `room.left` | `ParticipantsChanged` |
+| `room.status` | `ParticipantActivityChanged` |
+
 #### Channel-based pub/sub
+
+Single buffered channel per subscriber with typed events. Buffer size 64. Fan-out is built in — each subscriber (TUI, web server for #51) gets its own channel. A slow WebSocket client can't block the TUI or the core.
 
 ```go
 func (s *State) Subscribe() <-chan Event {
@@ -99,11 +136,19 @@ func (s *State) Subscribe() <-chan Event {
 func (s *State) emit(events ...Event) {
     for _, e := range events {
         for _, ch := range s.subscribers {
-            ch <- e
+            select {
+            case ch <- e:
+            default:
+                log.Warn("subscriber channel full, dropping event")
+            }
         }
     }
 }
 ```
+
+**Backpressure**: Log warning when channel is full; never block the core. Dropped events cause permanent state divergence in the consumer. Recovery path: re-request `HistoryLoaded` to rebuild consumer state from scratch. The architecture supports this since `HistoryLoaded` does a full state replace. Not built initially — the buffer of 64 is sufficient for chat-speed events — but the resync mechanism should be the first thing built if drops are ever observed.
+
+**Slice ownership**: For `HistoryLoaded`, the core allocates fresh slices/maps and does not retain references. The consumer takes full ownership — zero-copy assignment in Go (just a slice header), safe to append indefinitely.
 
 #### Mutation methods
 
@@ -118,11 +163,11 @@ func (s *State) RespondPermission(id string, approved bool)
 
 #### Query methods
 
-Read-only access for renderers. No events, no side effects.
+Read-only access for initialization and non-render-path use. Not called during `View()`.
 
 ```go
 func (s *State) Participants() []protocol.Participant
-func (s *State) ParticipantStatus(name string) string
+func (s *State) ParticipantActivity(name string) Activity
 func (s *State) IsAnyoneGenerating() bool
 func (s *State) Messages() []protocol.MessageParams
 func (s *State) AvailableCommands() []CommandInfo
@@ -143,11 +188,11 @@ type CommandResult struct {
 
 ### Layer 2: `internal/tui/` — TUI Shell
 
-The TUI is a thin adapter that translates between Bubble Tea and `room.State`.
+The TUI is a thin adapter that translates between Bubble Tea and `room.State`. It owns its own local state built incrementally from events — it never reads from `*room.State` during rendering.
 
 #### Event bridge
 
-TUI subscribes to `room.State` events and injects them into the Bubble Tea event loop via `tea.Program.Send()`.
+TUI subscribes to `room.State` events and injects them into the Bubble Tea event loop via `tea.Program.Send()`. This is thread-safe and idiomatic (see bubbletea `examples/send-msg/main.go`).
 
 ```go
 events := state.Subscribe()
@@ -158,25 +203,69 @@ go func() {
 }()
 ```
 
-In `App.Update`, room events are handled like any other `tea.Msg`:
+#### Event-sourced incremental state
+
+The TUI model holds its own copies of room data, built from events. This eliminates shared mutable state between core and shell.
 
 ```go
-case room.ParticipantsChanged:
-    // sidebar re-renders from state
-    if a.state.IsAnyoneGenerating() {
-        return a, spinnerTick()
+type App struct {
+    // TUI-owned state, built from events
+    messages     []protocol.MessageParams
+    participants []protocol.Participant
+    activities   map[string]Activity
+
+    // TUI-only concerns
+    overlay     *Modal
+    inputFSM    *InputFSM
+    suggestions Suggestions
+    // ...
+}
+```
+
+In `App.Update`, room events apply deltas to the TUI's local state:
+
+```go
+case room.HistoryLoaded:
+    // Bulk replace — once on join. No scroll animation, no notifications.
+    m.messages = msg.Messages       // takes ownership of core's fresh slice
+    m.participants = msg.Participants
+    m.activities = msg.Activities
+    m.chat.GotoBottom()
+    if isAnyoneGenerating(m.activities) {
+        return m, spinnerTick()
     }
+    return m, nil
 
 case room.MessageReceived:
-    a.chat.AddMessage(m.Message)
+    // Append single message — live tail. Full side effects.
+    m.messages = append(m.messages, msg.Message)
+    m.chat.GotoBottom()
+    return m, nil
 
-case room.HistoryLoaded:
-    a.chat.LoadMessages(m.Messages)
+case room.ParticipantsChanged:
+    // Replace participant list (small, cheap copy)
+    m.participants = msg.Participants
+    if isAnyoneGenerating(m.activities) {
+        return m, spinnerTick()
+    }
+
+case room.ParticipantActivityChanged:
+    // Update one entry in map
+    m.activities[msg.Name] = msg.Activity
+    if msg.Activity == room.ActivityGenerating {
+        return m, spinnerTick()
+    }
+
+case room.ErrorOccurred:
+    // Display in status bar or toast
+    m.chat.AddMessage(systemMessage(msg.Error.Error()))
 ```
+
+Key property: after `HistoryLoaded` on join, no event ever copies the full message history. `MessageReceived` appends a single message — O(1) amortized. This scales to arbitrarily large rooms.
 
 #### Input FSM
 
-Uses `qmuntal/stateless` for explicit state transitions. The FSM manages input interaction modes. It does not hold references to room state or view components — behavior is injected via callbacks.
+Uses `qmuntal/stateless` for explicit state transitions. The FSM manages input interaction modes. It does not hold references to room state or view components — behavior is injected via callbacks. Side effects are returned as `tea.Cmd`, not fired directly, keeping them testable and within Bubble Tea's control flow.
 
 ```
     ┌──────────┐  '/' or '@'  ┌────────────┐
@@ -198,6 +287,21 @@ func NewInputFSM(
 ) *InputFSM
 ```
 
+**FSM command queue**: Since `qmuntal/stateless` callbacks are void (they don't return values), the FSM adapter holds a `pendingCmds []tea.Cmd` field. `OnEntry`/`OnExit` callbacks append commands to this queue. After firing a trigger, `Update` drains the queue into a `tea.Batch` and returns it.
+
+```go
+type InputFSM struct {
+    machine     *stateless.StateMachine
+    pendingCmds []tea.Cmd
+}
+
+// After transition in Update:
+fsm.machine.Fire(trigger)
+cmds := fsm.pendingCmds
+fsm.pendingCmds = nil
+return tea.Batch(cmds...), true
+```
+
 App wires callbacks at construction:
 
 ```go
@@ -207,7 +311,7 @@ inputFSM := NewInputFSM(
         case TriggerSlash:
             suggestions.SetItems(commandsToItems(state.AvailableCommands()))
         case TriggerMention:
-            suggestions.SetItems(participantsToItems(state.Participants()))
+            suggestions.SetItems(participantsToItems(m.participants))
         }
     },
     func() {
@@ -217,6 +321,8 @@ inputFSM := NewInputFSM(
 ```
 
 #### Three-layer key routing
+
+Strict early-return with `consumed bool`. First layer that matches consumes the key — no double-handling.
 
 ```
 Keypress
@@ -234,39 +340,59 @@ Permission pending?
 Input FSM (Normal or Completing)
 ```
 
+Implementation:
+
+```go
+if a.overlay != nil {
+    cmd, consumed := a.overlay.HandleKey(msg)
+    if consumed {
+        return a, cmd
+    }
+}
+if len(a.pendingPermissions) > 0 {
+    cmd, consumed := a.handlePermissionKey(msg)
+    if consumed {
+        return a, cmd
+    }
+}
+return a.inputFSM.HandleKey(msg)
+```
+
 - **Overlay** is a TUI-only concept. A `CommandResult` with content triggers a modal in TUI, a panel in web — each UI decides independently.
 - **Permissions** are a room concept (the queue), but the key mapping (y/n) and rendering (notification bar) are TUI concerns.
 - **Input FSM** is TUI-only. Web would implement its own autocomplete UX.
 
 #### Spinner — reactive, no flag
 
-No `spinnerActive` bookkeeping. The rule is simple:
+No `spinnerActive` bookkeeping. Derive from state, self-terminating tick pattern. Start the tick when any `ParticipantActivityChanged` or `ParticipantsChanged` indicates someone is generating. Let it self-terminate when no one is.
 
 ```go
 case SpinnerTickMsg:
     a.sidebar.AdvanceFrame()
-    if a.state.IsAnyoneGenerating() {
+    if isAnyoneGenerating(a.activities) {
         return a, spinnerTick()
     }
-    // stops naturally
+    // stops naturally — no flag to track
 ```
 
-Every `ParticipantsChanged` event handler checks `IsAnyoneGenerating()` and returns `spinnerTick()` if true. The spinner starts and stops reactively. The race condition in the current design is eliminated.
+The spinner visibility derives from the TUI-local `activities` map on each **tick** (not each `View()` call). `View()` is passive and just returns a string. The tick is a `tea.Cmd` that fires at a fixed interval (100ms) and triggers `Update`, which decides whether to re-queue.
 
-#### View components — stateless renderers
+#### View components — stateless pure functions
 
-Components hold only rendering state (spinner frame, viewport scroll, textarea cursor). All room data comes from `room.State` queries.
+Components hold only rendering state (spinner frame, viewport scroll, textarea cursor). All room data comes from the TUI's local state, not from `room.State`.
 
 ```go
-Sidebar.View(state *room.State) string
-Chat.View(state *room.State) string
-StatusBar.View(state *room.State) string
-TopBar.View(state *room.State) string
+func (a App) sidebarView() string    // reads a.participants, a.activities
+func (a App) chatView() string       // reads a.messages
+func (a App) statusBarView() string  // reads a.activities
+func (a App) topBarView() string     // reads a.topic
 ```
+
+Pure functions of TUI-local state. No owned room data, no side effects. Trivially testable — pass in state, assert on output string. `View()` never panics regardless of state (defensive fallback for unknown participants as a safety net).
 
 ### Layer 3: Web Server (future, #51)
 
-Same `room.State`, different consumer. The web server subscribes to events and pushes them over WebSocket.
+Same `room.State`, different consumer. The web server subscribes to events via its own buffered channel and pushes them over WebSocket. A slow WebSocket client can't block the TUI or core — each subscriber has independent backpressure.
 
 ```go
 events := state.Subscribe()
@@ -283,10 +409,11 @@ Browser receives typed events and renders its own UI. Input actions come back ov
 
 | Concern | Owner |
 |---|---|
-| Participants, messages, permissions | `room.State` |
+| Participants, messages, permissions | `room.State` (authoritative) |
 | Command execution and results | `room.State` |
-| "Is anyone generating?" | `room.State` |
 | Event pub/sub (channels) | `room.State` |
+| TUI-local messages, participants, activities | TUI `App` (built from events) |
+| "Is anyone generating?" | Derived from TUI-local `activities` map |
 | Input FSM (Normal/Completing) | TUI `InputFSM` |
 | Suggestion population (via FSM callbacks) | TUI App |
 | Suggestion rendering | TUI `Suggestions` view |
@@ -301,14 +428,46 @@ Browser receives typed events and renders its own UI. Input actions come back ov
 New external dependency:
 - `github.com/qmuntal/stateless` — typed finite state machine for Input FSM
 
+## Design Decisions
+
+These decisions were refined through cross-team review with maintainers of bubbletea (dingo, gemini), claude-tmux (cosmo), and opencode (loki).
+
+| Decision | Detail |
+|---|---|
+| Core/Shell split | `room.State` in `internal/room/`, pure Go, no TUI deps |
+| State ownership | TUI builds its own local state from events, no shared `*room.State` pointer in views |
+| View components | Stateless pure functions: receive TUI-local state, return strings. No owned room data, no side effects |
+| Event delivery | Single buffered channel per subscriber, typed events injected via `program.Send()` |
+| Event granularity | Separate types: `ParticipantsChanged`, `MessageReceived`, `ParticipantActivityChanged`, `HistoryLoaded`, `ErrorOccurred`, `PermissionRequested`, `PermissionResolved` |
+| Init vs. live | `HistoryLoaded` (bulk, single event, carries messages + participants + activities) for join — no scroll animation, no notifications. `MessageReceived` (individual) for live tail — with full side effects |
+| Event ordering | Core guarantees participant events emit before their messages. TUI renders defensively as safety net |
+| Concurrency | No mutexes in render path. `Update`/`View` serialization in Bubble Tea's `eventLoop` gives single-threaded safety |
+| Backpressure | Buffered channel (64), log warning on full, never block core. Dropped events → state divergence, recovered via `HistoryLoaded` resync |
+| Spinner | Reactive: derive from activities map on each tick, self-terminating tick pattern, no `spinnerActive` flag |
+| Key routing | Three-layer with `consumed bool` early-return: Overlay → Permission → Input FSM |
+| Input FSM | `qmuntal/stateless` for explicit state transitions. Side effects via `pendingCmds` queue, drained as `tea.Cmd` after transitions |
+| Fan-out for #51 | One goroutine per subscriber channel. Web server gets its own buffered channel, slow consumers don't block TUI or core |
+
+### Key rationale
+
+**Why TUI-owned state (not shared pointer)**: Every reviewed codebase (claude-tmux's `GitContext` snapshots, opencode's `sync` store, bubbletea's value-type models) independently arrived at the same pattern — the rendering layer owns its state, built from events. Eliminates data races without mutexes and makes `View()` lock-free.
+
+**Why event-sourced incremental state (not full snapshots)**: Message history grows unboundedly. Copying the full history on every event doesn't scale. Instead, `HistoryLoaded` does one bulk transfer on join, then `MessageReceived` appends a single message — O(1) amortized. Small state (participants, activities) can be replaced wholesale cheaply. This matches opencode's delta-based `sync` store and claude-tmux's snapshot-on-init pattern.
+
+**Why granular event types (not `RoomUpdatedMsg`)**: A single update event forces consumers to diff old vs. new state to determine side effects. Granular types let each `Update` case respond to exactly what changed — e.g., `MessageReceived` triggers scroll-to-bottom, `ParticipantsChanged` refreshes the sidebar. Also enables the semantic distinction between `HistoryLoaded` (no animations) and `MessageReceived` (full side effects).
+
+**Why core-guaranteed event ordering (with defensive TUI)**: Both approaches work (core-enforced ordering vs. resilient consumer with fallbacks). We chose core-enforced because parley's core controls emission order in a single method (`HandleServerMessage`), making the guarantee cheap to enforce. Belt and suspenders: enforce ordering at the core, render defensively in `View()` as a safety net. View() must never panic regardless of state.
+
+**Why `qmuntal/stateless` for Input FSM**: claude-tmux uses a `Mode` enum in Rust, opencode uses dialog stack checks, bubbletea's `list` component uses `FilterState()`. All work, but parley's input modes will grow (permissions #50, image upload #47). A formal FSM makes invalid transitions impossible at the library level and provides introspectable state for debugging.
+
 ### Migration path
 
 This refactor can be done incrementally:
 
-1. Extract `internal/room/` with `State`, events, and channel pub/sub
+1. Extract `internal/room/` with `State`, events, and channel pub/sub. **Include event contract tests** — subscribe to `room.State`, feed it server messages, assert on events emitted (types, ordering, data). This becomes the regression safety net for all subsequent steps.
 2. Move participant, message, and permission logic from App/Sidebar into `room.State`
 3. Add Input FSM alongside existing suggestion code, then swap
-4. Convert view components to read from `room.State` instead of owning data
+4. Convert view components to stateless pure functions reading from TUI-local state
 5. Simplify App.Update to three-layer key routing + event handling
 
 Each step is independently shippable and testable. The existing test suite validates behavior at each step.
