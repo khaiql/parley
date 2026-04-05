@@ -37,6 +37,13 @@ func ColorForSender(name string, isHuman bool) lipgloss.Color {
 	return agentPalette[idx]
 }
 
+// ColorForIndex returns the palette color for a server-assigned color index.
+// The index wraps around so any integer (including negative) is safe.
+func ColorForIndex(idx int) lipgloss.Color {
+	n := len(agentPalette)
+	return agentPalette[((idx%n)+n)%n]
+}
+
 // agentNameStyleFor returns a bold style with the given foreground color.
 func agentNameStyleFor(c lipgloss.Color) lipgloss.Style {
 	return lipgloss.NewStyle().Bold(true).Foreground(c)

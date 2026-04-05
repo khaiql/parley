@@ -2,6 +2,21 @@ package tui
 
 import "testing"
 
+func TestColorForIndex(t *testing.T) {
+	for i := 0; i < len(agentPalette); i++ {
+		got := ColorForIndex(i)
+		if got != agentPalette[i] {
+			t.Errorf("ColorForIndex(%d) = %v, want %v", i, got, agentPalette[i])
+		}
+	}
+	// Out-of-range wraps.
+	if ColorForIndex(len(agentPalette)) != agentPalette[0] {
+		t.Errorf("ColorForIndex(%d) should wrap to agentPalette[0]", len(agentPalette))
+	}
+	// Negative index should not panic.
+	_ = ColorForIndex(-1)
+}
+
 func TestColorForSenderHumanAlwaysOrange(t *testing.T) {
 	c := ColorForSender("Alice", true)
 	if c != colorHuman {
