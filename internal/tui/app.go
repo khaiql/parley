@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -14,11 +13,6 @@ import (
 )
 
 const sidebarWidth = 30
-
-// ServerMsg wraps an incoming raw protocol message from the network.
-type ServerMsg struct {
-	Raw *protocol.RawMessage
-}
 
 // SpinnerTickMsg triggers a sidebar spinner frame advance.
 type SpinnerTickMsg struct{}
@@ -44,28 +38,22 @@ type LocalSystemMsg struct {
 	Text string
 }
 
-// HistoryLoadedMsg signals that message history has been loaded.
-type HistoryLoadedMsg struct {
-	Messages []protocol.MessageParams
-}
-
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
-	topbar            TopBar
-	chat              Chat
-	sidebar           Sidebar
-	input             Input
-	statusbar         StatusBar
-	modal             *Modal                   // non-nil when a modal overlay is active
-	sendFn            func(string, []string)   // callback to send messages over network
-	registry          *command.Registry        // slash command registry (nil = no commands)
-	cmdCtx            command.Context          // context passed to slash commands
-	lastInputHeight   int                      // cached to avoid redundant re-layouts
-	pendingHistory    []protocol.MessageParams // set during room.state, loaded async
-	suggestions      Suggestions
-	inputFSM         *InputFSM
-	completionStart  int // cursor position where trigger character was typed
-	roomState        *room.State
+	topbar          TopBar
+	chat            Chat
+	sidebar         Sidebar
+	input           Input
+	statusbar       StatusBar
+	modal           *Modal                 // non-nil when a modal overlay is active
+	sendFn          func(string, []string) // callback to send messages over network
+	registry        *command.Registry      // slash command registry (nil = no commands)
+	cmdCtx          command.Context        // context passed to slash commands
+	lastInputHeight int                    // cached to avoid redundant re-layouts
+	suggestions     Suggestions
+	inputFSM        *InputFSM
+	completionStart int // cursor position where trigger character was typed
+	roomState       *room.State
 
 	// TUI-owned state, built from room events.
 	localMessages     []protocol.MessageParams
@@ -269,31 +257,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Self-terminates when no one is generating.
 		return a, nil
 
-	case ServerMsg:
-		if a.roomState != nil {
-			// room.State handles this via HandleServerMessage → emits events
-			// which arrive through the event bridge goroutine. Nothing to do here.
-			return a, nil
-		}
-		// Fallback for tests/contexts without room.State.
-		a.handleServerMsg(m.Raw)
-		if len(a.pendingHistory) > 0 {
-			msgs := a.pendingHistory
-			a.pendingHistory = nil
-			return a, tea.Batch(
-				func() tea.Msg {
-					return HistoryLoadedMsg{Messages: msgs}
-				},
-				a.maybeStartSpinner(),
-			)
-		}
-		return a, a.maybeStartSpinner()
-
-	case HistoryLoadedMsg:
-		a.chat.SetLoading(false)
-		a.chat.LoadMessages(m.Messages)
-		return a, nil
-
 	case AgentTypingMsg:
 		a.input.SetAgentText(m.Text)
 		return a, nil
@@ -403,68 +366,6 @@ func (a *App) layout() {
 	a.input.SetWidth(a.width)
 	a.statusbar.SetWidth(a.width)
 	a.suggestions.SetWidth(a.width)
-}
-
-// maybeStartSpinner checks if any participant is generating and starts
-// the spinner tick. Used by the legacy ServerMsg fallback path.
-func (a *App) maybeStartSpinner() tea.Cmd {
-	for _, status := range a.sidebar.statuses {
-		if status == "generating" {
-			return spinnerTick()
-		}
-	}
-	return nil
-}
-
-// handleServerMsg dispatches an incoming RawMessage to the appropriate handler
-// based on its method.
-func (a *App) handleServerMsg(raw *protocol.RawMessage) {
-	if raw == nil {
-		return
-	}
-	switch raw.Method {
-	case "room.state":
-		var params protocol.RoomStateParams
-		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.sidebar.SetParticipants(params.Participants)
-			a.statusbar.SetYolo(params.AutoApprove)
-			if len(params.Messages) > 0 {
-				a.chat.SetLoading(true)
-				a.pendingHistory = params.Messages
-			}
-		}
-
-	case "room.message":
-		var params protocol.MessageParams
-		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.chat.AddMessage(params)
-		}
-
-	case "room.joined":
-		var params protocol.JoinedParams
-		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.sidebar.AddParticipant(protocol.Participant{
-				Name:      params.Name,
-				Role:      params.Role,
-				Directory: params.Directory,
-				Repo:      params.Repo,
-				AgentType: params.AgentType,
-				Online:    true,
-			})
-		}
-
-	case "room.left":
-		var params protocol.LeftParams
-		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.sidebar.SetParticipantOffline(params.Name)
-		}
-
-	case "room.status":
-		var params protocol.StatusParams
-		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.sidebar.SetParticipantStatus(params.Name, params.Status)
-		}
-	}
 }
 
 // populateSlashSuggestions fills the suggestion list with available commands.
