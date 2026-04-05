@@ -147,33 +147,34 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		// Modal intercepts all keyboard input while visible.
+		// Layer 1: Overlay — modal intercepts ALL keys.
 		if a.modal != nil {
-			switch {
-			case m.Type == tea.KeyEsc, m.String() == "q":
+			cmd, dismiss := a.modal.HandleKey(m)
+			if dismiss {
 				a.modal = nil
-				return a, nil
-			default:
-				cmd := a.modal.Update(msg)
-				return a, cmd
 			}
+			return a, cmd
 		}
-		switch m.Type {
-		case tea.KeyCtrlC:
-			return a, tea.Quit
 
-		case tea.KeyUp:
-			if a.inputFSM.Current() == StateCompleting {
+		// Layer 2: Permission — placeholder for #50.
+		// When implemented: if pending permissions, y/n consumed, else pass through.
+
+		// Global keys (always available).
+		if m.Type == tea.KeyCtrlC {
+			return a, tea.Quit
+		}
+
+		// Layer 3: Input FSM routing.
+		switch a.inputFSM.Current() {
+		case StateCompleting:
+			switch m.Type {
+			case tea.KeyUp:
 				a.suggestions.MoveUp()
 				return a, nil
-			}
-		case tea.KeyDown:
-			if a.inputFSM.Current() == StateCompleting {
+			case tea.KeyDown:
 				a.suggestions.MoveDown()
 				return a, nil
-			}
-		case tea.KeyTab:
-			if a.inputFSM.Current() == StateCompleting {
+			case tea.KeyTab:
 				sel := a.suggestions.Selected()
 				if sel.Label != "" {
 					end := len([]rune(a.input.Value()))
@@ -183,53 +184,47 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.suggestions.Hide()
 				a.layout()
 				return a, nil
-			}
-		case tea.KeyEsc:
-			if a.inputFSM.Current() == StateCompleting {
+			case tea.KeyEsc:
 				_ = a.inputFSM.Fire(TriggerDismiss)
 				a.suggestions.Hide()
 				a.layout()
 				return a, nil
-			}
-
-		case tea.KeyEnter:
-			if a.inputFSM.Current() == StateCompleting {
+			case tea.KeyEnter:
 				_ = a.inputFSM.Fire(TriggerSubmit)
 				a.suggestions.Hide()
 				a.layout()
+				// Fall through to normal Enter handling below.
 			}
-			if a.input.mode == InputModeHuman {
-				text := a.input.Value()
-				// Check for backslash-newline
-				if newText, consumed := handleBackslashNewline(text); consumed {
-					a.input.ta.SetValue(newText)
-					return a, nil
-				}
-				text = strings.TrimSpace(text)
-				if text != "" {
-					a.input.Reset()
-					// Slash command dispatch.
-					if a.registry != nil && command.IsCommand(text) {
-						result := a.registry.Execute(a.cmdCtx, text)
-						if result.Error != nil {
-							a.chat.AddMessage(systemMessage(result.Error.Error()))
-						} else if result.Modal != nil {
-							modal := NewModal(result.Modal, a.width, a.height)
-							a.modal = &modal
-						} else if result.LocalMessage != "" {
-							a.chat.AddMessage(systemMessage(result.LocalMessage))
-						}
-						return a, nil
-					}
-					mentions := protocol.ParseMentions(text)
-					if a.sendFn != nil {
-						a.sendFn(text, mentions)
-					}
-				}
+		}
+
+		// Normal input handling (StateNormal, or Enter fell through from StateCompleting).
+		if m.Type == tea.KeyEnter && a.input.mode == InputModeHuman {
+			text := a.input.Value()
+			if newText, consumed := handleBackslashNewline(text); consumed {
+				a.input.ta.SetValue(newText)
 				return a, nil
 			}
-		default:
-			// ignore other keys
+			text = strings.TrimSpace(text)
+			if text != "" {
+				a.input.Reset()
+				if a.registry != nil && command.IsCommand(text) {
+					result := a.registry.Execute(a.cmdCtx, text)
+					if result.Error != nil {
+						a.chat.AddMessage(systemMessage(result.Error.Error()))
+					} else if result.Modal != nil {
+						modal := NewModal(result.Modal, a.width, a.height)
+						a.modal = &modal
+					} else if result.LocalMessage != "" {
+						a.chat.AddMessage(systemMessage(result.LocalMessage))
+					}
+					return a, nil
+				}
+				mentions := protocol.ParseMentions(text)
+				if a.sendFn != nil {
+					a.sendFn(text, mentions)
+				}
+			}
+			return a, nil
 		}
 
 	// ---- Room events (from room.State via channel bridge) ----
