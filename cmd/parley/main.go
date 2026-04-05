@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/khaiql/parley/internal/protocol"
 	"github.com/khaiql/parley/internal/server"
 	"github.com/khaiql/parley/internal/tui"
+	"github.com/khaiql/parley/internal/wal"
 	"github.com/khaiql/parley/internal/web"
 )
 
@@ -39,6 +41,7 @@ var hostTopic string
 var hostPort int
 var hostResume string
 var hostYolo bool
+var hostDebug bool
 
 var hostCmd = &cobra.Command{
 	Use:   "host",
@@ -72,6 +75,7 @@ func init() {
 	hostCmd.Flags().IntVar(&hostPort, "port", 0, "Port to listen on (0 = auto-assign)")
 	hostCmd.Flags().StringVar(&hostResume, "resume", "", "Room ID to resume (loads saved room from ~/.parley/rooms/<id>)")
 	hostCmd.Flags().BoolVar(&hostYolo, "yolo", false, "Enable auto-approve mode for all joining agents")
+	hostCmd.Flags().BoolVar(&hostDebug, "debug", false, "Enable write-ahead logging of all raw agent I/O")
 
 	joinCmd.Flags().IntVar(&joinPort, "port", 0, "Port of the session to join (required)")
 	joinCmd.Flags().StringVar(&joinName, "name", "", "Your name in the session (random if not set)")
@@ -132,6 +136,10 @@ func runHost(_ *cobra.Command, _ []string) error {
 
 	if hostYolo {
 		srv.Room().AutoApprove = true
+	}
+
+	if hostDebug {
+		srv.Room().Debug = true
 	}
 
 	go srv.Serve()
@@ -369,6 +377,12 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		intro = history + "\n" + intro
 	}
 
+	// Set up debug WAL writer if the room has debug enabled.
+	debugWriter := openDebugWAL(roomState.Debug, roomID, joinName)
+	if debugWriter != nil {
+		defer debugWriter.Close()
+	}
+
 	config := driver.AgentConfig{
 		Command:         command,
 		Args:            extraArgs,
@@ -381,6 +395,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		InitialMessage:  intro,
 		ResumeSessionID: resumeSessionID,
 		AutoApprove:     roomState.AutoApprove,
+		DebugWriter:     debugWriter,
 	}
 	config.SystemPrompt = driver.BuildSystemPrompt(config)
 
@@ -514,6 +529,21 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	return err
+}
+
+// openDebugWAL creates a WAL writer for debug logging if debug mode is enabled.
+// Returns nil (with a warning printed) if the WAL cannot be created.
+func openDebugWAL(debug bool, roomID, name string) *wal.Writer {
+	if !debug {
+		return nil
+	}
+	walPath := filepath.Join(server.RoomDir(roomID), "debug", name+".wal")
+	w, err := wal.New(walPath, name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "join: warning: could not create debug WAL: %v\n", err)
+		return nil
+	}
+	return w
 }
 
 // isMentioned reports whether name appears in the mentions list.

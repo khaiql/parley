@@ -46,8 +46,8 @@ type AgentConfig struct {
 	Topic           string
 	Participants    []ParticipantInfo
 	SystemPrompt    string
-	InitialMessage  string // if set, used as the first prompt (for drivers that need one in Start)
-	ResumeSessionID string // if set, pass --resume <id> to the driver
+	InitialMessage  string      // if set, used as the first prompt (for drivers that need one in Start)
+	ResumeSessionID string      // if set, pass --resume <id> to the driver
 	AutoApprove     bool        // if set, append driver-specific auto-approve flag
 	DebugWriter     DebugLogger // if set, log all raw I/O to this writer
 }
