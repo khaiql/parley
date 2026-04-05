@@ -260,12 +260,46 @@ func randomName() string {
 	return names[n.Int64()]
 }
 
-func runJoin(cmd *cobra.Command, args []string) error {
-	if joinName == "" {
-		joinName = randomName()
-		fmt.Fprintf(os.Stderr, "No --name provided, using: %s\n", joinName)
+// connectAndJoin dials the server at addr, sends room.join with params, and
+// waits for a room.state response. Returns the live client and room state.
+// If the server rejects with "name already taken", the error message is that
+// exact string. The caller owns the returned client and must Close it when done.
+func connectAndJoin(addr string, params protocol.JoinParams) (*client.Client, protocol.RoomStateParams, error) {
+	c, err := client.New(addr)
+	if err != nil {
+		return nil, protocol.RoomStateParams{}, err
 	}
+	if err := c.Join(params); err != nil {
+		c.Close()
+		return nil, protocol.RoomStateParams{}, err
+	}
+	timeout := time.After(5 * time.Second)
+	for {
+		select {
+		case msg, ok := <-c.Incoming():
+			if !ok {
+				return nil, protocol.RoomStateParams{}, fmt.Errorf("connection closed before room state")
+			}
+			if msg.Method == "room.state" {
+				var state protocol.RoomStateParams
+				if err := json.Unmarshal(msg.Params, &state); err != nil {
+					c.Close()
+					return nil, protocol.RoomStateParams{}, fmt.Errorf("decode room.state: %w", err)
+				}
+				return c, state, nil
+			}
+			if msg.Error != nil {
+				c.Close()
+				return nil, protocol.RoomStateParams{}, fmt.Errorf("%s", msg.Error.Message)
+			}
+		case <-timeout:
+			c.Close()
+			return nil, protocol.RoomStateParams{}, fmt.Errorf("timeout: server did not send room state within 5 seconds")
+		}
+	}
+}
 
+func runJoin(cmd *cobra.Command, args []string) error {
 	// Extract agent command from args after "--".
 	var agentArgs []string
 	dashPos := cmd.Flags().ArgsLenAtDash()
@@ -288,44 +322,57 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	addr := fmt.Sprintf("localhost:%d", joinPort)
-	c, err := client.New(addr)
-	if err != nil {
-		return fmt.Errorf("join: connect: %w", err)
-	}
-	defer c.Close()
-
 	dir, _ := os.Getwd()
 	repo := detectRepo()
 
-	if err := c.Join(protocol.JoinParams{
-		Name:      joinName,
-		Role:      joinRole,
-		Directory: dir,
-		Repo:      repo,
-		AgentType: agentCmd,
-	}); err != nil {
-		return fmt.Errorf("join: room join: %w", err)
-	}
-
-	// Wait for room.state to get topic and participants.
+	const maxNameAttempts = 10
+	userProvidedName := joinName != ""
+	var c *client.Client
 	var roomState protocol.RoomStateParams
-	timeout := time.After(5 * time.Second)
-	found := false
-	for !found {
-		select {
-		case msg, ok := <-c.Incoming():
-			if !ok {
-				return fmt.Errorf("join: connection closed before receiving room state")
-			}
-			if msg.Method == "room.state" {
-				if err := json.Unmarshal(msg.Params, &roomState); err == nil {
-					found = true
+
+	triedNames := make(map[string]bool)
+	for attempt := 0; attempt < maxNameAttempts; attempt++ {
+		if !userProvidedName || attempt > 0 {
+			for {
+				candidate := randomName()
+				if !triedNames[candidate] {
+					joinName = candidate
+					break
 				}
 			}
-		case <-timeout:
-			return fmt.Errorf("join: timeout: server did not send room state within 5 seconds")
+			if attempt == 0 {
+				fmt.Fprintf(os.Stderr, "No --name provided, using: %s\n", joinName)
+			} else {
+				fmt.Fprintf(os.Stderr, "Name taken, retrying with: %s\n", joinName)
+			}
 		}
+		triedNames[joinName] = true
+
+		var joinErr error
+		c, roomState, joinErr = connectAndJoin(addr, protocol.JoinParams{
+			Name:      joinName,
+			Role:      joinRole,
+			Directory: dir,
+			Repo:      repo,
+			AgentType: agentCmd,
+		})
+		if joinErr == nil {
+			break
+		}
+		if strings.Contains(joinErr.Error(), "name already taken") {
+			if userProvidedName {
+				// User explicitly named themselves — don't try random alternatives.
+				return fmt.Errorf("join: %w", joinErr)
+			}
+			c = nil
+			continue
+		}
+		return fmt.Errorf("join: %w", joinErr)
 	}
+	if c == nil {
+		return fmt.Errorf("join: could not join after %d attempts (all names taken)", maxNameAttempts)
+	}
+	defer c.Close()
 
 	topic := roomState.Topic
 	roomID := roomState.RoomID

@@ -134,12 +134,13 @@ func (s *Server) handleConn(conn net.Conn) {
 				}
 			}
 			jp := protocol.JoinedParams{
-				Name:      params.Name,
-				Role:      effectiveRole,
-				Directory: params.Directory,
-				Repo:      params.Repo,
-				AgentType: params.AgentType,
-				JoinedAt:  time.Now().UTC(),
+				Name:       params.Name,
+				Role:       effectiveRole,
+				Directory:  params.Directory,
+				Repo:       params.Repo,
+				AgentType:  params.AgentType,
+				JoinedAt:   time.Now().UTC(),
+				ColorIndex: cc.ColorIndex,
 			}
 			s.room.BroadcastJoined(jp)
 			s.room.BroadcastSystem(fmt.Sprintf("%s joined", params.Name))

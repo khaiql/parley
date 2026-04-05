@@ -427,6 +427,11 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 		var params protocol.RoomStateParams
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
 			a.sidebar.SetParticipants(params.Participants)
+			colors := make(map[string]int, len(params.Participants))
+			for _, p := range params.Participants {
+				colors[p.Name] = p.ColorIndex
+			}
+			a.chat.SetColors(colors)
 			a.statusbar.SetYolo(params.AutoApprove)
 			if len(params.Messages) > 0 {
 				a.chat.SetLoading(true)
@@ -444,13 +449,15 @@ func (a *App) handleServerMsg(raw *protocol.RawMessage) {
 		var params protocol.JoinedParams
 		if err := json.Unmarshal(raw.Params, &params); err == nil {
 			a.sidebar.AddParticipant(protocol.Participant{
-				Name:      params.Name,
-				Role:      params.Role,
-				Directory: params.Directory,
-				Repo:      params.Repo,
-				AgentType: params.AgentType,
-				Online:    true,
+				Name:       params.Name,
+				Role:       params.Role,
+				Directory:  params.Directory,
+				Repo:       params.Repo,
+				AgentType:  params.AgentType,
+				Online:     true,
+				ColorIndex: params.ColorIndex,
 			})
+			a.chat.AddColor(params.Name, params.ColorIndex)
 		}
 
 	case "room.left":

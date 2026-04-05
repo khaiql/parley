@@ -95,12 +95,13 @@ type JoinParams struct {
 
 // JoinedParams is the server-side confirmation payload for "room/joined".
 type JoinedParams struct {
-	Name      string    `json:"name"`
-	Role      string    `json:"role"`
-	Directory string    `json:"directory,omitempty"`
-	Repo      string    `json:"repo,omitempty"`
-	AgentType string    `json:"agent_type,omitempty"`
-	JoinedAt  time.Time `json:"joined_at"`
+	Name       string    `json:"name"`
+	Role       string    `json:"role"`
+	Directory  string    `json:"directory,omitempty"`
+	Repo       string    `json:"repo,omitempty"`
+	AgentType  string    `json:"agent_type,omitempty"`
+	JoinedAt   time.Time `json:"joined_at"`
+	ColorIndex int       `json:"color_index"`
 }
 
 // LeftParams is the params payload for a "room/left" notification.
@@ -118,13 +119,14 @@ type StatusParams struct {
 
 // Participant describes a single participant in a room.
 type Participant struct {
-	Name      string `json:"name"`
-	Role      string `json:"role"`
-	Directory string `json:"directory,omitempty"`
-	Repo      string `json:"repo,omitempty"`
-	AgentType string `json:"agent_type,omitempty"`
-	Source    string `json:"source,omitempty"`
-	Online    bool   `json:"online"`
+	Name       string `json:"name"`
+	Role       string `json:"role"`
+	Directory  string `json:"directory,omitempty"`
+	Repo       string `json:"repo,omitempty"`
+	AgentType  string `json:"agent_type,omitempty"`
+	Source     string `json:"source,omitempty"`
+	Online     bool   `json:"online"`
+	ColorIndex int    `json:"color_index"`
 }
 
 // IsHuman returns true if this participant is a human (not an AI agent).

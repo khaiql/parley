@@ -22,6 +22,32 @@ func displayWidth(s string) int {
 	return lipgloss.Width(s)
 }
 
+func TestChatSetColors(t *testing.T) {
+	c := NewChat(80, 20)
+	colors := map[string]int{"agent1": 3, "agent2": 5}
+	c.SetColors(colors)
+	if c.colors == nil {
+		t.Fatal("colors map not stored after SetColors")
+	}
+	if c.colors["agent1"] != 3 {
+		t.Errorf("colors[agent1] = %d, want 3", c.colors["agent1"])
+	}
+	if c.colors["agent2"] != 5 {
+		t.Errorf("colors[agent2] = %d, want 5", c.colors["agent2"])
+	}
+}
+
+func TestChatAddColor(t *testing.T) {
+	c := NewChat(80, 20)
+	c.AddColor("newagent", 2)
+	if c.colors == nil {
+		t.Fatal("colors map not initialized by AddColor")
+	}
+	if c.colors["newagent"] != 2 {
+		t.Errorf("colors[newagent] = %d, want 2", c.colors["newagent"])
+	}
+}
+
 func TestExtractText(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -115,7 +141,7 @@ func TestRenderMessageContainsText(t *testing.T) {
 		},
 		Timestamp: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
-	rendered := renderMessages([]protocol.MessageParams{msg}, 80)
+	rendered := renderMessages([]protocol.MessageParams{msg}, 80, nil)
 	if !contains(rendered, "alice") {
 		t.Errorf("renderMessages (human) should contain sender name %q, got: %q", "alice", rendered)
 	}
@@ -137,7 +163,7 @@ func TestRenderMessageAgentContainsNameAndText(t *testing.T) {
 		},
 		Timestamp: time.Date(2024, 1, 1, 8, 30, 0, 0, time.UTC),
 	}
-	rendered := renderMessages([]protocol.MessageParams{msg}, 80)
+	rendered := renderMessages([]protocol.MessageParams{msg}, 80, nil)
 	if !contains(rendered, "bot1") {
 		t.Errorf("renderMessages (agent) should contain agent name, got: %q", rendered)
 	}
@@ -155,7 +181,7 @@ func TestRenderMessageSystemFormat(t *testing.T) {
 			{Type: "text", Text: "alice has joined"},
 		},
 	}
-	rendered := renderMessages([]protocol.MessageParams{msg}, 80)
+	rendered := renderMessages([]protocol.MessageParams{msg}, 80, nil)
 	if !contains(rendered, "— alice has joined —") {
 		t.Errorf("renderMessages (system) should contain em-dash wrapped text, got: %q", stripANSI(rendered))
 	}
@@ -177,7 +203,7 @@ func TestRenderMessageWrapsLongText(t *testing.T) {
 	}
 
 	const width = 80
-	rendered := renderMessages([]protocol.MessageParams{msg}, width)
+	rendered := renderMessages([]protocol.MessageParams{msg}, width, nil)
 
 	lines := strings.Split(rendered, "\n")
 	if len(lines) <= 1 {
@@ -214,7 +240,7 @@ func TestRenderMessagesGroupsConsecutiveSender(t *testing.T) {
 		},
 	}
 
-	rendered := renderMessages(msgs, 80)
+	rendered := renderMessages(msgs, 80, nil)
 	// Name should appear only once.
 	count := countOccurrences(stripANSI(rendered), "alice")
 	if count != 1 {
@@ -247,7 +273,7 @@ func TestRenderMessagesSeparatorBetweenSenders(t *testing.T) {
 		},
 	}
 
-	rendered := renderMessages(msgs, 80)
+	rendered := renderMessages(msgs, 80, nil)
 	if !containsHorizontalRule(rendered) {
 		t.Errorf("expected horizontal rule separator between different senders, got:\n%s", stripANSI(rendered))
 	}
@@ -268,7 +294,7 @@ func TestRenderMessageSystemCentered(t *testing.T) {
 			{Type: "text", Text: "alice has joined"},
 		},
 	}
-	rendered := renderMessages([]protocol.MessageParams{msg}, 80)
+	rendered := renderMessages([]protocol.MessageParams{msg}, 80, nil)
 	if !contains(rendered, "— alice has joined —") {
 		t.Errorf("system message should be formatted with em-dashes, got: %q", stripANSI(rendered))
 	}
@@ -298,7 +324,7 @@ func TestRenderMessagesTimestampAfterGap(t *testing.T) {
 		},
 	}
 
-	rendered := renderMessages(msgs, 80)
+	rendered := renderMessages(msgs, 80, nil)
 	stripped := stripANSI(rendered)
 	// Both timestamps should appear.
 	if !strings.Contains(stripped, "12:00") {
@@ -341,7 +367,7 @@ func TestRenderMessagesMarkdownBold(t *testing.T) {
 			Timestamp: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
 		},
 	}
-	rendered := renderMessages(msgs, 80)
+	rendered := renderMessages(msgs, 80, nil)
 	plain := stripANSI(rendered)
 	if strings.Contains(plain, "**bold**") {
 		t.Error("markdown ** markers should be rendered, not shown literally")
@@ -456,7 +482,7 @@ func TestChatViewportWithSystemFlood(t *testing.T) {
 	// Since viewport is 20 lines and GotoBottom was called, the bottom
 	// will show the collapsed system event. But the real message should
 	// be in the full content.
-	fullContent := stripANSI(renderMessages(c.messages, 80))
+	fullContent := stripANSI(renderMessages(c.messages, 80, nil))
 	if !strings.Contains(fullContent, "important message") {
 		t.Error("full content should contain 'important message'")
 	}
@@ -525,7 +551,7 @@ func TestColorConsistencyBetweenChatAndSidebar(t *testing.T) {
 			Content:   []protocol.Content{{Type: "text", Text: "hello from atlas"}},
 			Timestamp: ts},
 	}
-	rendered := renderMessages(msgs, 80)
+	rendered := renderMessages(msgs, 80, nil)
 
 	// atlas should NOT get human orange (#f0883e) — it should get its agent color.
 	if strings.Contains(rendered, "f0883e") {
@@ -550,7 +576,7 @@ func TestRenderMessagesCodeBlock(t *testing.T) {
 		Timestamp: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 
-	rendered := renderMessages([]protocol.MessageParams{msg}, 80)
+	rendered := renderMessages([]protocol.MessageParams{msg}, 80, nil)
 	plain := stripANSI(rendered)
 
 	// The code content must be present.
@@ -609,7 +635,7 @@ func TestMentionColorMatchesSenderColor(t *testing.T) {
 			Content:   []protocol.Content{{Type: "text", Text: "hello @robert how are you"}},
 			Timestamp: ts},
 	}
-	rendered := renderMessages(msgs, 80)
+	rendered := renderMessages(msgs, 80, nil)
 	t.Logf("rendered: %q", rendered)
 
 	// The @robert mention should NOT use human orange.
