@@ -462,6 +462,24 @@ func TestSaveRoom_PreservesPartialReconnect(t *testing.T) {
 	}
 }
 
+func TestSaveLoadRoom_DebugFlag(t *testing.T) {
+	dir := t.TempDir()
+	room := NewRoom("debug test")
+	room.Debug = true
+
+	if err := SaveRoom(dir, room); err != nil {
+		t.Fatalf("SaveRoom: %v", err)
+	}
+
+	loaded, err := LoadRoom(dir)
+	if err != nil {
+		t.Fatalf("LoadRoom: %v", err)
+	}
+	if !loaded.Debug {
+		t.Error("expected Debug=true after load, got false")
+	}
+}
+
 func TestSaveRoom_AgentsIncludeSessionID(t *testing.T) {
 	dir := t.TempDir()
 

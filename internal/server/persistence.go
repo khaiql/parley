@@ -14,6 +14,7 @@ type RoomData struct {
 	Topic       string `json:"topic"`
 	ID          string `json:"id"`
 	AutoApprove bool   `json:"auto_approve,omitempty"`
+	Debug       bool   `json:"debug,omitempty"`
 }
 
 // ParticipantData is the JSON representation of a participant.
@@ -49,6 +50,7 @@ func SaveRoom(dir string, room *Room) error {
 		Topic:       room.Topic,
 		ID:          room.ID,
 		AutoApprove: room.AutoApprove,
+		Debug:       room.Debug,
 	}
 	if err := writeJSON(filepath.Join(dir, "room.json"), rd); err != nil {
 		return fmt.Errorf("write room.json: %w", err)
@@ -105,6 +107,7 @@ func LoadRoom(dir string) (*Room, error) {
 	room := NewRoom(rd.Topic)
 	room.ID = rd.ID
 	room.AutoApprove = rd.AutoApprove
+	room.Debug = rd.Debug
 
 	var msgs []protocol.MessageParams
 	if err := readJSON(filepath.Join(dir, "messages.json"), &msgs); err != nil {
