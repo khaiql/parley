@@ -62,7 +62,7 @@ func TestConnectionManager_BroadcastExcept(t *testing.T) {
 	select {
 	case got := <-cc1.Send:
 		t.Fatalf("alice should not have received, got %q", got)
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond):
 		// expected
 	}
 }
@@ -82,8 +82,15 @@ func TestConnectionManager_Remove(t *testing.T) {
 		t.Fatal("Done channel was not closed after Remove")
 	}
 
-	// Broadcast after remove should not panic
+	// Broadcast after remove should not panic and removed conn should not receive.
 	cm.Broadcast([]byte(`{"test":"msg"}`))
+
+	select {
+	case msg := <-cc.Send:
+		t.Errorf("removed connection should not receive, got %q", msg)
+	default:
+		// correct — nothing received
+	}
 }
 
 func TestConnectionManager_BroadcastDropsFullBuffer(t *testing.T) {
