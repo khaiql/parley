@@ -211,7 +211,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case room.ParticipantActivityChanged:
 		a.localActivities[m.Name] = m.Activity
-		a.sidebar.SetParticipantStatus(m.Name, activityToString(m.Activity))
+		a.sidebar.SetParticipantStatus(m.Name, activityToStatus(m.Activity))
 		return a, a.maybeStartSpinnerFromActivities()
 
 	case room.ErrorOccurred:
@@ -428,17 +428,17 @@ func isAnyGenerating(activities map[string]room.Activity) bool {
 	return false
 }
 
-// activityToString converts a room.Activity to a display string for the sidebar.
-func activityToString(a room.Activity) string {
+// activityToStatus converts a room.Activity to a protocol status string for the sidebar.
+func activityToStatus(a room.Activity) string {
 	switch a {
 	case room.ActivityGenerating:
-		return "generating"
+		return protocol.StatusGenerating
 	case room.ActivityThinking:
-		return "thinking"
+		return protocol.StatusThinking
 	case room.ActivityUsingTool:
-		return "using tool"
+		return protocol.StatusUsingTool("")
 	default:
-		return ""
+		return protocol.StatusIdle
 	}
 }
 

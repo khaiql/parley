@@ -120,9 +120,31 @@ type LeftParams struct {
 	Name string `json:"name"`
 }
 
+// ---- Status constants -------------------------------------------------------
+
+const (
+	StatusIdle       = ""           // participant is idle
+	StatusThinking   = "thinking"   // processing input
+	StatusGenerating = "generating" // producing output
+	StatusListening  = "listening"  // passively observing
+)
+
+// StatusUsingTool returns a status string for tool use, optionally with name.
+func StatusUsingTool(toolName string) string {
+	if toolName != "" {
+		return "using: " + toolName
+	}
+	return "using tool"
+}
+
+// IsUsingTool reports whether status indicates tool use.
+func IsUsingTool(status string) bool {
+	return status == "using tool" || len(status) > 7 && status[:7] == "using: "
+}
+
 // StatusParams is the params payload for a "room.status" notification.
 // Status is a short description of what the participant is doing, e.g.
-// "thinking…", "using: Read", or "" to indicate idle.
+// "thinking", "using: Read", or "" to indicate idle.
 type StatusParams struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`

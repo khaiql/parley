@@ -83,6 +83,15 @@ func (s *State) Subscribe() <-chan Event {
 	return ch
 }
 
+// Close closes all subscriber channels, signaling goroutines draining them
+// to exit. Safe to call multiple times.
+func (s *State) Close() {
+	for _, ch := range s.subscribers {
+		close(ch)
+	}
+	s.subscribers = nil
+}
+
 // emit sends an event to all subscribers. It never blocks — if a subscriber's
 // channel is full the event is dropped and a warning is logged.
 func (s *State) emit(evt Event) {

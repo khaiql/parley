@@ -98,12 +98,14 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 	bridgeEvents(p, rs)
 	replayRoomState(rs, roomState)
-	startDispatcher(rs, d)
+	disp := startDispatcher(rs, d)
+	defer disp.Close()
 	startJoinNetworkLoop(c, rs, p)
 	startAgentBridge(c, d, p)
 
 	_, err = p.Run()
 
+	rs.Close()
 	saveAgentSession(store, roomState.RoomID, d)
 	return err
 }
@@ -251,12 +253,14 @@ func replayRoomState(rs *room.State, roomState protocol.RoomStateParams) {
 }
 
 // startDispatcher subscribes a Debounce dispatcher to room events for
-// delivering messages to the agent driver.
-func startDispatcher(rs *room.State, d driver.AgentDriver) {
+// delivering messages to the agent driver. Returns the dispatcher so the
+// caller can Close() it on shutdown.
+func startDispatcher(rs *room.State, d driver.AgentDriver) *dispatcher.Debounce {
 	disp := dispatcher.NewDebounce(joinName, 2*time.Second, func(text string) {
 		_ = d.Send(text)
 	})
 	disp.Start(rs.Subscribe())
+	return disp
 }
 
 // startJoinNetworkLoop feeds incoming server messages to the TUI's room.State.
@@ -279,21 +283,17 @@ func startAgentBridge(c *client.TCPClient, d driver.AgentDriver, p *tea.Program)
 				accumulated.WriteString(event.Text)
 				p.Send(tui.AgentTypingMsg{Text: accumulated.String()})
 			case driver.EventThinking:
-				_ = c.SendStatus(joinName, "thinking…")
+				_ = c.SendStatus(joinName, protocol.StatusThinking)
 			case driver.EventToolUse:
-				status := "using tool…"
-				if event.ToolName != "" {
-					status = fmt.Sprintf("using: %s…", event.ToolName)
-				}
-				_ = c.SendStatus(joinName, status)
+				_ = c.SendStatus(joinName, protocol.StatusUsingTool(event.ToolName))
 			case driver.EventDone:
 				text := strings.TrimSpace(accumulated.String())
 				if driver.IsListeningSignal(text) {
-					_ = c.SendStatus(joinName, "listening")
+					_ = c.SendStatus(joinName, protocol.StatusListening)
 				} else if text != "" {
 					mentions := protocol.ParseMentions(text)
 					_ = c.Send(protocol.Content{Type: "text", Text: text}, mentions)
-					_ = c.SendStatus(joinName, "")
+					_ = c.SendStatus(joinName, protocol.StatusIdle)
 				}
 				accumulated.Reset()
 				p.Send(tui.AgentTypingMsg{Text: ""})

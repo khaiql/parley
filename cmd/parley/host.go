@@ -97,6 +97,7 @@ func runHost(_ *cobra.Command, _ []string) error {
 
 	_, err = p.Run()
 
+	tuiState.Close()
 	shutdownHost(srv)
 	return err
 }

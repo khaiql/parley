@@ -8,12 +8,12 @@ import (
 
 // ParseActivity converts a protocol status string to an Activity enum value.
 func ParseActivity(status string) Activity {
-	switch status {
-	case "generating":
+	switch {
+	case status == protocol.StatusGenerating:
 		return ActivityGenerating
-	case "thinking":
+	case status == protocol.StatusThinking:
 		return ActivityThinking
-	case "using_tool":
+	case protocol.IsUsingTool(status):
 		return ActivityUsingTool
 	default:
 		return ActivityIdle

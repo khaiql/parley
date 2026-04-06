@@ -261,8 +261,11 @@ func TestParseActivity(t *testing.T) {
 	}{
 		{"generating", ActivityGenerating},
 		{"thinking", ActivityThinking},
-		{"using_tool", ActivityUsingTool},
+		{"using tool", ActivityUsingTool},
+		{"using: Read", ActivityUsingTool},
+		{"using: Bash", ActivityUsingTool},
 		{"", ActivityIdle},
+		{"listening", ActivityIdle},
 		{"unknown", ActivityIdle},
 	}
 	for _, tt := range tests {
