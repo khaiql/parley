@@ -78,7 +78,6 @@ func runHost(_ *cobra.Command, _ []string) error {
 		srv.Close()
 		return fmt.Errorf("host: connect client: %w", err)
 	}
-	defer c.Close()
 
 	sendFn := func(text string, mentions []string) {
 		_ = c.Send(protocol.Content{Type: "text", Text: text}, mentions)
@@ -98,6 +97,7 @@ func runHost(_ *cobra.Command, _ []string) error {
 	_, err = p.Run()
 
 	tuiState.Close()
+	c.Close()        // close host's client first — unblocks server's handleConn
 	shutdownHost(srv)
 	return err
 }
