@@ -2,7 +2,9 @@ package tui
 
 import (
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,19 +28,31 @@ const (
 
 // Input is the bottom input component.
 type Input struct {
-	ta        textarea.Model
-	mode      InputMode
-	agentText string
-	width     int
+	ta          textarea.Model
+	mode        InputMode
+	agentText   string
+	width       int
+	lastEscTime time.Time
 }
 
 // NewInput creates an Input component in human mode.
 func NewInput() Input {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message… (Enter to send)"
+	ta.Placeholder = "Type a message… (Enter to send, Shift+Enter for newline)"
 	ta.ShowLineNumbers = false
 	ta.SetHeight(1)
 	ta.Focus()
+
+	// Customize keymap: add Ctrl+arrow word nav, Ctrl+backspace/delete word
+	// deletion, and rebind InsertNewline to Shift+Enter/Alt+Enter (Enter is
+	// used by App.Update for message sending).
+	km := textarea.DefaultKeyMap
+	km.WordForward = key.NewBinding(key.WithKeys("alt+right", "alt+f", "ctrl+right"))
+	km.WordBackward = key.NewBinding(key.WithKeys("alt+left", "alt+b", "ctrl+left"))
+	km.DeleteWordBackward = key.NewBinding(key.WithKeys("alt+backspace", "ctrl+w", "ctrl+backspace"))
+	km.DeleteWordForward = key.NewBinding(key.WithKeys("alt+delete", "alt+d", "ctrl+delete"))
+	km.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter"))
+	ta.KeyMap = km
 
 	return Input{ta: ta, mode: InputModeHuman}
 }
@@ -160,14 +174,4 @@ func (i *Input) ReplaceRange(start, end int, text string) {
 	// Position cursor after inserted text.
 	cursorPos := start + len([]rune(text))
 	i.ta.SetCursor(cursorPos)
-}
-
-// handleBackslashNewline checks if text ends with a backslash.
-// If so, returns the text with the backslash replaced by a newline and true.
-// Otherwise returns the original text and false.
-func handleBackslashNewline(text string) (string, bool) {
-	if len(text) > 0 && text[len(text)-1] == '\\' {
-		return text[:len(text)-1] + "\n", true
-	}
-	return text, false
 }

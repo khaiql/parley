@@ -100,25 +100,6 @@ func TestInputHumanMode_PromptIndicator(t *testing.T) {
 	}
 }
 
-func TestInputBackslashNewline(t *testing.T) {
-	text := `hello world\`
-	result, consumed := handleBackslashNewline(text)
-	if !consumed {
-		t.Error("expected backslash-newline to be consumed")
-	}
-	if result != "hello world\n" {
-		t.Errorf("expected trailing \\ replaced with newline, got: %q", result)
-	}
-}
-
-func TestInputBackslashNewline_NoTrailingBackslash(t *testing.T) {
-	text := "hello world"
-	_, consumed := handleBackslashNewline(text)
-	if consumed {
-		t.Error("should not consume when no trailing backslash")
-	}
-}
-
 func TestInput_ReplaceRange(t *testing.T) {
 	inp := NewInput()
 	inp.SetWidth(80)
@@ -147,5 +128,71 @@ func TestInput_ReplaceRange_AtStart(t *testing.T) {
 	got := inp.Value()
 	if got != "/save " {
 		t.Errorf("expected '/save ', got %q", got)
+	}
+}
+
+func TestNewInput_CustomKeyMap(t *testing.T) {
+	inp := NewInput()
+
+	// Verify InsertNewline is rebound away from "enter"
+	km := inp.ta.KeyMap
+	for _, k := range km.InsertNewline.Keys() {
+		if k == "enter" || k == "ctrl+m" {
+			t.Errorf("InsertNewline should not be bound to %q", k)
+		}
+	}
+	// Verify InsertNewline includes shift+enter
+	found := false
+	for _, k := range km.InsertNewline.Keys() {
+		if k == "shift+enter" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("InsertNewline should include shift+enter binding")
+	}
+
+	// Verify WordForward includes ctrl+right
+	found = false
+	for _, k := range km.WordForward.Keys() {
+		if k == "ctrl+right" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("WordForward should include ctrl+right binding")
+	}
+
+	// Verify WordBackward includes ctrl+left
+	found = false
+	for _, k := range km.WordBackward.Keys() {
+		if k == "ctrl+left" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("WordBackward should include ctrl+left binding")
+	}
+
+	// Verify DeleteWordBackward includes ctrl+backspace
+	found = false
+	for _, k := range km.DeleteWordBackward.Keys() {
+		if k == "ctrl+backspace" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("DeleteWordBackward should include ctrl+backspace binding")
+	}
+
+	// Verify DeleteWordForward includes ctrl+delete
+	found = false
+	for _, k := range km.DeleteWordForward.Keys() {
+		if k == "ctrl+delete" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("DeleteWordForward should include ctrl+delete binding")
 	}
 }
