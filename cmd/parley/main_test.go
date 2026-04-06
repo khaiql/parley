@@ -117,4 +117,3 @@ func TestRandomNameDistribution(t *testing.T) {
 		t.Errorf("randomName() produced only %d unique name(s) over 100 calls; expected variety", len(seen))
 	}
 }
-

@@ -11,4 +11,4 @@ type Server interface {
 }
 
 // Compile-time interface check.
-var _ Server = (*TcpServer)(nil)
+var _ Server = (*TCPServer)(nil)

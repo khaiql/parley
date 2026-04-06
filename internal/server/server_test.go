@@ -15,7 +15,7 @@ import (
 
 const bufSize = 1024 * 1024 // 1 MB
 
-func newTestServer(t *testing.T) *server.TcpServer {
+func newTestServer(t *testing.T) *server.TCPServer {
 	t.Helper()
 	s, err := server.New("127.0.0.1:0", "test-topic")
 	if err != nil {

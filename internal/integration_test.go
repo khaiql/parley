@@ -13,7 +13,7 @@ import (
 
 // readMsg reads the next message from the client's incoming channel, failing
 // the test if nothing arrives within the timeout.
-func readMsg(t *testing.T, c *client.TcpClient, timeout time.Duration) *protocol.RawMessage {
+func readMsg(t *testing.T, c *client.TCPClient, timeout time.Duration) *protocol.RawMessage {
 	t.Helper()
 	select {
 	case msg := <-c.Incoming():
@@ -26,7 +26,7 @@ func readMsg(t *testing.T, c *client.TcpClient, timeout time.Duration) *protocol
 
 // readMsgWithMethod reads messages from the client until one with the expected
 // method is found, discarding any that don't match.
-func readMsgWithMethod(t *testing.T, c *client.TcpClient, method string, timeout time.Duration) *protocol.RawMessage {
+func readMsgWithMethod(t *testing.T, c *client.TCPClient, method string, timeout time.Duration) *protocol.RawMessage {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {

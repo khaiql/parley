@@ -12,4 +12,4 @@ type Client interface {
 }
 
 // Compile-time interface check.
-var _ Client = (*TcpClient)(nil)
+var _ Client = (*TCPClient)(nil)
