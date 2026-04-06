@@ -10,6 +10,8 @@ import (
 // SendMessage, etc.) must happen from a single goroutine. Subscribers receive
 // events on buffered channels and can process them concurrently.
 type State struct {
+	roomID       string
+	topic        string
 	participants []protocol.Participant
 	activities   map[string]Activity
 	messages     []protocol.MessageParams
@@ -101,4 +103,23 @@ func (s *State) PendingPermissions() []PermissionRequest {
 // AutoApprove reports whether agent tool calls are auto-approved.
 func (s *State) AutoApprove() bool {
 	return s.autoApprove
+}
+
+// GetID returns the room ID.
+func (s *State) GetID() string { return s.roomID }
+
+// GetTopic returns the room topic.
+func (s *State) GetTopic() string { return s.topic }
+
+// GetParticipants returns a copy of the participant list.
+// This satisfies command.RoomQuerier.
+func (s *State) GetParticipants() []protocol.Participant { return s.Participants() }
+
+// GetMessageCount returns the number of messages.
+func (s *State) GetMessageCount() int { return len(s.messages) }
+
+// SetCommands sets the command registry and context after construction.
+func (s *State) SetCommands(reg *command.Registry, ctx command.Context) {
+	s.commands = reg
+	s.cmdCtx = ctx
 }

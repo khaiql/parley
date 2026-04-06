@@ -1,6 +1,7 @@
 package room
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/khaiql/parley/internal/command"
@@ -159,5 +160,51 @@ func TestAvailableCommands_NilRegistry(t *testing.T) {
 	cmds := s.AvailableCommands()
 	if cmds != nil {
 		t.Errorf("expected nil commands with nil registry, got %v", cmds)
+	}
+}
+
+func TestState_RoomQuerier_AfterState(t *testing.T) {
+	rs := New(nil, command.Context{})
+
+	if rs.GetID() != "" {
+		t.Errorf("expected empty ID before state, got %q", rs.GetID())
+	}
+	if rs.GetTopic() != "" {
+		t.Errorf("expected empty topic before state, got %q", rs.GetTopic())
+	}
+	if rs.GetMessageCount() != 0 {
+		t.Errorf("expected 0 messages, got %d", rs.GetMessageCount())
+	}
+	if rs.GetParticipants() != nil {
+		t.Errorf("expected nil participants, got %v", rs.GetParticipants())
+	}
+
+	stateJSON, _ := json.Marshal(protocol.RoomStateParams{
+		RoomID: "room-123",
+		Topic:  "test topic",
+		Participants: []protocol.Participant{
+			{Name: "alice", Role: "human", Online: true},
+		},
+		Messages: []protocol.MessageParams{
+			{ID: "msg-1", From: "alice", Content: []protocol.Content{{Type: "text", Text: "hi"}}},
+		},
+	})
+	rs.HandleServerMessage(&protocol.RawMessage{
+		Method: protocol.MethodState,
+		Params: stateJSON,
+	})
+
+	if rs.GetID() != "room-123" {
+		t.Errorf("GetID() = %q, want %q", rs.GetID(), "room-123")
+	}
+	if rs.GetTopic() != "test topic" {
+		t.Errorf("GetTopic() = %q, want %q", rs.GetTopic(), "test topic")
+	}
+	if rs.GetMessageCount() != 1 {
+		t.Errorf("GetMessageCount() = %d, want 1", rs.GetMessageCount())
+	}
+	participants := rs.GetParticipants()
+	if len(participants) != 1 || participants[0].Name != "alice" {
+		t.Errorf("GetParticipants() = %v, want [alice]", participants)
 	}
 }

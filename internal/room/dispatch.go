@@ -34,6 +34,8 @@ func (s *State) HandleServerMessage(raw *protocol.RawMessage) {
 			s.emit(ErrorOccurred{Error: err})
 			return
 		}
+		s.roomID = params.RoomID
+		s.topic = params.Topic
 		s.participants = make([]protocol.Participant, len(params.Participants))
 		copy(s.participants, params.Participants)
 		s.messages = make([]protocol.MessageParams, len(params.Messages))
