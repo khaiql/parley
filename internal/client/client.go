@@ -91,9 +91,12 @@ func (c *TCPClient) Close() error {
 // and sends it to the incoming channel. It exits when the connection is closed
 // or the done channel is closed. It closes the incoming channel on exit so that
 // consumers using range will unblock.
+const scanBufSize = 1024 * 1024 // 1 MB — must match server's buffer
+
 func (c *TCPClient) readLoop() {
 	defer close(c.incoming)
 	sc := bufio.NewScanner(c.conn)
+	sc.Buffer(make([]byte, scanBufSize), scanBufSize)
 	for sc.Scan() {
 		line := sc.Bytes()
 		msg, err := protocol.DecodeLine(line)
