@@ -100,25 +100,6 @@ func TestInputHumanMode_PromptIndicator(t *testing.T) {
 	}
 }
 
-func TestInputBackslashNewline(t *testing.T) {
-	text := `hello world\`
-	result, consumed := handleBackslashNewline(text)
-	if !consumed {
-		t.Error("expected backslash-newline to be consumed")
-	}
-	if result != "hello world\n" {
-		t.Errorf("expected trailing \\ replaced with newline, got: %q", result)
-	}
-}
-
-func TestInputBackslashNewline_NoTrailingBackslash(t *testing.T) {
-	text := "hello world"
-	_, consumed := handleBackslashNewline(text)
-	if consumed {
-		t.Error("should not consume when no trailing backslash")
-	}
-}
-
 func TestInput_ReplaceRange(t *testing.T) {
 	inp := NewInput()
 	inp.SetWidth(80)

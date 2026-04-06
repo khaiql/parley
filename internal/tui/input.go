@@ -175,13 +175,3 @@ func (i *Input) ReplaceRange(start, end int, text string) {
 	cursorPos := start + len([]rune(text))
 	i.ta.SetCursor(cursorPos)
 }
-
-// handleBackslashNewline checks if text ends with a backslash.
-// If so, returns the text with the backslash replaced by a newline and true.
-// Otherwise returns the original text and false.
-func handleBackslashNewline(text string) (string, bool) {
-	if len(text) > 0 && text[len(text)-1] == '\\' {
-		return text[:len(text)-1] + "\n", true
-	}
-	return text, false
-}

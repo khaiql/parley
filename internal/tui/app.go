@@ -171,10 +171,6 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Normal input handling (StateNormal, or Enter fell through from StateCompleting).
 		if m.Type == tea.KeyEnter && a.input.mode == InputModeHuman {
 			text := a.input.Value()
-			if newText, consumed := handleBackslashNewline(text); consumed {
-				a.input.ta.SetValue(newText)
-				return a, nil
-			}
 			text = strings.TrimSpace(text)
 			if text != "" {
 				a.input.Reset()
