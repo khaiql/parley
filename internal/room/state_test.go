@@ -51,8 +51,8 @@ func TestParticipantActivity_ReturnsListeningByDefault(t *testing.T) {
 	s := New(nil, command.Context{})
 
 	act := s.ParticipantActivity("unknown-user")
-	if act != ActivityListening {
-		t.Errorf("expected ActivityListening (%d), got %d", ActivityListening, act)
+	if act != ActivityIdle {
+		t.Errorf("expected ActivityIdle (%d), got %d", ActivityIdle, act)
 	}
 }
 

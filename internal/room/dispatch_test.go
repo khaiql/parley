@@ -59,7 +59,7 @@ func TestHandleServerMessage_RoomMessage_EmitsMessageReceived(t *testing.T) {
 		Role:    "human",
 		Content: []protocol.Content{{Type: "text", Text: "hello"}},
 	}
-	s.HandleServerMessage(rawMsg(t, "room.message", msg))
+	s.HandleServerMessage(rawMsg(t, protocol.MethodMessage, msg))
 
 	evt := nextEvent(t, ch)
 	mr, ok := evt.(MessageReceived)
@@ -96,7 +96,7 @@ func TestHandleServerMessage_RoomJoined_EmitsParticipantsChanged(t *testing.T) {
 		Repo:      "test/repo",
 		AgentType: "claude",
 	}
-	s.HandleServerMessage(rawMsg(t, "room.joined", joined))
+	s.HandleServerMessage(rawMsg(t, protocol.MethodJoined, joined))
 
 	evt := nextEvent(t, ch)
 	pc, ok := evt.(ParticipantsChanged)
@@ -128,7 +128,7 @@ func TestHandleServerMessage_RoomLeft_EmitsParticipantsChanged(t *testing.T) {
 	}
 	ch := s.Subscribe()
 
-	s.HandleServerMessage(rawMsg(t, "room.left", protocol.LeftParams{Name: "bot-1"}))
+	s.HandleServerMessage(rawMsg(t, protocol.MethodLeft, protocol.LeftParams{Name: "bot-1"}))
 
 	evt := nextEvent(t, ch)
 	pc, ok := evt.(ParticipantsChanged)
@@ -149,7 +149,7 @@ func TestHandleServerMessage_RoomStatus_EmitsParticipantActivityChanged(t *testi
 	s := New(nil, command.Context{})
 	ch := s.Subscribe()
 
-	s.HandleServerMessage(rawMsg(t, "room.status", protocol.StatusParams{
+	s.HandleServerMessage(rawMsg(t, protocol.MethodStatus, protocol.StatusParams{
 		Name:   "bot-1",
 		Status: "generating",
 	}))
@@ -188,7 +188,7 @@ func TestHandleServerMessage_RoomState_EmitsHistoryLoaded(t *testing.T) {
 			{From: "alice", Content: []protocol.Content{{Type: "text", Text: "hi"}}},
 		},
 	}
-	s.HandleServerMessage(rawMsg(t, "room.state", state))
+	s.HandleServerMessage(rawMsg(t, protocol.MethodState, state))
 
 	evt := nextEvent(t, ch)
 	hl, ok := evt.(HistoryLoaded)
@@ -223,11 +223,11 @@ func TestHandleServerMessage_Ordering_ParticipantBeforeMessage(t *testing.T) {
 	ch := s.Subscribe()
 
 	// Send joined then message.
-	s.HandleServerMessage(rawMsg(t, "room.joined", protocol.JoinedParams{
+	s.HandleServerMessage(rawMsg(t, protocol.MethodJoined, protocol.JoinedParams{
 		Name: "bot-1",
 		Role: "agent",
 	}))
-	s.HandleServerMessage(rawMsg(t, "room.message", protocol.MessageParams{
+	s.HandleServerMessage(rawMsg(t, protocol.MethodMessage, protocol.MessageParams{
 		From:    "bot-1",
 		Content: []protocol.Content{{Type: "text", Text: "hi"}},
 	}))
@@ -262,8 +262,8 @@ func TestParseActivity(t *testing.T) {
 		{"generating", ActivityGenerating},
 		{"thinking", ActivityThinking},
 		{"using_tool", ActivityUsingTool},
-		{"", ActivityListening},
-		{"unknown", ActivityListening},
+		{"", ActivityIdle},
+		{"unknown", ActivityIdle},
 	}
 	for _, tt := range tests {
 		if got := ParseActivity(tt.input); got != tt.want {
@@ -279,7 +279,7 @@ func TestHandleServerMessage_UnmarshalError_EmitsErrorOccurred(t *testing.T) {
 	// Send a message with invalid JSON params.
 	bad := &protocol.RawMessage{
 		JSONRPC: "2.0",
-		Method:  "room.message",
+		Method:  protocol.MethodMessage,
 		Params:  json.RawMessage(`{invalid`),
 	}
 	s.HandleServerMessage(bad)

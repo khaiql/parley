@@ -16,7 +16,7 @@ func ParseActivity(status string) Activity {
 	case "using_tool":
 		return ActivityUsingTool
 	default:
-		return ActivityListening
+		return ActivityIdle
 	}
 }
 
@@ -28,7 +28,7 @@ func (s *State) HandleServerMessage(raw *protocol.RawMessage) {
 	}
 
 	switch raw.Method {
-	case "room.state":
+	case protocol.MethodState:
 		var params protocol.RoomStateParams
 		if err := json.Unmarshal(raw.Params, &params); err != nil {
 			s.emit(ErrorOccurred{Error: err})
@@ -58,7 +58,7 @@ func (s *State) HandleServerMessage(raw *protocol.RawMessage) {
 			Activities:   activities,
 		})
 
-	case "room.message":
+	case protocol.MethodMessage:
 		var params protocol.MessageParams
 		if err := json.Unmarshal(raw.Params, &params); err != nil {
 			s.emit(ErrorOccurred{Error: err})
@@ -67,7 +67,7 @@ func (s *State) HandleServerMessage(raw *protocol.RawMessage) {
 		s.messages = append(s.messages, params)
 		s.emit(MessageReceived{Message: params})
 
-	case "room.joined":
+	case protocol.MethodJoined:
 		var params protocol.JoinedParams
 		if err := json.Unmarshal(raw.Params, &params); err != nil {
 			s.emit(ErrorOccurred{Error: err})
@@ -97,7 +97,7 @@ func (s *State) HandleServerMessage(raw *protocol.RawMessage) {
 		copy(out, s.participants)
 		s.emit(ParticipantsChanged{Participants: out})
 
-	case "room.left":
+	case protocol.MethodLeft:
 		var params protocol.LeftParams
 		if err := json.Unmarshal(raw.Params, &params); err != nil {
 			s.emit(ErrorOccurred{Error: err})
@@ -113,7 +113,7 @@ func (s *State) HandleServerMessage(raw *protocol.RawMessage) {
 		copy(out, s.participants)
 		s.emit(ParticipantsChanged{Participants: out})
 
-	case "room.status":
+	case protocol.MethodStatus:
 		var params protocol.StatusParams
 		if err := json.Unmarshal(raw.Params, &params); err != nil {
 			s.emit(ErrorOccurred{Error: err})

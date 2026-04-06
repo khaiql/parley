@@ -15,7 +15,7 @@ type Event interface{}
 type Activity int
 
 const (
-	ActivityListening  Activity = iota // idle / listening
+	ActivityIdle       Activity = iota // idle / listening
 	ActivityThinking                   // processing input
 	ActivityGenerating                 // producing output
 	ActivityUsingTool                  // executing a tool

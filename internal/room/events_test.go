@@ -91,8 +91,8 @@ func TestEmit_DropsWhenChannelFull(t *testing.T) {
 }
 
 func TestActivity_Constants(t *testing.T) {
-	if ActivityListening != 0 {
-		t.Fatalf("expected ActivityListening=0, got %d", ActivityListening)
+	if ActivityIdle != 0 {
+		t.Fatalf("expected ActivityIdle=0, got %d", ActivityIdle)
 	}
 	if ActivityThinking != 1 {
 		t.Fatalf("expected ActivityThinking=1, got %d", ActivityThinking)

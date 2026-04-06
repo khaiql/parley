@@ -51,11 +51,11 @@ func (s *State) Participants() []protocol.Participant {
 }
 
 // ParticipantActivity returns the activity for the named participant.
-// Returns ActivityListening if the participant is not found.
+// Returns ActivityIdle if the participant is not found.
 func (s *State) ParticipantActivity(name string) Activity {
 	act, ok := s.activities[name]
 	if !ok {
-		return ActivityListening
+		return ActivityIdle
 	}
 	return act
 }

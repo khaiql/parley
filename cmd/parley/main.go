@@ -335,7 +335,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 			if !ok {
 				return fmt.Errorf("join: connection closed before receiving room state")
 			}
-			if msg.Method == "room.state" {
+			if msg.Method == protocol.MethodState {
 				if err := json.Unmarshal(msg.Params, &roomState); err == nil {
 					found = true
 				}
@@ -434,7 +434,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("join: marshal room state for replay: %w", err)
 	}
 	rs.HandleServerMessage(&protocol.RawMessage{
-		Method: "room.state",
+		Method: protocol.MethodState,
 		Params: stateJSON,
 	})
 
@@ -566,7 +566,7 @@ func bridgeNetworkToAgent(c *client.Client, rs *room.State, d driver.AgentDriver
 	for msg := range c.Incoming() {
 		rs.HandleServerMessage(msg)
 
-		if msg.Method == "room.message" {
+		if msg.Method == protocol.MethodMessage {
 			var params protocol.MessageParams
 			if err := json.Unmarshal(msg.Params, &params); err == nil {
 				if params.From != agentName {

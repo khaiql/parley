@@ -73,7 +73,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// 3. Verify human receives room.state with correct topic.
-	stateMsg := readMsgWithMethod(t, humanClient, "room.state", timeout)
+	stateMsg := readMsgWithMethod(t, humanClient, protocol.MethodState, timeout)
 	var humanState protocol.RoomStateParams
 	if err := json.Unmarshal(stateMsg.Params, &humanState); err != nil {
 		t.Fatalf("unmarshal room.state: %v", err)
@@ -86,7 +86,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// Drain the system message ("Alice joined") that the human receives about themselves.
-	readMsgWithMethod(t, humanClient, "room.message", timeout)
+	readMsgWithMethod(t, humanClient, protocol.MethodMessage, timeout)
 
 	// 4. Connect agent client, join as agent (with agent_type "claude").
 	agentClient, err := client.New(addr)
@@ -104,7 +104,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// 5. Verify human receives room.joined notification for the agent.
-	joinedMsg := readMsgWithMethod(t, humanClient, "room.joined", timeout)
+	joinedMsg := readMsgWithMethod(t, humanClient, protocol.MethodJoined, timeout)
 	var joined protocol.JoinedParams
 	if err := json.Unmarshal(joinedMsg.Params, &joined); err != nil {
 		t.Fatalf("unmarshal room.joined: %v", err)
@@ -117,7 +117,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// 6. Verify agent receives room.state with both participants.
-	agentStateMsg := readMsgWithMethod(t, agentClient, "room.state", timeout)
+	agentStateMsg := readMsgWithMethod(t, agentClient, protocol.MethodState, timeout)
 	var agentState protocol.RoomStateParams
 	if err := json.Unmarshal(agentStateMsg.Params, &agentState); err != nil {
 		t.Fatalf("unmarshal agent room.state: %v", err)
@@ -127,9 +127,9 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// Drain the "GoExpert joined" system message that goes to human.
-	readMsgWithMethod(t, humanClient, "room.message", timeout)
+	readMsgWithMethod(t, humanClient, protocol.MethodMessage, timeout)
 	// Drain the "GoExpert joined" system message that goes to agent too.
-	readMsgWithMethod(t, agentClient, "room.message", timeout)
+	readMsgWithMethod(t, agentClient, protocol.MethodMessage, timeout)
 
 	// 7. Human sends a message with a mention.
 	if err := humanClient.Send(
@@ -140,7 +140,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// 8. Verify agent receives room.message with correct content, source="human", mentions=["GoExpert"].
-	agentMsg := readMsgWithMethod(t, agentClient, "room.message", timeout)
+	agentMsg := readMsgWithMethod(t, agentClient, protocol.MethodMessage, timeout)
 	var agentRecv protocol.MessageParams
 	if err := json.Unmarshal(agentMsg.Params, &agentRecv); err != nil {
 		t.Fatalf("unmarshal room.message (agent recv): %v", err)
@@ -156,7 +156,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// Human also receives its own broadcast.
-	readMsgWithMethod(t, humanClient, "room.message", timeout)
+	readMsgWithMethod(t, humanClient, protocol.MethodMessage, timeout)
 
 	// 9. Agent sends a message back.
 	if err := agentClient.Send(
@@ -167,7 +167,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// 10. Verify human receives room.message with correct content, source="agent".
-	humanMsg := readMsgWithMethod(t, humanClient, "room.message", timeout)
+	humanMsg := readMsgWithMethod(t, humanClient, protocol.MethodMessage, timeout)
 	var humanRecv protocol.MessageParams
 	if err := json.Unmarshal(humanMsg.Params, &humanRecv); err != nil {
 		t.Fatalf("unmarshal room.message (human recv): %v", err)
@@ -180,13 +180,13 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// Agent also receives its own broadcast.
-	readMsgWithMethod(t, agentClient, "room.message", timeout)
+	readMsgWithMethod(t, agentClient, protocol.MethodMessage, timeout)
 
 	// 11. Disconnect agent.
 	agentClient.Close()
 
 	// 12. Verify human receives system message about agent leaving.
-	leaveMsg := readMsgWithMethod(t, humanClient, "room.message", timeout)
+	leaveMsg := readMsgWithMethod(t, humanClient, protocol.MethodMessage, timeout)
 	var leaveParams protocol.MessageParams
 	if err := json.Unmarshal(leaveMsg.Params, &leaveParams); err != nil {
 		t.Fatalf("unmarshal leave system message: %v", err)
