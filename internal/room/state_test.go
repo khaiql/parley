@@ -330,7 +330,7 @@ func TestState_AddMessage(t *testing.T) {
 	drainEvent(t, ch)
 	drainEvent(t, ch)
 
-	msg := s.AddMessage("alice", "human", "human", protocol.Content{Type: "text", Text: "hello @bob"}, nil)
+	msg := s.AddMessage("alice", "human", "human", protocol.Content{Type: "text", Text: "hello @bob"})
 
 	if msg.Seq != 1 {
 		t.Errorf("expected seq 1, got %d", msg.Seq)
@@ -379,7 +379,7 @@ func TestState_RecentMessages(t *testing.T) {
 
 	// Add 5 real messages and intersperse system messages
 	for i := 0; i < 5; i++ {
-		s.AddMessage("alice", "human", "human", protocol.Content{Type: "text", Text: fmt.Sprintf("msg %d", i)}, nil)
+		s.AddMessage("alice", "human", "human", protocol.Content{Type: "text", Text: fmt.Sprintf("msg %d", i)})
 		s.AddSystemMessage(fmt.Sprintf("system %d", i))
 	}
 
@@ -447,7 +447,7 @@ func TestState_Restore(t *testing.T) {
 	}
 
 	// Seq should continue from highest (10)
-	msg := s.AddMessage("alice", "human", "human", protocol.Content{Type: "text", Text: "new"}, nil)
+	msg := s.AddMessage("alice", "human", "human", protocol.Content{Type: "text", Text: "new"})
 	if msg.Seq != 11 {
 		t.Errorf("expected seq 11 after restore, got %d", msg.Seq)
 	}

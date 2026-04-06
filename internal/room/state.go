@@ -203,20 +203,24 @@ func (s *State) Join(name, role, dir, repo, agentType, source string) (protocol.
 	return s.stateSnapshot(), nil
 }
 
-// Leave marks the named participant as offline.
+// Leave marks the named participant as offline. No-op if name is not found.
 func (s *State) Leave(name string) {
+	found := false
 	for i, p := range s.participants {
 		if p.Name == name {
 			s.participants[i].Online = false
+			found = true
 			break
 		}
 	}
-	s.emitParticipantsChanged()
+	if found {
+		s.emitParticipantsChanged()
+	}
 }
 
 // AddMessage creates and stores a new message, computing mentions and emitting
 // a MessageReceived event. Returns the created message.
-func (s *State) AddMessage(from, source, role string, content protocol.Content, _ []string) protocol.MessageParams {
+func (s *State) AddMessage(from, source, role string, content protocol.Content) protocol.MessageParams {
 	s.seq++
 	msg := protocol.MessageParams{
 		ID:        generateID(),
@@ -229,13 +233,17 @@ func (s *State) AddMessage(from, source, role string, content protocol.Content, 
 		Content:   []protocol.Content{content},
 	}
 	s.messages = append(s.messages, msg)
-	s.emit(MessageReceived{Message: msg})
+	// Emit with a copy of Content so subscribers can't alias the stored slice.
+	emitMsg := msg
+	emitMsg.Content = make([]protocol.Content, len(msg.Content))
+	copy(emitMsg.Content, msg.Content)
+	s.emit(MessageReceived{Message: emitMsg})
 	return msg
 }
 
 // AddSystemMessage is a convenience wrapper that adds a system message.
 func (s *State) AddSystemMessage(text string) protocol.MessageParams {
-	return s.AddMessage("system", "system", "system", protocol.Content{Type: "text", Text: text}, nil)
+	return s.AddMessage("system", "system", "system", protocol.Content{Type: "text", Text: text})
 }
 
 // UpdateStatus parses the status string, updates the activity map, and emits
