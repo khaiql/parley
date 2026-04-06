@@ -8,6 +8,8 @@
       "Bash(go test:*)",
       "Bash(go build:*)",
       "Bash(git pull:*)"
+      "Bash(golangci-lint run:*)",
+      "Bash(gh issue:*)"
     ]
   }
 }
