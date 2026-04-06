@@ -12,47 +12,47 @@ import (
 
 const scanBufSize = 1024 * 1024 // 1 MB
 
-// Server accepts TCP connections and routes messages through a single Room.
-type Server struct {
+// TcpServer accepts TCP connections and routes messages through a single Room.
+type TcpServer struct {
 	listener net.Listener
 	room     *Room
 }
 
 // New creates a new Server listening on addr with the given room topic.
-func New(addr string, topic string) (*Server, error) {
+func New(addr string, topic string) (*TcpServer, error) {
 	return NewWithRoom(addr, NewRoom(topic))
 }
 
 // NewWithRoom creates a new Server listening on addr using an existing Room.
 // Use this to resume a previously saved room (e.g. loaded via LoadRoom).
-func NewWithRoom(addr string, room *Room) (*Server, error) {
+func NewWithRoom(addr string, room *Room) (*TcpServer, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	return &Server{
+	return &TcpServer{
 		listener: ln,
 		room:     room,
 	}, nil
 }
 
 // Addr returns the server's listening address as host:port.
-func (s *Server) Addr() string {
+func (s *TcpServer) Addr() string {
 	return s.listener.Addr().String()
 }
 
 // Port returns the server's listening port.
-func (s *Server) Port() int {
+func (s *TcpServer) Port() int {
 	return s.listener.Addr().(*net.TCPAddr).Port
 }
 
 // Room returns the server's room.
-func (s *Server) Room() *Room {
+func (s *TcpServer) Room() *Room {
 	return s.room
 }
 
 // Serve runs the accept loop. It blocks until the listener is closed.
-func (s *Server) Serve() {
+func (s *TcpServer) Serve() {
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
@@ -63,12 +63,12 @@ func (s *Server) Serve() {
 }
 
 // Close shuts down the server listener.
-func (s *Server) Close() error {
+func (s *TcpServer) Close() error {
 	return s.listener.Close()
 }
 
 // handleConn manages the lifecycle of a single client connection.
-func (s *Server) handleConn(conn net.Conn) {
+func (s *TcpServer) handleConn(conn net.Conn) {
 	defer conn.Close()
 
 	sc := bufio.NewScanner(conn)
