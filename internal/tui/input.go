@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -35,10 +36,21 @@ type Input struct {
 // NewInput creates an Input component in human mode.
 func NewInput() Input {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message… (Enter to send)"
+	ta.Placeholder = "Type a message… (Enter to send, Shift+Enter for newline)"
 	ta.ShowLineNumbers = false
 	ta.SetHeight(1)
 	ta.Focus()
+
+	// Customize keymap: add Ctrl+arrow word nav, Ctrl+backspace/delete word
+	// deletion, and rebind InsertNewline to Shift+Enter/Alt+Enter (Enter is
+	// used by App.Update for message sending).
+	km := textarea.DefaultKeyMap
+	km.WordForward = key.NewBinding(key.WithKeys("alt+right", "alt+f", "ctrl+right"))
+	km.WordBackward = key.NewBinding(key.WithKeys("alt+left", "alt+b", "ctrl+left"))
+	km.DeleteWordBackward = key.NewBinding(key.WithKeys("alt+backspace", "ctrl+w", "ctrl+backspace"))
+	km.DeleteWordForward = key.NewBinding(key.WithKeys("alt+delete", "alt+d", "ctrl+delete"))
+	km.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter"))
+	ta.KeyMap = km
 
 	return Input{ta: ta, mode: InputModeHuman}
 }
