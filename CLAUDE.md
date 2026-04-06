@@ -85,28 +85,118 @@ Use `/e2e-test` to run a full smoke test of the TUI using `agent-tui`. It builds
 
 **Parley** is a TUI group chat where a human and coding agents (Claude Code, Gemini CLI, etc.) collaborate as peers.
 
-### Components
+### Package Map
 
 ```
-cmd/parley/main.go          — CLI entrypoint (Cobra), wires host + join commands
-internal/protocol/           — JSON-RPC 2.0 types, NDJSON encoding
-internal/server/             — TCP server, room state, broadcast, persistence
-internal/client/             — TCP client, send/receive
-internal/room/               — Room business logic, event types, channel pub/sub (no TUI deps)
-internal/driver/             — AgentDriver interface + Claude Code driver
-internal/tui/                — Bubble Tea TUI shell (renders from room events)
+cmd/parley/              CLI entrypoint — wires everything together
+  main.go                Cobra commands (host, join, export), creates server/client/room/tui
+
+internal/protocol/       Wire format — shared by all packages
+  protocol.go            JSON-RPC 2.0 types, NDJSON encoding, Method* constants
+                         Participant, MessageParams, Content, RoomStateParams, etc.
+
+internal/server/         TCP server — manages connections and broadcasts
+  server.go              Accept loop, routes room.join/send/status from clients
+  room.go                Room state (participants, messages), broadcast fan-out
+  persistence.go         Save/load room to ~/.parley/rooms/<id>/
+
+internal/client/         TCP client — send/receive messages
+  client.go              Connect, Join, Send, SendStatus, Incoming() channel
+
+internal/room/           Business logic — pure Go, zero TUI dependencies
+  events.go              Event types (ParticipantsChanged, MessageReceived, etc.)
+                         Activity enum, channel-based pub/sub (Subscribe/emit)
+  state.go               Room state, query methods (Participants, IsAnyoneGenerating)
+  dispatch.go            HandleServerMessage — translates protocol → typed events
+  commands.go            ExecuteCommand, SendMessage
+
+internal/driver/         Agent subprocess management
+  driver.go              AgentDriver interface, AgentConfig, AgentEvent types
+  claude.go              Claude Code driver (stream-json protocol)
+  gemini.go              Gemini CLI driver
+  prompt.go              System prompt builder
+
+internal/tui/            Bubble Tea TUI shell — renders from room events
+  app.go                 Root model, three-layer key routing, event-sourced state
+  inputfsm.go            Input FSM (Normal ↔ Completing) via qmuntal/stateless
+  chat.go                Chat viewport with markdown rendering
+  sidebar.go             Participant list with activity status + spinner
+  suggestions.go         Autocomplete dropdown for / commands and @ mentions
+  modal.go               Dismissable overlay for command output
+  input.go               Text input (human interactive / agent read-only)
+  topbar.go, statusbar.go, styles.go
+
+internal/web/            Web export
+  export.go              HTML transcript export from saved room data
 ```
 
-### Communication
+### How It Works
 
-- **Server ↔ Client**: JSON-RPC 2.0 over NDJSON-framed TCP
-- **Parley ↔ Agent**: Claude Code's `--input-format stream-json --output-format stream-json --include-partial-messages`
+```
+┌─────────────────────────────────────────────────────┐
+│                   cmd/parley                         │
+│                                                      │
+│  host command:                                       │
+│    server.New() ──► client.New() ──► room.New()      │
+│         │                │               │           │
+│         │                │          Subscribe()      │
+│         ▼                ▼               │           │
+│    Serve (TCP)     c.Incoming()     chan Event        │
+│         │                │               │           │
+│         │                ▼               ▼           │
+│         │         HandleServerMsg   program.Send()   │
+│         │                               │            │
+│         │                          ┌────▼─────┐      │
+│         │                          │   TUI    │      │
+│         │                          │  (app)   │      │
+│         │                          └──────────┘      │
+│                                                      │
+│  join command:                                       │
+│    client.New() ──► room.New() ──► driver.Start()    │
+│         │               │               │            │
+│         ▼               ▼               ▼            │
+│    c.Incoming()    chan Event      agent stdin/out    │
+│         │               │               │            │
+│         ├──► HandleServerMsg ──► program.Send()      │
+│         │                            │               │
+│         └──► bridgeNetworkToAgent ──►│ driver.Send() │
+│                  (debounce)     ┌────▼─────┐         │
+│                                 │   TUI    │         │
+│                                 │  (app)   │         │
+│                                 └──────────┘         │
+└─────────────────────────────────────────────────────┘
+```
+
+### Package Dependencies
+
+```
+protocol  ◄── server, client, room, driver, tui, cmd
+command   ◄── room, tui, cmd
+room      ◄── tui, cmd          (depends on: protocol, command)
+server    ◄── cmd               (depends on: protocol)
+client    ◄── cmd               (depends on: protocol)
+driver    ◄── cmd               (depends on: protocol)
+tui       ◄── cmd               (depends on: protocol, command, room)
+```
+
+`protocol` is the foundation — all packages depend on it. `room` is the business logic layer — the TUI consumes its events but `room` has zero TUI imports.
+
+### Message Flow
+
+1. **Network**: Server broadcasts `room.message`, `room.joined`, `room.left`, `room.status` as JSON-RPC notifications over NDJSON TCP
+2. **Core**: `room.State.HandleServerMessage()` processes raw messages, updates internal state, emits typed events (`MessageReceived`, `ParticipantsChanged`, etc.) on buffered channels
+3. **Bridge**: A goroutine drains the event channel and calls `tea.Program.Send()` to inject events into the Bubble Tea loop
+4. **TUI**: `App.Update()` handles events, builds TUI-local state, and returns commands. `View()` renders from local state — never reads from `room.State`
 
 ### Key Design Decisions
 
 - Server is embedded in the `host` process (no separate daemon)
-- Agent drivers abstract different agent communication patterns (stdio, HTTP)
-- Same TUI renders for both human and agent — only input source differs
+- **Core/Shell split**: Room business logic (`internal/room/`) has zero TUI dependencies — reusable by web UI (#51)
+- **Event-sourced TUI**: The TUI builds its own state from room events, no shared mutable pointers
+- **Input FSM**: Explicit state machine for input modes (Normal ↔ Completing) via `qmuntal/stateless`
+- **Three-layer key routing**: Overlay → Permission → Input FSM, with consumed-bool early returns
+- **Reactive spinner**: Self-terminating tick pattern, no `spinnerActive` flag
+- Agent drivers abstract different agent communication patterns (stdio)
 - Agents self-regulate responses via system prompt (no server-side turn-taking)
 
 ## Conventions & Patterns
