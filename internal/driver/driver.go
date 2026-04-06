@@ -2,7 +2,11 @@
 // for spawning and communicating with AI coding agent subprocesses.
 package driver
 
-import "context"
+import (
+	"context"
+
+	"github.com/khaiql/parley/internal/protocol"
+)
 
 // EventType identifies the kind of event emitted by an AgentDriver.
 type EventType int
@@ -38,18 +42,11 @@ type AgentConfig struct {
 	Directory       string
 	Repo            string
 	Topic           string
-	Participants    []ParticipantInfo
+	Participants    []protocol.Participant
 	SystemPrompt    string
 	InitialMessage  string // if set, used as the first prompt (for drivers that need one in Start)
 	ResumeSessionID string // if set, pass --resume <id> to the driver
 	AutoApprove     bool   // if set, append driver-specific auto-approve flag
-}
-
-// ParticipantInfo describes one participant in the room (used for system prompt).
-type ParticipantInfo struct {
-	Name      string
-	Role      string
-	Directory string
 }
 
 // AgentDriver is the interface for spawning and communicating with an agent subprocess.

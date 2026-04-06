@@ -23,8 +23,8 @@ type fakeRoom struct{}
 func (f *fakeRoom) GetID() string    { return "room-1" }
 func (f *fakeRoom) GetTopic() string { return "test-topic" }
 func (f *fakeRoom) GetPort() int     { return 9000 }
-func (f *fakeRoom) GetParticipants() []command.ParticipantInfo {
-	return []command.ParticipantInfo{
+func (f *fakeRoom) GetParticipants() []protocol.Participant {
+	return []protocol.Participant{
 		{Name: "alice", Role: "agent", Directory: "/tmp/alice", AgentType: "claude", Online: true},
 	}
 }
@@ -438,7 +438,7 @@ func TestApp_SpinnerTickChainsWhenGenerating(t *testing.T) {
 
 func TestApp_SpinnerTickStopsWhenNobodyGenerating(t *testing.T) {
 	a := makeApp()
-	a.localActivities["agent-1"] = room.ActivityListening
+	a.localActivities["agent-1"] = room.ActivityIdle
 
 	model, cmd := a.Update(SpinnerTickMsg{})
 	a = model.(App)

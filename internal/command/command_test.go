@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/khaiql/parley/internal/protocol"
 )
 
 // mockRoom implements RoomQuerier for testing.
@@ -11,22 +13,22 @@ type mockRoom struct {
 	id           string
 	topic        string
 	port         int
-	participants []ParticipantInfo
+	participants []protocol.Participant
 	messageCount int
 }
 
-func (m *mockRoom) GetID() string                      { return m.id }
-func (m *mockRoom) GetTopic() string                   { return m.topic }
-func (m *mockRoom) GetPort() int                       { return m.port }
-func (m *mockRoom) GetParticipants() []ParticipantInfo { return m.participants }
-func (m *mockRoom) GetMessageCount() int               { return m.messageCount }
+func (m *mockRoom) GetID() string                           { return m.id }
+func (m *mockRoom) GetTopic() string                        { return m.topic }
+func (m *mockRoom) GetPort() int                            { return m.port }
+func (m *mockRoom) GetParticipants() []protocol.Participant { return m.participants }
+func (m *mockRoom) GetMessageCount() int                    { return m.messageCount }
 
 func newTestRoom() *mockRoom {
 	return &mockRoom{
 		id:    "room-abc",
 		topic: "test-topic",
 		port:  9000,
-		participants: []ParticipantInfo{
+		participants: []protocol.Participant{
 			{Name: "host-user", Role: "human", Directory: "/home/user", Online: true},
 			{Name: "atlas", Role: "agent", Directory: "/tmp/atlas", AgentType: "claude", Online: true},
 			{Name: "nova", Role: "agent", Directory: "/tmp/nova", AgentType: "claude", Online: false},

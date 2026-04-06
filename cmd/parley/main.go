@@ -348,16 +348,6 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	topic := roomState.Topic
 	roomID := roomState.RoomID
 
-	// Build participant info list.
-	participants := make([]driver.ParticipantInfo, 0, len(roomState.Participants))
-	for _, p := range roomState.Participants {
-		participants = append(participants, driver.ParticipantInfo{
-			Name:      p.Name,
-			Role:      p.Role,
-			Directory: p.Directory,
-		})
-	}
-
 	cmdName := "claude"
 	var extraArgs []string
 	if len(agentArgs) > 0 {
@@ -395,7 +385,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		Directory:       dir,
 		Repo:            repo,
 		Topic:           topic,
-		Participants:    participants,
+		Participants:    roomState.Participants,
 		InitialMessage:  intro,
 		ResumeSessionID: resumeSessionID,
 		AutoApprove:     roomState.AutoApprove,
@@ -615,11 +605,11 @@ func bridgeNetworkToAgent(c *client.Client, rs *room.State, d driver.AgentDriver
 	p.Send(tui.ServerDisconnectedMsg{})
 }
 
-func (a *RoomAdapter) GetParticipants() []command.ParticipantInfo {
+func (a *RoomAdapter) GetParticipants() []protocol.Participant {
 	conns := a.room.GetParticipants()
-	out := make([]command.ParticipantInfo, len(conns))
+	out := make([]protocol.Participant, len(conns))
 	for i, cc := range conns {
-		out[i] = command.ParticipantInfo{
+		out[i] = protocol.Participant{
 			Name:      cc.Name,
 			Role:      cc.Role,
 			Directory: cc.Directory,
