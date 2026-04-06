@@ -64,7 +64,7 @@ func TestJSONStore_SaveAndLoad(t *testing.T) {
 	if p.Name != "alice" {
 		t.Errorf("Participant.Name = %q, want %q", p.Name, "alice")
 	}
-	if p.Online != false {
+	if p.Online {
 		t.Errorf("Participant.Online = %v, want false (loaded participants are offline)", p.Online)
 	}
 
@@ -75,11 +75,54 @@ func TestJSONStore_SaveAndLoad(t *testing.T) {
 	if m.ID != "msg-1" {
 		t.Errorf("Message.ID = %q, want %q", m.ID, "msg-1")
 	}
+	if m.Seq != 1 {
+		t.Errorf("Message.Seq = %d, want 1", m.Seq)
+	}
 	if m.From != "alice" {
 		t.Errorf("Message.From = %q, want %q", m.From, "alice")
 	}
+	if m.Source != "human" {
+		t.Errorf("Message.Source = %q, want %q", m.Source, "human")
+	}
+	if m.Role != "human" {
+		t.Errorf("Message.Role = %q, want %q", m.Role, "human")
+	}
 	if !m.Timestamp.Equal(ts) {
 		t.Errorf("Message.Timestamp = %v, want %v", m.Timestamp, ts)
+	}
+	if len(m.Content) != 1 || m.Content[0].Text != "hello" {
+		t.Errorf("Message.Content = %v, want [{text hello}]", m.Content)
+	}
+}
+
+func TestJSONStore_FindAgentSession_NonexistentRoom(t *testing.T) {
+	dir := t.TempDir()
+	store := NewJSONStore(dir)
+
+	sid, err := store.FindAgentSession("no-such-room", "bot")
+	if err != nil {
+		t.Fatalf("FindAgentSession on nonexistent room: %v", err)
+	}
+	if sid != "" {
+		t.Errorf("expected empty session, got %q", sid)
+	}
+}
+
+func TestJSONStore_SaveAgentSession_CreatesDir(t *testing.T) {
+	dir := t.TempDir()
+	store := NewJSONStore(dir)
+
+	// SaveAgentSession on a room that has never been saved should create the dir.
+	if err := store.SaveAgentSession("new-room", "bot", "sess-1"); err != nil {
+		t.Fatalf("SaveAgentSession on new room: %v", err)
+	}
+
+	sid, err := store.FindAgentSession("new-room", "bot")
+	if err != nil {
+		t.Fatalf("FindAgentSession: %v", err)
+	}
+	if sid != "sess-1" {
+		t.Errorf("session = %q, want %q", sid, "sess-1")
 	}
 }
 
