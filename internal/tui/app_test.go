@@ -447,3 +447,52 @@ func TestApp_SpinnerTickStopsWhenNobodyGenerating(t *testing.T) {
 		t.Fatal("expected nil command when nobody is generating")
 	}
 }
+
+func TestApp_DoubleEsc_ClearsInput(t *testing.T) {
+	a := makeApp()
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
+
+	// Type some text.
+	for _, ch := range "hello world" {
+		model, _ = a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		a = model.(App)
+	}
+	if a.input.Value() == "" {
+		t.Fatal("precondition: input should have text")
+	}
+
+	// First Esc — should NOT clear.
+	model, _ = a.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	a = model.(App)
+	if a.input.Value() == "" {
+		t.Error("single Esc should not clear input")
+	}
+
+	// Second Esc immediately — should clear.
+	model, _ = a.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	a = model.(App)
+	if a.input.Value() != "" {
+		t.Errorf("double Esc should clear input, got %q", a.input.Value())
+	}
+}
+
+func TestApp_SingleEsc_DoesNotClear(t *testing.T) {
+	a := makeApp()
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
+
+	// Type some text.
+	for _, ch := range "hello" {
+		model, _ = a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		a = model.(App)
+	}
+
+	// Single Esc.
+	model, _ = a.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	a = model.(App)
+
+	if a.input.Value() == "" {
+		t.Error("single Esc should not clear input")
+	}
+}

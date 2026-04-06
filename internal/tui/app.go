@@ -151,6 +151,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, tea.Quit
 		}
 
+		// Double-Esc clears the input (300ms window).
+		if m.Type == tea.KeyEsc && a.input.mode == InputModeHuman && a.inputFSM.Current() == StateNormal {
+			now := time.Now()
+			if !a.input.lastEscTime.IsZero() && now.Sub(a.input.lastEscTime) < 300*time.Millisecond {
+				a.input.Reset()
+				a.input.lastEscTime = time.Time{}
+			} else {
+				a.input.lastEscTime = now
+			}
+			return a, nil
+		}
+
 		// Layer 3: Input FSM routing.
 		if cmd, handled := a.handleCompletingKeys(m); handled {
 			return a, cmd

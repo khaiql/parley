@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -27,10 +28,11 @@ const (
 
 // Input is the bottom input component.
 type Input struct {
-	ta        textarea.Model
-	mode      InputMode
-	agentText string
-	width     int
+	ta          textarea.Model
+	mode        InputMode
+	agentText   string
+	width       int
+	lastEscTime time.Time
 }
 
 // NewInput creates an Input component in human mode.
