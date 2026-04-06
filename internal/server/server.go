@@ -61,6 +61,21 @@ func (s *TCPServer) Serve() {
 	}
 }
 
+// Snapshot returns a consistent room state snapshot, safe for concurrent use.
+// It acquires the server mutex to ensure no handleConn goroutine is mutating
+// state mid-read.
+func (s *TCPServer) Snapshot() protocol.RoomSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return protocol.RoomSnapshot{
+		RoomID:       s.state.GetID(),
+		Topic:        s.state.GetTopic(),
+		AutoApprove:  s.state.AutoApprove(),
+		Participants: s.state.GetParticipants(),
+		Messages:     s.state.Messages(),
+	}
+}
+
 // Close shuts down the server listener and waits for all active connection
 // handlers to finish.
 func (s *TCPServer) Close() error {
