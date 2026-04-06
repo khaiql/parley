@@ -97,7 +97,7 @@ func runHost(_ *cobra.Command, _ []string) error {
 	_, err = p.Run()
 
 	tuiState.Close()
-	c.Close()        // close host's client first — unblocks server's handleConn
+	c.Close() // close host's client first — unblocks server's handleConn
 	shutdownHost(srv)
 	return err
 }
