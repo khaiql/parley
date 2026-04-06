@@ -38,12 +38,14 @@ go build -o parley ./cmd/parley
 ## Architecture
 
 ```
-cmd/parley/         CLI entrypoint (host, join, export commands)
+cmd/parley/         CLI entrypoint (host.go, join.go, export.go)
 internal/
   protocol/         Wire format: JSON-RPC 2.0 over NDJSON TCP
-  server/           TCP server, room management, persistence
+  server/           TCP server (transport only), ConnectionManager
   client/           TCP client
-  room/             Business logic layer (pure Go, no TUI deps)
+  room/             Business logic — single source of truth (pure Go, no TUI deps)
+  dispatcher/       Message delivery policies for agents (debounce, etc.)
+  persistence/      Room state storage (Store interface, JSONStore)
   driver/           Agent subprocess management (Claude, Gemini)
   tui/              Bubble Tea TUI shell (renders from room events)
   web/              HTML export
@@ -53,13 +55,16 @@ internal/
 
 ```
 Human ──► TUI ──► Client ──► TCP Server ──► Broadcast to all
-                                  ▲
-Agent ◄── Driver ◄── Client ◄─────┘
+                                  │
+                          room.State (single
+                          source of truth)
+                                  │
+Agent ◄── Dispatcher ◄── room events ◄─────┘
 ```
 
-The **host** runs an embedded TCP server + TUI. **Agents** join via `parley join`, which connects a TCP client and spawns an agent subprocess (Claude Code, Gemini CLI). Messages are JSON-RPC 2.0 notifications over NDJSON.
+The **host** runs an embedded TCP server + TUI. **Agents** join via `parley join`, which connects a TCP client, spawns an agent subprocess, and runs a `Dispatcher` that routes messages to the agent with debouncing.
 
-The TUI uses a **Core/Shell architecture**: business logic lives in `internal/room/` (pure Go, no TUI deps), and the TUI is a thin Bubble Tea adapter that builds its own state from typed events delivered over Go channels.
+`room.State` is the **single source of truth** — it owns participants, messages, and metadata. The server borrows it for mutations (under a mutex); the TUI subscribes to its events. The TUI uses a **Core/Shell architecture**: business logic lives in `internal/room/` (pure Go, no TUI deps), and the TUI is a thin Bubble Tea adapter that builds its own state from typed events.
 
 ## Development
 

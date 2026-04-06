@@ -89,26 +89,39 @@ Use `/e2e-test` to run a full smoke test of the TUI using `agent-tui`. It builds
 
 ```
 cmd/parley/              CLI entrypoint — wires everything together
-  main.go                Cobra commands (host, join, export), creates server/client/room/tui
+  main.go                Cobra root command, shared helpers (detectRepo, defaultParleyDir)
+  host.go                Host command: creates server + TUI, persistence auto-save
+  join.go                Join command: connects agent to room, dispatcher, driver bridge
+  export.go              Export command: HTML transcript
 
 internal/protocol/       Wire format — shared by all packages
-  protocol.go            JSON-RPC 2.0 types, NDJSON encoding, Method* constants
-                         Participant, MessageParams, Content, RoomStateParams, etc.
+  protocol.go            JSON-RPC 2.0 types, NDJSON encoding, Method*/Status* constants
+                         Participant, MessageParams, Content, RoomSnapshot, MatchMentions
 
-internal/server/         TCP server — manages connections and broadcasts
-  server.go              Accept loop, routes room.join/send/status from clients
-  room.go                Room state (participants, messages), broadcast fan-out
-  persistence.go         Save/load room to ~/.parley/rooms/<id>/
+internal/server/         TCP server — transport layer only
+  server.go              TCPServer: accept loop, handleConn routes messages via room.State
+  interfaces.go          Server interface (Addr, Port, Serve, Close)
+  connmanager.go         ConnectionManager: client connections + broadcast primitives
 
 internal/client/         TCP client — send/receive messages
-  client.go              Connect, Join, Send, SendStatus, Incoming() channel
+  client.go              TCPClient: Connect, Join, Send, SendStatus, Incoming() channel
+  interfaces.go          Client interface
 
-internal/room/           Business logic — pure Go, zero TUI dependencies
+internal/room/           Business logic — single source of truth, zero TUI dependencies
   events.go              Event types (ParticipantsChanged, MessageReceived, etc.)
-                         Activity enum, channel-based pub/sub (Subscribe/emit)
-  state.go               Room state, query methods (Participants, IsAnyoneGenerating)
-  dispatch.go            HandleServerMessage — translates protocol → typed events
+                         Activity enum, channel-based pub/sub (Subscribe/emit/Close)
+  state.go               Room state: Join, Leave, AddMessage, Restore, RecentMessages
+                         Query methods (Participants, GetID, GetTopic, etc.)
+  dispatch.go            HandleServerMessage — client-side: translates protocol → events
   commands.go            ExecuteCommand, SendMessage
+
+internal/dispatcher/     Message delivery policies for agent drivers
+  dispatcher.go          Dispatcher interface + Debounce implementation
+                         Subscribes to room events, debounces non-mentioned messages
+
+internal/persistence/    Room state storage
+  persistence.go         Store interface (Save, Load, SaveAgentSession, FindAgentSession)
+  json_store.go          JSONStore: saves to ~/.parley/rooms/<id>/ as JSON files
 
 internal/driver/         Agent subprocess management
   driver.go              AgentDriver interface, AgentConfig, AgentEvent types
@@ -133,66 +146,80 @@ internal/web/            Web export
 ### How It Works
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   cmd/parley                         │
-│                                                      │
-│  host command:                                       │
-│    server.New() ──► client.New() ──► room.New()      │
-│         │                │               │           │
-│         │                │          Subscribe()      │
-│         ▼                ▼               │           │
-│    Serve (TCP)     c.Incoming()     chan Event        │
-│         │                │               │           │
-│         │                ▼               ▼           │
-│         │         HandleServerMsg   program.Send()   │
-│         │                               │            │
-│         │                          ┌────▼─────┐      │
-│         │                          │   TUI    │      │
-│         │                          │  (app)   │      │
-│         │                          └──────────┘      │
-│                                                      │
-│  join command:                                       │
-│    client.New() ──► room.New() ──► driver.Start()    │
-│         │               │               │            │
-│         ▼               ▼               ▼            │
-│    c.Incoming()    chan Event      agent stdin/out    │
-│         │               │               │            │
-│         ├──► HandleServerMsg ──► program.Send()      │
-│         │                            │               │
-│         └──► bridgeNetworkToAgent ──►│ driver.Send() │
-│                  (debounce)     ┌────▼─────┐         │
-│                                 │   TUI    │         │
-│                                 │  (app)   │         │
-│                                 └──────────┘         │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                      cmd/parley                           │
+│                                                           │
+│  host command:                                            │
+│    serverState = room.New()                               │
+│    srv = server.New(addr, serverState)                    │
+│    tuiState = room.New()   ◄── client-side event emitter  │
+│         │           │               │                     │
+│         │      c.Incoming()    Subscribe()                │
+│         ▼           │               │                     │
+│    Serve (TCP)      ▼               ▼                     │
+│    (mutates    HandleServerMsg  program.Send()            │
+│     serverState                     │                     │
+│     under s.mu)                ┌────▼─────┐               │
+│         │                      │   TUI    │               │
+│         │                      │  (app)   │               │
+│         │                      └──────────┘               │
+│         │                                                 │
+│    persistence.JSONStore ◄── srv.Snapshot()               │
+│                                                           │
+│  join command:                                            │
+│    tuiState = room.New()  ──► dispatcher.Start()          │
+│         │          │               │                      │
+│    c.Incoming()  Subscribe()   driver.Send()              │
+│         │          │               │                      │
+│         ▼          ▼               ▼                      │
+│    HandleServerMsg  program.Send()  agent stdin/out       │
+│                         │                                 │
+│                    ┌────▼─────┐                            │
+│                    │   TUI    │                            │
+│                    │  (app)   │                            │
+│                    └──────────┘                            │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ### Package Dependencies
 
 ```
-protocol  ◄── server, client, room, driver, tui, cmd
-command   ◄── room, tui, cmd
-room      ◄── tui, cmd          (depends on: protocol, command)
-server    ◄── cmd               (depends on: protocol)
-client    ◄── cmd               (depends on: protocol)
-driver    ◄── cmd               (depends on: protocol)
-tui       ◄── cmd               (depends on: protocol, command, room)
+protocol     ◄── server, client, room, dispatcher, persistence, driver, tui, cmd
+command      ◄── room, tui, cmd
+room         ◄── dispatcher, tui, cmd     (depends on: protocol, command)
+server       ◄── cmd                      (depends on: protocol, room)
+client       ◄── cmd                      (depends on: protocol)
+dispatcher   ◄── cmd                      (depends on: protocol, room)
+persistence  ◄── cmd                      (depends on: protocol)
+driver       ◄── cmd                      (depends on: protocol)
+tui          ◄── cmd                      (depends on: protocol, command, room)
 ```
 
-`protocol` is the foundation — all packages depend on it. `room` is the business logic layer — the TUI consumes its events but `room` has zero TUI imports.
+`protocol` is the foundation — all packages depend on it. `room` is the business logic layer (single source of truth). The server borrows `room.State` for mutations; the TUI and dispatcher subscribe to its events.
 
 ### Message Flow
 
-1. **Network**: Server broadcasts `room.message`, `room.joined`, `room.left`, `room.status` as JSON-RPC notifications over NDJSON TCP
-2. **Core**: `room.State.HandleServerMessage()` processes raw messages, updates internal state, emits typed events (`MessageReceived`, `ParticipantsChanged`, etc.) on buffered channels
+1. **Server-side**: `handleConn` receives JSON-RPC over TCP, calls `room.State.AddMessage()` / `Join()` / `Leave()` under `s.mu`, then `ConnectionManager.Broadcast()` fans out the notification
+2. **Client-side**: `room.State.HandleServerMessage()` processes incoming notifications, updates internal state, emits typed events (`MessageReceived`, `ParticipantsChanged`, etc.)
 3. **Bridge**: A goroutine drains the event channel and calls `tea.Program.Send()` to inject events into the Bubble Tea loop
 4. **TUI**: `App.Update()` handles events, builds TUI-local state, and returns commands. `View()` renders from local state — never reads from `room.State`
+
+### Concurrency Model
+
+- `room.State` is **single-threaded** — no internal mutex
+- **Server-side**: The server's `s.mu sync.Mutex` serializes all `room.State` mutations from multiple `handleConn` goroutines
+- **Client-side** (host TUI, join TUI): One goroutine calls `HandleServerMessage` from the network loop
+- **Host process**: Two `room.State` instances — `serverState` (authoritative, server-owned) and `tuiState` (client-side, fed by network). Persistence reads via `srv.Snapshot()` which acquires `s.mu`
+- **ConnectionManager**: Has its own `sync.RWMutex` for connection map access
 
 ### Key Design Decisions
 
 - Server is embedded in the `host` process (no separate daemon)
+- **Single source of truth**: `room.State` owns all business logic (Join, Leave, AddMessage, etc.). The server is pure transport.
 - **Core/Shell split**: Room business logic (`internal/room/`) has zero TUI dependencies — reusable by web UI (#51)
 - **Event-sourced TUI**: The TUI builds its own state from room events, no shared mutable pointers
+- **Dispatcher pattern**: Message delivery to agents is a pluggable policy (`internal/dispatcher/`). Currently debounce-based; extensible to priority, batching, etc.
+- **Persistence interface**: `persistence.Store` decouples storage from file format. `JSONStore` is the default implementation.
 - **Input FSM**: Explicit state machine for input modes (Normal ↔ Completing) via `qmuntal/stateless`
 - **Three-layer key routing**: Overlay → Permission → Input FSM, with consumed-bool early returns
 - **Reactive spinner**: Self-terminating tick pattern, no `spinnerActive` flag
