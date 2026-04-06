@@ -3,23 +3,16 @@
 // only a new file and a single Register call.
 package command
 
+import "github.com/khaiql/parley/internal/protocol"
+
 // RoomQuerier abstracts the read-only room data that commands need.
 // This avoids coupling commands directly to *server.Room.
 type RoomQuerier interface {
 	GetID() string
 	GetTopic() string
 	GetPort() int
-	GetParticipants() []ParticipantInfo
+	GetParticipants() []protocol.Participant
 	GetMessageCount() int
-}
-
-// ParticipantInfo is a simplified view of a room participant for command output.
-type ParticipantInfo struct {
-	Name      string
-	Role      string
-	Directory string
-	AgentType string
-	Online    bool
 }
 
 // Context carries everything a command needs to execute.

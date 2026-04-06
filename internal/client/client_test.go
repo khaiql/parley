@@ -55,7 +55,7 @@ func TestClientConnectsAndJoins(t *testing.T) {
 
 	found := false
 	for _, m := range msgs {
-		if m.Method == "room.state" {
+		if m.Method == protocol.MethodState {
 			found = true
 			var params protocol.RoomStateParams
 			if err := json.Unmarshal(m.Params, &params); err != nil {
@@ -119,7 +119,7 @@ func TestClientSendsAndReceives(t *testing.T) {
 	msgs := drain(bob.Incoming(), 3) // allow for system messages too
 	found := false
 	for _, m := range msgs {
-		if m.Method == "room.message" {
+		if m.Method == protocol.MethodMessage {
 			var params protocol.MessageParams
 			if err := json.Unmarshal(m.Params, &params); err != nil {
 				t.Fatalf("unmarshal room.message params: %v", err)
@@ -178,7 +178,7 @@ func TestClientSendStatus(t *testing.T) {
 	msgs := drain(alice.Incoming(), 5) // allow for join notifications too
 	found := false
 	for _, m := range msgs {
-		if m.Method == "room.status" {
+		if m.Method == protocol.MethodStatus {
 			var params protocol.StatusParams
 			if err := json.Unmarshal(m.Params, &params); err != nil {
 				t.Fatalf("unmarshal room.status params: %v", err)

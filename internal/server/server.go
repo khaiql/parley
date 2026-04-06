@@ -85,7 +85,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		}
 
 		switch raw.Method {
-		case "room.join":
+		case protocol.MethodJoin:
 			var params protocol.JoinParams
 			if err := json.Unmarshal(raw.Params, &params); err != nil {
 				continue
@@ -110,7 +110,7 @@ func (s *Server) handleConn(conn net.Conn) {
 				resp := protocol.Response{
 					JSONRPC: "2.0",
 					ID:      0,
-					Error:   &protocol.RPCError{Code: -1, Message: "name already taken"},
+					Error:   &protocol.RPCError{Code: -1, Message: joinErr.Error()},
 				}
 				if data, err := protocol.EncodeLine(resp); err == nil {
 					_, _ = conn.Write(data)
@@ -119,7 +119,7 @@ func (s *Server) handleConn(conn net.Conn) {
 			}
 
 			// Send room.state back to the joining client.
-			notif := protocol.NewNotification("room.state", state)
+			notif := protocol.NewNotification(protocol.MethodState, state)
 			if data, err := protocol.EncodeLine(notif); err == nil {
 				_, _ = conn.Write(data)
 			}
@@ -156,7 +156,7 @@ func (s *Server) handleConn(conn net.Conn) {
 				}
 			}(conn, cc)
 
-		case "room.send":
+		case protocol.MethodSend:
 			if cc == nil {
 				continue
 			}
@@ -170,7 +170,7 @@ func (s *Server) handleConn(conn net.Conn) {
 			}
 			s.room.Broadcast(cc.Name, cc.Source, cc.Role, params.Content[0], params.Mentions)
 
-		case "room.status":
+		case protocol.MethodStatus:
 			if cc == nil {
 				continue
 			}

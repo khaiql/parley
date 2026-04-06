@@ -64,8 +64,21 @@ func (m *Modal) applySize(termWidth, termHeight int) {
 	m.vp.SetContent(m.content.Body)
 }
 
+// HandleKey processes a key event in the modal overlay.
+// Returns (cmd, dismiss). If dismiss is true, the caller should set modal to nil.
+// The modal consumes ALL keys — nothing passes through.
+func (m *Modal) HandleKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	switch {
+	case msg.Type == tea.KeyEsc, msg.String() == "q":
+		return nil, true
+	default:
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg)
+		return cmd, false
+	}
+}
+
 // Update forwards scroll key events to the inner viewport.
-// Dismiss keys (Esc, q) are handled by App, not here.
 func (m *Modal) Update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)

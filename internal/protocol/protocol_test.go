@@ -148,7 +148,7 @@ func TestStatusParamsEncodeDecodeRoundTrip(t *testing.T) {
 		Status: "thinking…",
 	}
 
-	n := protocol.NewNotification("room.status", params)
+	n := protocol.NewNotification(protocol.MethodStatus, params)
 	data, err := protocol.EncodeLine(n)
 	if err != nil {
 		t.Fatalf("EncodeLine error: %v", err)
@@ -158,7 +158,7 @@ func TestStatusParamsEncodeDecodeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeLine error: %v", err)
 	}
-	if msg.Method != "room.status" {
+	if msg.Method != protocol.MethodStatus {
 		t.Errorf("method mismatch: got %q", msg.Method)
 	}
 
@@ -176,7 +176,7 @@ func TestStatusParamsEncodeDecodeRoundTrip(t *testing.T) {
 
 func TestStatusParamsEmptyStatus(t *testing.T) {
 	params := protocol.StatusParams{Name: "bot1", Status: ""}
-	n := protocol.NewNotification("room.status", params)
+	n := protocol.NewNotification(protocol.MethodStatus, params)
 	data, err := protocol.EncodeLine(n)
 	if err != nil {
 		t.Fatalf("EncodeLine error: %v", err)

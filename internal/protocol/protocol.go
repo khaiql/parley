@@ -8,6 +8,18 @@ import (
 	"time"
 )
 
+// ---- Protocol method names ---------------------------------------------------
+
+const (
+	MethodJoin    = "room.join"    // client → server: join a room
+	MethodSend    = "room.send"    // client → server: send a chat message
+	MethodStatus  = "room.status"  // bidirectional: participant activity status
+	MethodState   = "room.state"   // server → client: full room state on join
+	MethodMessage = "room.message" // server → client: broadcast chat message
+	MethodJoined  = "room.joined"  // server → client: participant joined
+	MethodLeft    = "room.left"    // server → client: participant left
+)
+
 // ---- JSON-RPC 2.0 base types ------------------------------------------------
 
 // Notification is a JSON-RPC 2.0 notification (no id, no reply expected).

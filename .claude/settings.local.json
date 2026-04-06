@@ -5,8 +5,9 @@
       "WebFetch(domain:github.com)",
       "Bash(grep -n '^func \\(s Style\\)' *.go)",
       "Bash(claude -p --input-format stream-json --output-format stream-json)",
-      "Bash(go build:*)",
       "Bash(go test:*)",
+      "Bash(go build:*)",
+      "Bash(git pull:*)"
       "Bash(golangci-lint run:*)",
       "Bash(gh issue:*)"
     ]

@@ -212,7 +212,7 @@ func (r *Room) Broadcast(from, source, role string, content protocol.Content, _ 
 	}
 	r.mu.Unlock()
 
-	notif := protocol.NewNotification("room.message", msg)
+	notif := protocol.NewNotification(protocol.MethodMessage, msg)
 	data, _ := protocol.EncodeLine(notif)
 
 	for _, ch := range targets {
@@ -234,7 +234,7 @@ func (r *Room) BroadcastSystem(text string) {
 // BroadcastJoined sends a room.joined notification to all participants except
 // the newly joined one.
 func (r *Room) BroadcastJoined(jp protocol.JoinedParams) {
-	notif := protocol.NewNotification("room.joined", jp)
+	notif := protocol.NewNotification(protocol.MethodJoined, jp)
 	data, _ := protocol.EncodeLine(notif)
 
 	r.mu.RLock()
@@ -257,7 +257,7 @@ func (r *Room) BroadcastJoined(jp protocol.JoinedParams) {
 // BroadcastStatus sends a room.status notification to all participants except
 // the sender (identified by sp.Name).
 func (r *Room) BroadcastStatus(sp protocol.StatusParams) {
-	notif := protocol.NewNotification("room.status", sp)
+	notif := protocol.NewNotification(protocol.MethodStatus, sp)
 	data, _ := protocol.EncodeLine(notif)
 
 	r.mu.RLock()
@@ -279,7 +279,7 @@ func (r *Room) BroadcastStatus(sp protocol.StatusParams) {
 
 // BroadcastLeft sends a room.left notification to all remaining participants.
 func (r *Room) BroadcastLeft(lp protocol.LeftParams) {
-	notif := protocol.NewNotification("room.left", lp)
+	notif := protocol.NewNotification(protocol.MethodLeft, lp)
 	data, _ := protocol.EncodeLine(notif)
 
 	r.mu.RLock()

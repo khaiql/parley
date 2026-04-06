@@ -61,7 +61,7 @@ func TestHostResumeLoadsHistory(t *testing.T) {
 	sc := bufio.NewScanner(conn)
 	sc.Buffer(make([]byte, 1024*1024), 1024*1024)
 
-	join := protocol.NewNotification("room.join", protocol.JoinParams{
+	join := protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "bob",
 		Role: "user",
 	})
@@ -80,7 +80,7 @@ func TestHostResumeLoadsHistory(t *testing.T) {
 	if err := json.Unmarshal(sc.Bytes(), &raw); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if raw.Method != "room.state" {
+	if raw.Method != protocol.MethodState {
 		t.Fatalf("expected room.state, got %q", raw.Method)
 	}
 

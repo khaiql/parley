@@ -18,6 +18,7 @@ import (
 	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/driver"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 	"github.com/khaiql/parley/internal/server"
 	"github.com/khaiql/parley/internal/tui"
 	"github.com/khaiql/parley/internal/web"
@@ -211,7 +212,24 @@ func runHost(_ *cobra.Command, _ []string) error {
 	}
 	app.SetCommandRegistry(reg, cmdCtx)
 
+	// Create room.State for event-sourced state management.
+	roomState := room.New(reg, cmdCtx)
+	roomState.SetSendFn(sendFn)
+	if hostYolo {
+		roomState.SetAutoApprove(true)
+	}
+	app.SetRoomState(roomState)
+
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	// Subscribe to room events before starting the incoming loop so no
+	// events are lost.
+	events := roomState.Subscribe()
+	go func() {
+		for e := range events {
+			p.Send(e)
+		}
+	}()
 
 	// Bridge network → TUI. Join is done here (not before p.Run) so that
 	// the room.state response arrives after the TUI event loop is running.
@@ -224,7 +242,7 @@ func runHost(_ *cobra.Command, _ []string) error {
 			Repo:      repo,
 		})
 		for msg := range c.Incoming() {
-			p.Send(tui.ServerMsg{Raw: msg})
+			roomState.HandleServerMessage(msg)
 		}
 	}()
 
@@ -317,7 +335,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 			if !ok {
 				return fmt.Errorf("join: connection closed before receiving room state")
 			}
-			if msg.Method == "room.state" {
+			if msg.Method == protocol.MethodState {
 				if err := json.Unmarshal(msg.Params, &roomState); err == nil {
 					found = true
 				}
@@ -330,20 +348,10 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	topic := roomState.Topic
 	roomID := roomState.RoomID
 
-	// Build participant info list.
-	participants := make([]driver.ParticipantInfo, 0, len(roomState.Participants))
-	for _, p := range roomState.Participants {
-		participants = append(participants, driver.ParticipantInfo{
-			Name:      p.Name,
-			Role:      p.Role,
-			Directory: p.Directory,
-		})
-	}
-
-	command := "claude"
+	cmdName := "claude"
 	var extraArgs []string
 	if len(agentArgs) > 0 {
-		command = agentArgs[0]
+		cmdName = agentArgs[0]
 		extraArgs = agentArgs[1:]
 	}
 
@@ -370,14 +378,14 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	config := driver.AgentConfig{
-		Command:         command,
+		Command:         cmdName,
 		Args:            extraArgs,
 		Name:            joinName,
 		Role:            joinRole,
 		Directory:       dir,
 		Repo:            repo,
 		Topic:           topic,
-		Participants:    participants,
+		Participants:    roomState.Participants,
 		InitialMessage:  intro,
 		ResumeSessionID: resumeSessionID,
 		AutoApprove:     roomState.AutoApprove,
@@ -385,7 +393,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	config.SystemPrompt = driver.BuildSystemPrompt(config)
 
 	ctx := context.Background()
-	d, err := driver.NewDriver(command)
+	d, err := driver.NewDriver(cmdName)
 	if err != nil {
 		return fmt.Errorf("join: %w", err)
 	}
@@ -405,68 +413,33 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	app := tui.NewApp(topic, joinPort, tui.InputModeAgent, joinName, nil, roomState.Participants...)
 	app.SetAgent(joinName, joinRole)
 	app.SetYolo(roomState.AutoApprove)
+
+	// Create room.State for event-sourced state management (join has no commands).
+	rs := room.New(nil, command.Context{})
+	app.SetRoomState(rs)
+
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
-	// Bridge network → TUI + agent driver.
+	// Subscribe to room events BEFORE replaying state so no events are lost.
+	rsEvents := rs.Subscribe()
 	go func() {
-		var pendingMsg string
-		var pendingTimer *time.Timer
-
-		flushPending := func() {
-			if pendingMsg != "" {
-				_ = d.Send(pendingMsg)
-				pendingMsg = ""
-			}
-			pendingTimer = nil
+		for e := range rsEvents {
+			p.Send(e)
 		}
-
-		for msg := range c.Incoming() {
-			p.Send(tui.ServerMsg{Raw: msg})
-
-			if msg.Method == "room.message" {
-				var params protocol.MessageParams
-				if err := json.Unmarshal(msg.Params, &params); err == nil {
-					if params.From != joinName {
-						// Format message and decide whether to delay.
-						formatted := fmt.Sprintf("%s: %s", params.From, contentText(params.Content))
-						if isMentioned(params.Mentions, joinName) {
-							// @-mentioned: flush any pending messages and send immediately.
-							if pendingTimer != nil {
-								pendingTimer.Stop()
-								pendingTimer = nil
-							}
-							if pendingMsg != "" {
-								_ = d.Send(pendingMsg)
-								pendingMsg = ""
-							}
-							_ = d.Send(formatted)
-						} else {
-							// Not mentioned: batch with a 2-second debounce timer.
-							if pendingMsg != "" {
-								pendingMsg += "\n" + formatted
-							} else {
-								pendingMsg = formatted
-							}
-							if pendingTimer == nil {
-								pendingTimer = time.AfterFunc(2*time.Second, flushPending)
-							} else {
-								pendingTimer.Reset(2 * time.Second)
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Flush any remaining pending message when the channel closes.
-		if pendingTimer != nil {
-			pendingTimer.Stop()
-		}
-		flushPending()
-
-		// Server disconnected — quit the TUI and stop the agent.
-		p.Send(tui.ServerDisconnectedMsg{})
 	}()
+
+	// Replay the room.state we already consumed during the join handshake.
+	stateJSON, err := json.Marshal(roomState)
+	if err != nil {
+		return fmt.Errorf("join: marshal room state for replay: %w", err)
+	}
+	rs.HandleServerMessage(&protocol.RawMessage{
+		Method: protocol.MethodState,
+		Params: stateJSON,
+	})
+
+	// Bridge network → TUI + agent driver.
+	go bridgeNetworkToAgent(c, rs, d, p, joinName)
 
 	// Bridge agent → network.
 	go func() {
@@ -576,11 +549,67 @@ func (a *RoomAdapter) GetTopic() string     { return a.room.Topic }
 func (a *RoomAdapter) GetPort() int         { return a.port }
 func (a *RoomAdapter) GetMessageCount() int { return a.room.MessageCount() }
 
-func (a *RoomAdapter) GetParticipants() []command.ParticipantInfo {
+// bridgeNetworkToAgent reads incoming server messages, feeds them to room.State,
+// and routes chat messages to the agent driver with debouncing.
+func bridgeNetworkToAgent(c *client.Client, rs *room.State, d driver.AgentDriver, p *tea.Program, agentName string) {
+	var pendingMsg string
+	var pendingTimer *time.Timer
+
+	flushPending := func() {
+		if pendingMsg != "" {
+			_ = d.Send(pendingMsg)
+			pendingMsg = ""
+		}
+		pendingTimer = nil
+	}
+
+	for msg := range c.Incoming() {
+		rs.HandleServerMessage(msg)
+
+		if msg.Method == protocol.MethodMessage {
+			var params protocol.MessageParams
+			if err := json.Unmarshal(msg.Params, &params); err == nil {
+				if params.From != agentName {
+					formatted := fmt.Sprintf("%s: %s", params.From, contentText(params.Content))
+					if isMentioned(params.Mentions, agentName) {
+						if pendingTimer != nil {
+							pendingTimer.Stop()
+							pendingTimer = nil
+						}
+						if pendingMsg != "" {
+							_ = d.Send(pendingMsg)
+							pendingMsg = ""
+						}
+						_ = d.Send(formatted)
+					} else {
+						if pendingMsg != "" {
+							pendingMsg += "\n" + formatted
+						} else {
+							pendingMsg = formatted
+						}
+						if pendingTimer == nil {
+							pendingTimer = time.AfterFunc(2*time.Second, flushPending)
+						} else {
+							pendingTimer.Reset(2 * time.Second)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if pendingTimer != nil {
+		pendingTimer.Stop()
+	}
+	flushPending()
+	p.Send(tui.ServerDisconnectedMsg{})
+}
+
+func (a *RoomAdapter) GetParticipants() []protocol.Participant {
 	conns := a.room.GetParticipants()
-	out := make([]command.ParticipantInfo, len(conns))
+	out := make([]protocol.Participant, len(conns))
 	for i, cc := range conns {
-		out[i] = command.ParticipantInfo{
+		out[i] = protocol.Participant{
 			Name:      cc.Name,
 			Role:      cc.Role,
 			Directory: cc.Directory,

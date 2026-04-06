@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,7 +81,7 @@ func TestJoinAndReceiveState(t *testing.T) {
 	conn := dialServer(t, s.Addr())
 	sc := newScanner(conn)
 
-	join := protocol.NewNotification("room.join", protocol.JoinParams{
+	join := protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "alice",
 		Role: "user",
 	})
@@ -92,7 +93,7 @@ func TestJoinAndReceiveState(t *testing.T) {
 	if err := json.Unmarshal(line, &raw); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if raw.Method != "room.state" {
+	if raw.Method != protocol.MethodState {
 		t.Fatalf("expected method room.state, got %q", raw.Method)
 	}
 
@@ -114,7 +115,7 @@ func TestBroadcastMessage(t *testing.T) {
 	connAlice := dialServer(t, s.Addr())
 	scAlice := newScanner(connAlice)
 
-	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "alice",
 		Role: "user",
 	}))
@@ -124,14 +125,14 @@ func TestBroadcastMessage(t *testing.T) {
 	connBob := dialServer(t, s.Addr())
 	scBob := newScanner(connBob)
 
-	sendLine(t, connBob, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connBob, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "bob",
 		Role: "user",
 	}))
 	readLine(t, scBob) // consume room.state
 
 	// Bob sends a message
-	sendLine(t, connBob, protocol.NewNotification("room.send", protocol.SendParams{
+	sendLine(t, connBob, protocol.NewNotification(protocol.MethodSend, protocol.SendParams{
 		Content: []protocol.Content{{Type: "text", Text: "hello alice"}},
 	}))
 
@@ -150,7 +151,7 @@ func TestBroadcastMessage(t *testing.T) {
 		if err := json.Unmarshal(scAlice.Bytes(), &raw); err != nil {
 			continue
 		}
-		if raw.Method != "room.message" {
+		if raw.Method != protocol.MethodMessage {
 			continue
 		}
 		var msg protocol.MessageParams
@@ -182,7 +183,7 @@ func TestDuplicateNameRejected(t *testing.T) {
 	connAlice := dialServer(t, s.Addr())
 	scAlice := newScanner(connAlice)
 
-	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "Alice",
 		Role: "user",
 	}))
@@ -192,7 +193,7 @@ func TestDuplicateNameRejected(t *testing.T) {
 	connAlice2 := dialServer(t, s.Addr())
 	scAlice2 := newScanner(connAlice2)
 
-	sendLine(t, connAlice2, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connAlice2, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "Alice",
 		Role: "user",
 	}))
@@ -210,7 +211,7 @@ func TestDuplicateNameRejected(t *testing.T) {
 	if raw.Error == nil {
 		t.Fatalf("expected error response for duplicate name, got method=%q", raw.Method)
 	}
-	if raw.Error.Message != "name already taken" {
+	if !strings.Contains(raw.Error.Message, "name already taken") {
 		t.Errorf("unexpected error message: %q", raw.Error.Message)
 	}
 
@@ -241,7 +242,7 @@ func TestServerBroadcastsRoomStatus(t *testing.T) {
 	connAlice := dialServer(t, s.Addr())
 	scAlice := newScanner(connAlice)
 
-	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "alice",
 		Role: "user",
 	}))
@@ -251,7 +252,7 @@ func TestServerBroadcastsRoomStatus(t *testing.T) {
 	connBot := dialServer(t, s.Addr())
 	scBot := newScanner(connBot)
 
-	sendLine(t, connBot, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connBot, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name:      "bot1",
 		Role:      "agent",
 		AgentType: "claude",
@@ -262,7 +263,7 @@ func TestServerBroadcastsRoomStatus(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Bot sends room.status
-	sendLine(t, connBot, protocol.NewNotification("room.status", protocol.StatusParams{
+	sendLine(t, connBot, protocol.NewNotification(protocol.MethodStatus, protocol.StatusParams{
 		Name:   "bot1",
 		Status: "thinking…",
 	}))
@@ -282,7 +283,7 @@ func TestServerBroadcastsRoomStatus(t *testing.T) {
 		if err := json.Unmarshal(scAlice.Bytes(), &raw); err != nil {
 			continue
 		}
-		if raw.Method != "room.status" {
+		if raw.Method != protocol.MethodStatus {
 			continue
 		}
 		var sp protocol.StatusParams
@@ -314,14 +315,14 @@ func TestJoinReceivesMessageHistory(t *testing.T) {
 	connAlice := dialServer(t, s.Addr())
 	scAlice := newScanner(connAlice)
 
-	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "alice",
 		Role: "user",
 	}))
 	readLine(t, scAlice) // consume room.state
 
 	for i := 0; i < 5; i++ {
-		sendLine(t, connAlice, protocol.NewNotification("room.send", protocol.SendParams{
+		sendLine(t, connAlice, protocol.NewNotification(protocol.MethodSend, protocol.SendParams{
 			Content: []protocol.Content{{Type: "text", Text: fmt.Sprintf("message %d", i+1)}},
 		}))
 	}
@@ -333,7 +334,7 @@ func TestJoinReceivesMessageHistory(t *testing.T) {
 	connBob := dialServer(t, s.Addr())
 	scBob := newScanner(connBob)
 
-	sendLine(t, connBob, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connBob, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "bob",
 		Role: "user",
 	}))
@@ -347,7 +348,7 @@ func TestJoinReceivesMessageHistory(t *testing.T) {
 	if err := json.Unmarshal(line, &raw); err != nil {
 		t.Fatalf("unmarshal room.state: %v", err)
 	}
-	if raw.Method != "room.state" {
+	if raw.Method != protocol.MethodState {
 		t.Fatalf("expected room.state, got %q", raw.Method)
 	}
 
@@ -378,14 +379,14 @@ func TestJoinReceivesAtMost50Messages(t *testing.T) {
 	connAlice := dialServer(t, s.Addr())
 	scAlice := newScanner(connAlice)
 
-	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "alice",
 		Role: "user",
 	}))
 	readLine(t, scAlice) // consume room.state
 
 	for i := 0; i < 60; i++ {
-		sendLine(t, connAlice, protocol.NewNotification("room.send", protocol.SendParams{
+		sendLine(t, connAlice, protocol.NewNotification(protocol.MethodSend, protocol.SendParams{
 			Content: []protocol.Content{{Type: "text", Text: fmt.Sprintf("message %d", i+1)}},
 		}))
 	}
@@ -397,7 +398,7 @@ func TestJoinReceivesAtMost50Messages(t *testing.T) {
 	connBob := dialServer(t, s.Addr())
 	scBob := newScanner(connBob)
 
-	sendLine(t, connBob, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connBob, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "bob",
 		Role: "user",
 	}))
@@ -410,7 +411,7 @@ func TestJoinReceivesAtMost50Messages(t *testing.T) {
 	if err := json.Unmarshal(line, &raw); err != nil {
 		t.Fatalf("unmarshal room.state: %v", err)
 	}
-	if raw.Method != "room.state" {
+	if raw.Method != protocol.MethodState {
 		t.Fatalf("expected room.state, got %q", raw.Method)
 	}
 
@@ -452,7 +453,7 @@ func TestNewWithRoom(t *testing.T) {
 	// Connect bob and verify room.state includes history.
 	conn := dialServer(t, s.Addr())
 	sc := newScanner(conn)
-	sendLine(t, conn, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, conn, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "bob",
 		Role: "user",
 	}))
@@ -465,7 +466,7 @@ func TestNewWithRoom(t *testing.T) {
 	if err := json.Unmarshal(line, &raw); err != nil {
 		t.Fatalf("unmarshal room.state: %v", err)
 	}
-	if raw.Method != "room.state" {
+	if raw.Method != protocol.MethodState {
 		t.Fatalf("expected room.state, got %q", raw.Method)
 	}
 
@@ -497,7 +498,7 @@ func TestRoomLeftBroadcast(t *testing.T) {
 	connAlice := dialServer(t, s.Addr())
 	scAlice := newScanner(connAlice)
 
-	sendLine(t, connAlice, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "alice",
 		Role: "user",
 	}))
@@ -506,7 +507,7 @@ func TestRoomLeftBroadcast(t *testing.T) {
 	// Connect bob
 	connBob := dialServer(t, s.Addr())
 
-	sendLine(t, connBob, protocol.NewNotification("room.join", protocol.JoinParams{
+	sendLine(t, connBob, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: "bob",
 		Role: "user",
 	}))
@@ -531,7 +532,7 @@ func TestRoomLeftBroadcast(t *testing.T) {
 		if err := json.Unmarshal(scAlice.Bytes(), &raw); err != nil {
 			continue
 		}
-		if raw.Method != "room.left" {
+		if raw.Method != protocol.MethodLeft {
 			continue
 		}
 		var lp protocol.LeftParams

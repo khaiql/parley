@@ -40,7 +40,7 @@ func (c *Client) Incoming() <-chan *protocol.RawMessage {
 
 // Join sends a room.join notification to the server.
 func (c *Client) Join(params protocol.JoinParams) error {
-	notif := protocol.NewNotification("room.join", params)
+	notif := protocol.NewNotification(protocol.MethodJoin, params)
 	data, err := protocol.EncodeLine(notif)
 	if err != nil {
 		return err
@@ -55,7 +55,7 @@ func (c *Client) Send(content protocol.Content, mentions []string) error {
 		Content:  []protocol.Content{content},
 		Mentions: mentions,
 	}
-	notif := protocol.NewNotification("room.send", params)
+	notif := protocol.NewNotification(protocol.MethodSend, params)
 	data, err := protocol.EncodeLine(notif)
 	if err != nil {
 		return err
@@ -71,7 +71,7 @@ func (c *Client) SendStatus(name, status string) error {
 		Name:   name,
 		Status: status,
 	}
-	notif := protocol.NewNotification("room.status", params)
+	notif := protocol.NewNotification(protocol.MethodStatus, params)
 	data, err := protocol.EncodeLine(notif)
 	if err != nil {
 		return err

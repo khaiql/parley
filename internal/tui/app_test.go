@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -9,21 +8,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 )
 
-// ---- handleServerMsg ---------------------------------------------------------
+// ---- Test helpers -----------------------------------------------------------
 
 func makeApp() App {
 	return NewApp("test-topic", 9000, InputModeHuman, "tester", nil)
-}
-
-func rawParams(t *testing.T, v interface{}) json.RawMessage {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	return b
 }
 
 // fakeRoom is a minimal RoomQuerier for modal integration testing.
@@ -32,8 +23,8 @@ type fakeRoom struct{}
 func (f *fakeRoom) GetID() string    { return "room-1" }
 func (f *fakeRoom) GetTopic() string { return "test-topic" }
 func (f *fakeRoom) GetPort() int     { return 9000 }
-func (f *fakeRoom) GetParticipants() []command.ParticipantInfo {
-	return []command.ParticipantInfo{
+func (f *fakeRoom) GetParticipants() []protocol.Participant {
+	return []protocol.Participant{
 		{Name: "alice", Role: "agent", Directory: "/tmp/alice", AgentType: "claude", Online: true},
 	}
 }
@@ -50,186 +41,7 @@ func makeAppWithRegistry() App {
 	return model.(App)
 }
 
-func TestHandleServerMsg_RoomMessage_AddsToChat(t *testing.T) {
-	a := makeApp()
-
-	msg := protocol.MessageParams{
-		ID:   "msg-1",
-		From: "alice",
-		Role: "human",
-		Content: []protocol.Content{
-			{Type: "text", Text: "hello"},
-		},
-	}
-	raw := &protocol.RawMessage{
-		Method: "room.message",
-		Params: rawParams(t, msg),
-	}
-
-	a.handleServerMsg(raw)
-
-	if len(a.chat.messages) != 1 {
-		t.Fatalf("expected 1 message in chat, got %d", len(a.chat.messages))
-	}
-	if a.chat.messages[0].From != "alice" {
-		t.Errorf("unexpected From: %s", a.chat.messages[0].From)
-	}
-}
-
-func TestHandleServerMsg_RoomState_SetsParticipants(t *testing.T) {
-	a := makeApp()
-
-	state := protocol.RoomStateParams{
-		Topic: "test-topic",
-		Participants: []protocol.Participant{
-			{Name: "alice", Role: "human"},
-			{Name: "bot", Role: "agent"},
-		},
-	}
-	raw := &protocol.RawMessage{
-		Method: "room.state",
-		Params: rawParams(t, state),
-	}
-
-	a.handleServerMsg(raw)
-
-	if len(a.sidebar.participants) != 2 {
-		t.Fatalf("expected 2 participants, got %d", len(a.sidebar.participants))
-	}
-	if a.sidebar.participants[0].Name != "alice" {
-		t.Errorf("unexpected first participant: %s", a.sidebar.participants[0].Name)
-	}
-}
-
-func TestHandleServerMsg_RoomJoined_AddsParticipant(t *testing.T) {
-	a := makeApp()
-
-	joined := protocol.JoinedParams{
-		Name: "carol",
-		Role: "agent",
-	}
-	raw := &protocol.RawMessage{
-		Method: "room.joined",
-		Params: rawParams(t, joined),
-	}
-
-	a.handleServerMsg(raw)
-
-	if len(a.sidebar.participants) != 1 {
-		t.Fatalf("expected 1 participant, got %d", len(a.sidebar.participants))
-	}
-	if a.sidebar.participants[0].Name != "carol" {
-		t.Errorf("unexpected participant name: %s", a.sidebar.participants[0].Name)
-	}
-	if !a.sidebar.participants[0].Online {
-		t.Errorf("expected joined participant to be online")
-	}
-}
-
-func TestHandleServerMsg_RoomLeft_SetsParticipantOffline(t *testing.T) {
-	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
-		{Name: "alice", Role: "human", Online: true},
-		{Name: "bot", Role: "agent", Online: true},
-	})
-
-	left := protocol.LeftParams{Name: "bot"}
-	raw := &protocol.RawMessage{
-		Method: "room.left",
-		Params: rawParams(t, left),
-	}
-
-	a.handleServerMsg(raw)
-
-	if len(a.sidebar.participants) != 2 {
-		t.Fatalf("expected 2 participants after leave, got %d", len(a.sidebar.participants))
-	}
-	if a.sidebar.participants[1].Name != "bot" || a.sidebar.participants[1].Online != false {
-		t.Errorf("expected bot to be marked offline: %+v", a.sidebar.participants[1])
-	}
-}
-
-func TestHandleServerMsg_RoomStatus_UpdatesSidebarStatus(t *testing.T) {
-	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
-		{Name: "bot1", Role: "agent"},
-	})
-
-	sp := protocol.StatusParams{Name: "bot1", Status: "thinking…"}
-	raw := &protocol.RawMessage{
-		Method: "room.status",
-		Params: rawParams(t, sp),
-	}
-
-	a.handleServerMsg(raw)
-
-	if a.sidebar.statuses["bot1"] != "thinking…" {
-		t.Errorf("expected sidebar status 'thinking…' for bot1, got %q", a.sidebar.statuses["bot1"])
-	}
-}
-
-func TestHandleServerMsg_RoomStatusClear_ClearsSidebarStatus(t *testing.T) {
-	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
-		{Name: "bot1", Role: "agent"},
-	})
-	a.sidebar.SetParticipantStatus("bot1", "thinking…")
-
-	sp := protocol.StatusParams{Name: "bot1", Status: ""}
-	raw := &protocol.RawMessage{
-		Method: "room.status",
-		Params: rawParams(t, sp),
-	}
-
-	a.handleServerMsg(raw)
-
-	if a.sidebar.statuses["bot1"] != "" {
-		t.Errorf("expected empty status after clear, got %q", a.sidebar.statuses["bot1"])
-	}
-}
-
-func TestHandleServerMsg_RoomState_ReplayesMessageHistory(t *testing.T) {
-	a := makeApp()
-
-	state := protocol.RoomStateParams{
-		Topic: "test-topic",
-		Participants: []protocol.Participant{
-			{Name: "alice", Role: "human"},
-		},
-		Messages: []protocol.MessageParams{
-			{ID: "msg-1", From: "alice", Role: "human", Content: []protocol.Content{{Type: "text", Text: "hello"}}},
-			{ID: "msg-2", From: "alice", Role: "human", Content: []protocol.Content{{Type: "text", Text: "world"}}},
-		},
-	}
-	raw := &protocol.RawMessage{
-		Method: "room.state",
-		Params: rawParams(t, state),
-	}
-
-	a.handleServerMsg(raw)
-
-	// History is now loaded asynchronously: handleServerMsg sets pendingHistory,
-	// then Update dispatches HistoryLoadedMsg.
-	if len(a.pendingHistory) != 2 {
-		t.Fatalf("expected 2 pending messages after room.state, got %d", len(a.pendingHistory))
-	}
-
-	// Simulate the async load completing.
-	model, _ := a.Update(ServerMsg{Raw: raw})
-	a = model.(App)
-	model, _ = a.Update(HistoryLoadedMsg{Messages: state.Messages})
-	a = model.(App)
-
-	if len(a.chat.messages) != 2 {
-		t.Fatalf("expected 2 messages in chat after history load, got %d", len(a.chat.messages))
-	}
-	if a.chat.messages[0].From != "alice" {
-		t.Errorf("unexpected first message From: %s", a.chat.messages[0].From)
-	}
-	if a.chat.messages[1].Content[0].Text != "world" {
-		t.Errorf("unexpected second message text: %s", a.chat.messages[1].Content[0].Text)
-	}
-}
+// ---- Input integration -------------------------------------------------------
 
 func TestTypingDoesNotScrollChat(t *testing.T) {
 	a := makeApp()
@@ -271,22 +83,6 @@ func TestTypingDoesNotScrollChat(t *testing.T) {
 
 	if scrollAfter != scrollBefore {
 		t.Errorf("typing changed viewport scroll position: before=%d, after=%d", scrollBefore, scrollAfter)
-	}
-}
-
-func TestHandleServerMsg_NilRaw_NoOp(t *testing.T) {
-	a := makeApp()
-	// Should not panic.
-	a.handleServerMsg(nil)
-}
-
-func TestHandleServerMsg_UnknownMethod_NoOp(t *testing.T) {
-	a := makeApp()
-	raw := &protocol.RawMessage{Method: "unknown.method"}
-	// Should not panic.
-	a.handleServerMsg(raw)
-	if len(a.sidebar.participants) != 0 {
-		t.Error("expected no participants after unknown method")
 	}
 }
 
@@ -382,46 +178,49 @@ func TestApp_SlashTrigger_ActivatesSuggestions(t *testing.T) {
 	reg.Register(&command.Command{Name: "save", Usage: "/save", Description: "Save state"})
 	a.SetCommandRegistry(reg, command.Context{})
 
-	a.input.ta.SetValue("/")
-	a.checkSuggestionTrigger()
+	a.completionStart = 0
+	_ = a.inputFSM.Fire(TriggerSlash)
+	a.populateSlashSuggestions()
 
 	if !a.suggestions.Visible() {
-		t.Error("expected suggestions visible after typing /")
+		t.Error("expected suggestions visible after slash trigger")
 	}
-	if a.completionTrigger != '/' {
-		t.Errorf("expected trigger '/', got %c", a.completionTrigger)
+	if a.inputFSM.Current() != StateCompleting {
+		t.Error("expected FSM in StateCompleting")
 	}
 }
 
 func TestApp_AtTrigger_ActivatesSuggestions(t *testing.T) {
 	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
+	a.localParticipants = []protocol.Participant{
 		{Name: "claude", Role: "agent", Online: true},
 		{Name: "gemini", Role: "agent", Online: true},
-	})
+	}
 
-	a.input.ta.SetValue("@")
-	a.checkSuggestionTrigger()
+	a.completionStart = 0
+	_ = a.inputFSM.Fire(TriggerMention)
+	a.populateMentionSuggestions()
 
 	if !a.suggestions.Visible() {
-		t.Error("expected suggestions visible after typing @")
+		t.Error("expected suggestions visible after mention trigger")
 	}
-	if a.completionTrigger != '@' {
-		t.Errorf("expected trigger '@', got %c", a.completionTrigger)
+	if a.inputFSM.Current() != StateCompleting {
+		t.Error("expected FSM in StateCompleting")
 	}
 }
 
 func TestApp_AtTrigger_MidMessage(t *testing.T) {
 	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
+	a.localParticipants = []protocol.Participant{
 		{Name: "claude", Role: "agent", Online: true},
-	})
+	}
 
-	a.input.ta.SetValue("hello @")
-	a.checkSuggestionTrigger()
+	a.completionStart = 6
+	_ = a.inputFSM.Fire(TriggerMention)
+	a.populateMentionSuggestions()
 
 	if !a.suggestions.Visible() {
-		t.Error("expected suggestions visible after 'hello @'")
+		t.Error("expected suggestions visible after mention trigger")
 	}
 	if a.completionStart != 6 {
 		t.Errorf("expected completionStart 6, got %d", a.completionStart)
@@ -430,23 +229,33 @@ func TestApp_AtTrigger_MidMessage(t *testing.T) {
 
 func TestApp_AtTrigger_NotAfterAlpha(t *testing.T) {
 	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
+	a.localParticipants = []protocol.Participant{
 		{Name: "claude", Role: "agent", Online: true},
-	})
+	}
+	// Give the app a size so key events are processed.
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
 
+	// Simulate typing "email@" — the '@' follows an alpha character,
+	// so the trigger detection should NOT fire.
 	a.input.ta.SetValue("email@")
-	a.checkSuggestionTrigger()
+	// Run the post-key trigger check by sending a key event.
+	model, _ = a.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'@'}})
+	a = model.(App)
 
+	if a.inputFSM.Current() != StateNormal {
+		t.Error("expected FSM in StateNormal — '@' after alpha should not trigger")
+	}
 	if a.suggestions.Visible() {
 		t.Error("expected suggestions NOT visible after 'email@'")
 	}
 }
 
 func TestApp_SlashTrigger_NilRegistry_NoActivation(t *testing.T) {
-	a := makeApp()
+	a := makeApp() // no registry
 
-	a.input.ta.SetValue("/")
-	a.checkSuggestionTrigger()
+	_ = a.inputFSM.Fire(TriggerSlash)
+	a.populateSlashSuggestions() // registry is nil — does nothing
 
 	if a.suggestions.Visible() {
 		t.Error("expected suggestions NOT visible when registry is nil")
@@ -455,21 +264,25 @@ func TestApp_SlashTrigger_NilRegistry_NoActivation(t *testing.T) {
 
 func TestApp_AcceptSuggestion_InsertsText(t *testing.T) {
 	a := makeApp()
-	a.sidebar.SetParticipants([]protocol.Participant{
+	a.localParticipants = []protocol.Participant{
 		{Name: "claude", Role: "agent", Online: true},
 		{Name: "gemini", Role: "agent", Online: true},
-	})
+	}
 
 	a.input.ta.SetValue("hello @cl")
-	a.completionTrigger = '@'
 	a.completionStart = 6
-	a.suggestions.SetItems([]SuggestionItem{
-		{Label: "@claude", Description: "agent"},
-		{Label: "@gemini", Description: "agent"},
-	})
+	_ = a.inputFSM.Fire(TriggerMention)
+	a.populateMentionSuggestions()
 	a.suggestions.Filter("cl")
 
-	a.acceptSuggestion()
+	// Accept: insert selected text and dismiss
+	sel := a.suggestions.Selected()
+	if sel.Label != "" {
+		end := len([]rune(a.input.Value()))
+		a.input.ReplaceRange(a.completionStart, end, sel.Label+" ")
+	}
+	_ = a.inputFSM.Fire(TriggerAccept)
+	a.suggestions.Hide()
 
 	got := a.input.Value()
 	if got != "hello @claude " {
@@ -477,6 +290,9 @@ func TestApp_AcceptSuggestion_InsertsText(t *testing.T) {
 	}
 	if a.suggestions.Visible() {
 		t.Error("expected suggestions hidden after accept")
+	}
+	if a.inputFSM.Current() != StateNormal {
+		t.Error("expected FSM back in StateNormal after accept")
 	}
 }
 
@@ -487,16 +303,147 @@ func TestApp_FilterSuggestions_NarrowsList(t *testing.T) {
 	reg.Register(&command.Command{Name: "save", Usage: "/save", Description: "Save state"})
 	a.SetCommandRegistry(reg, command.Context{})
 
-	a.input.ta.SetValue("/")
-	a.checkSuggestionTrigger()
+	a.completionStart = 0
+	_ = a.inputFSM.Fire(TriggerSlash)
+	a.populateSlashSuggestions()
 
-	a.input.ta.SetValue("/s")
-	a.updateSuggestionFilter()
+	a.suggestions.Filter("s")
 
 	if len(a.suggestions.filtered) != 1 {
 		t.Fatalf("expected 1 filtered item, got %d", len(a.suggestions.filtered))
 	}
 	if a.suggestions.filtered[0].Label != "/save" {
 		t.Errorf("expected /save, got %s", a.suggestions.filtered[0].Label)
+	}
+}
+
+// ---- Room event handlers (Task 7) ------------------------------------------
+
+func TestApp_RoomMessageReceived_AddsToChat(t *testing.T) {
+	a := makeApp()
+	msg := protocol.MessageParams{
+		From:    "alice",
+		Content: []protocol.Content{{Type: "text", Text: "hello"}},
+	}
+	model, _ := a.Update(room.MessageReceived{Message: msg})
+	a = model.(App)
+
+	// Verify local state
+	if len(a.localMessages) != 1 {
+		t.Fatalf("expected 1 local message, got %d", len(a.localMessages))
+	}
+	if a.localMessages[0].From != "alice" {
+		t.Fatalf("expected from alice, got %s", a.localMessages[0].From)
+	}
+	// Verify dual-write to chat component
+	if len(a.chat.messages) != 1 {
+		t.Fatalf("expected 1 chat message, got %d", len(a.chat.messages))
+	}
+}
+
+func TestApp_RoomHistoryLoaded_BulkReplacesState(t *testing.T) {
+	a := makeApp()
+	model, _ := a.Update(room.HistoryLoaded{
+		Messages: []protocol.MessageParams{
+			{From: "alice", Content: []protocol.Content{{Type: "text", Text: "hi"}}},
+			{From: "bob", Content: []protocol.Content{{Type: "text", Text: "hey"}}},
+		},
+		Participants: []protocol.Participant{
+			{Name: "alice", Online: true},
+			{Name: "bob", Online: true},
+		},
+		Activities: map[string]room.Activity{
+			"bob": room.ActivityGenerating,
+		},
+	})
+	a = model.(App)
+
+	// Verify local state
+	if len(a.localMessages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(a.localMessages))
+	}
+	if len(a.localParticipants) != 2 {
+		t.Fatalf("expected 2 participants, got %d", len(a.localParticipants))
+	}
+	if a.localActivities["bob"] != room.ActivityGenerating {
+		t.Fatal("expected bob to be generating")
+	}
+	// Verify dual-write to components
+	if len(a.chat.messages) != 2 {
+		t.Fatalf("expected 2 chat messages, got %d", len(a.chat.messages))
+	}
+	if len(a.sidebar.participants) != 2 {
+		t.Fatalf("expected 2 sidebar participants, got %d", len(a.sidebar.participants))
+	}
+}
+
+func TestApp_RoomParticipantsChanged_UpdatesLocal(t *testing.T) {
+	a := makeApp()
+	model, _ := a.Update(room.ParticipantsChanged{
+		Participants: []protocol.Participant{
+			{Name: "alice", Online: true},
+		},
+	})
+	a = model.(App)
+
+	if len(a.localParticipants) != 1 {
+		t.Fatalf("expected 1 participant, got %d", len(a.localParticipants))
+	}
+	// Verify dual-write to sidebar
+	if len(a.sidebar.participants) != 1 {
+		t.Fatalf("expected 1 sidebar participant, got %d", len(a.sidebar.participants))
+	}
+}
+
+func TestApp_RoomParticipantActivityChanged_UpdatesLocal(t *testing.T) {
+	a := makeApp()
+	model, _ := a.Update(room.ParticipantActivityChanged{
+		Name:     "claude",
+		Activity: room.ActivityGenerating,
+	})
+	a = model.(App)
+
+	if a.localActivities["claude"] != room.ActivityGenerating {
+		t.Fatal("expected claude to be generating")
+	}
+	// Verify dual-write to sidebar
+	if a.sidebar.statuses["claude"] != "generating" {
+		t.Fatalf("expected sidebar status 'generating', got %q", a.sidebar.statuses["claude"])
+	}
+}
+
+func TestApp_RoomErrorOccurred_AddsSystemMessage(t *testing.T) {
+	a := makeApp()
+	model, _ := a.Update(room.ErrorOccurred{
+		Error: fmt.Errorf("test error"),
+	})
+	a = model.(App)
+
+	if len(a.chat.messages) == 0 {
+		t.Fatal("expected error message in chat")
+	}
+}
+
+func TestApp_SpinnerTickChainsWhenGenerating(t *testing.T) {
+	a := makeApp()
+	a.localActivities["agent-1"] = room.ActivityGenerating
+
+	model, cmd := a.Update(SpinnerTickMsg{})
+	a = model.(App)
+
+	if cmd == nil {
+		t.Fatal("expected spinnerTick command when someone is generating")
+	}
+}
+
+func TestApp_SpinnerTickStopsWhenNobodyGenerating(t *testing.T) {
+	a := makeApp()
+	a.localActivities["agent-1"] = room.ActivityIdle
+
+	model, cmd := a.Update(SpinnerTickMsg{})
+	a = model.(App)
+
+	if cmd != nil {
+		t.Fatal("expected nil command when nobody is generating")
 	}
 }
