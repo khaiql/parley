@@ -27,6 +27,18 @@ func drain(ch <-chan *protocol.RawMessage, n int) []*protocol.RawMessage {
 	return msgs
 }
 
+// drainPending reads all currently buffered messages with a short timeout.
+func drainPending(ch <-chan *protocol.RawMessage) {
+	time.Sleep(100 * time.Millisecond)
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
+}
+
 func newClientTestServer(t *testing.T) *server.TCPServer {
 	t.Helper()
 	state := room.New(nil, command.Context{})
@@ -108,8 +120,8 @@ func TestClientSendsAndReceives(t *testing.T) {
 	if err := bob.Join(protocol.JoinParams{Name: "bob", Role: "human"}); err != nil {
 		t.Fatalf("bob.Join: %v", err)
 	}
-	// Drain bob's initial room.state.
-	drain(bob.Incoming(), 1)
+	// Drain bob's room.state and any join/system notifications.
+	drainPending(bob.Incoming())
 
 	// Alice sends a message.
 	content := protocol.Content{Type: "text", Text: "hello from alice"}
@@ -117,8 +129,8 @@ func TestClientSendsAndReceives(t *testing.T) {
 		t.Fatalf("alice.Send: %v", err)
 	}
 
-	// Bob should receive a room.message.
-	msgs := drain(bob.Incoming(), 3) // allow for system messages too
+	// Bob should receive a room.message from alice.
+	msgs := drain(bob.Incoming(), 1)
 	found := false
 	for _, m := range msgs {
 		if m.Method == protocol.MethodMessage {
@@ -152,7 +164,7 @@ func TestClientSendStatus(t *testing.T) {
 	if err := alice.Join(protocol.JoinParams{Name: "alice", Role: "human"}); err != nil {
 		t.Fatalf("alice.Join: %v", err)
 	}
-	drain(alice.Incoming(), 1) // consume room.state
+	drainPending(alice.Incoming()) // consume room.state
 
 	// Connect bot.
 	bot, err := client.New(addr)
@@ -163,7 +175,10 @@ func TestClientSendStatus(t *testing.T) {
 	if err := bot.Join(protocol.JoinParams{Name: "bot", Role: "agent", AgentType: "claude"}); err != nil {
 		t.Fatalf("bot.Join: %v", err)
 	}
-	drain(bot.Incoming(), 1) // consume room.state
+	drainPending(bot.Incoming()) // consume room.state + join notifications
+
+	// Drain alice's join/system notifications from bot joining.
+	drainPending(alice.Incoming())
 
 	// Bot sends a status update.
 	if err := bot.SendStatus("bot", "thinking…"); err != nil {
@@ -171,7 +186,7 @@ func TestClientSendStatus(t *testing.T) {
 	}
 
 	// Alice should receive a room.status notification.
-	msgs := drain(alice.Incoming(), 5) // allow for join notifications too
+	msgs := drain(alice.Incoming(), 1)
 	found := false
 	for _, m := range msgs {
 		if m.Method == protocol.MethodStatus {
