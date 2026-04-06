@@ -5,34 +5,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 )
 
 const scanBufSize = 1024 * 1024 // 1 MB
 
-// TCPServer accepts TCP connections and routes messages through a single Room.
+// TCPServer accepts TCP connections and routes messages through room.State.
 type TCPServer struct {
 	listener net.Listener
-	room     *Room
+	state    *room.State
+	conns    *ConnectionManager
+	mu       sync.Mutex
+	wg       sync.WaitGroup
 }
 
-// New creates a new Server listening on addr with the given room topic.
-func New(addr string, topic string) (*TCPServer, error) {
-	return NewWithRoom(addr, NewRoom(topic))
-}
-
-// NewWithRoom creates a new Server listening on addr using an existing Room.
-// Use this to resume a previously saved room (e.g. loaded via LoadRoom).
-func NewWithRoom(addr string, room *Room) (*TCPServer, error) {
+// New creates a new Server listening on addr using the given room.State.
+func New(addr string, state *room.State) (*TCPServer, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
 	return &TCPServer{
 		listener: ln,
-		room:     room,
+		state:    state,
+		conns:    NewConnectionManager(),
 	}, nil
 }
 
@@ -46,11 +46,6 @@ func (s *TCPServer) Port() int {
 	return s.listener.Addr().(*net.TCPAddr).Port
 }
 
-// Room returns the server's room.
-func (s *TCPServer) Room() *Room {
-	return s.room
-}
-
 // Serve runs the accept loop. It blocks until the listener is closed.
 func (s *TCPServer) Serve() {
 	for {
@@ -58,13 +53,20 @@ func (s *TCPServer) Serve() {
 		if err != nil {
 			return
 		}
-		go s.handleConn(conn)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.handleConn(conn)
+		}()
 	}
 }
 
-// Close shuts down the server listener.
+// Close shuts down the server listener and waits for all active connection
+// handlers to finish.
 func (s *TCPServer) Close() error {
-	return s.listener.Close()
+	err := s.listener.Close()
+	s.wg.Wait()
+	return err
 }
 
 // handleConn manages the lifecycle of a single client connection.
@@ -75,6 +77,7 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 	sc.Buffer(make([]byte, scanBufSize), scanBufSize)
 
 	var cc *ClientConn
+	var name, source, role string
 
 	for sc.Scan() {
 		line := sc.Bytes()
@@ -91,21 +94,15 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 				continue
 			}
 
-			source := "human"
+			joinSource := "human"
 			if params.AgentType != "" {
-				source = "agent"
+				joinSource = "agent"
 			}
 
-			cc = &ClientConn{
-				Name:      params.Name,
-				Role:      params.Role,
-				Directory: params.Directory,
-				Repo:      params.Repo,
-				AgentType: params.AgentType,
-				Source:    source,
-			}
+			s.mu.Lock()
+			stateParams, joinErr := s.state.Join(params.Name, params.Role, params.Directory, params.Repo, params.AgentType, joinSource)
+			s.mu.Unlock()
 
-			state, joinErr := s.room.Join(cc)
 			if joinErr != nil {
 				resp := protocol.Response{
 					JSONRPC: "2.0",
@@ -118,21 +115,36 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 				return
 			}
 
-			// Send room.state back to the joining client.
-			notif := protocol.NewNotification(protocol.MethodState, state)
-			if data, err := protocol.EncodeLine(notif); err == nil {
-				_, _ = conn.Write(data)
-			}
-
-			// Notify other participants. Use the effective role from the
-			// room state (may differ from params.Role on reconnection).
+			// Capture the effective role from the state (may differ on reconnection).
 			effectiveRole := params.Role
-			for _, p := range state.Participants {
+			for _, p := range stateParams.Participants {
 				if p.Name == params.Name {
 					effectiveRole = p.Role
 					break
 				}
 			}
+
+			name = params.Name
+			source = joinSource
+			role = effectiveRole
+
+			cc = &ClientConn{
+				Name:   params.Name,
+				Send:   make(chan []byte, 64),
+				Done:   make(chan struct{}),
+				Online: true,
+			}
+
+			// Register connection for broadcasting.
+			s.conns.Add(params.Name, cc)
+
+			// Send room.state back to the joining client.
+			notif := protocol.NewNotification(protocol.MethodState, stateParams)
+			if data, err := protocol.EncodeLine(notif); err == nil {
+				_, _ = conn.Write(data)
+			}
+
+			// Notify other participants.
 			jp := protocol.JoinedParams{
 				Name:      params.Name,
 				Role:      effectiveRole,
@@ -141,8 +153,19 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 				AgentType: params.AgentType,
 				JoinedAt:  time.Now().UTC(),
 			}
-			s.room.BroadcastJoined(jp)
-			s.room.BroadcastSystem(fmt.Sprintf("%s joined", params.Name))
+			joinedNotif := protocol.NewNotification(protocol.MethodJoined, jp)
+			if data, err := protocol.EncodeLine(joinedNotif); err == nil {
+				s.conns.BroadcastExcept(params.Name, data)
+			}
+
+			// Broadcast system message.
+			s.mu.Lock()
+			sysMsg := s.state.AddSystemMessage(fmt.Sprintf("%s joined", params.Name))
+			s.mu.Unlock()
+			sysNotif := protocol.NewNotification(protocol.MethodMessage, sysMsg)
+			if data, err := protocol.EncodeLine(sysNotif); err == nil {
+				s.conns.Broadcast(data)
+			}
 
 			// Start writer goroutine for this connection.
 			go func(c net.Conn, client *ClientConn) {
@@ -168,7 +191,15 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 			if len(params.Content) == 0 {
 				continue
 			}
-			s.room.Broadcast(cc.Name, cc.Source, cc.Role, params.Content[0], params.Mentions)
+
+			s.mu.Lock()
+			msg := s.state.AddMessage(name, source, role, params.Content[0])
+			s.mu.Unlock()
+
+			msgNotif := protocol.NewNotification(protocol.MethodMessage, msg)
+			if data, err := protocol.EncodeLine(msgNotif); err == nil {
+				s.conns.Broadcast(data)
+			}
 
 		case protocol.MethodStatus:
 			if cc == nil {
@@ -179,16 +210,36 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 				continue
 			}
 			// Override name with the authenticated connection name for safety.
-			params.Name = cc.Name
-			s.room.BroadcastStatus(params)
+			params.Name = name
+
+			s.mu.Lock()
+			s.state.UpdateStatus(params.Name, params.Status)
+			s.mu.Unlock()
+
+			statusNotif := protocol.NewNotification(protocol.MethodStatus, params)
+			if data, err := protocol.EncodeLine(statusNotif); err == nil {
+				s.conns.BroadcastExcept(name, data)
+			}
 		}
 	}
 
 	// Client disconnected.
 	if cc != nil {
-		name := cc.Name
-		s.room.Leave(name)
-		s.room.BroadcastLeft(protocol.LeftParams{Name: name})
-		s.room.BroadcastSystem(fmt.Sprintf("%s left", name))
+		s.mu.Lock()
+		s.state.Leave(name)
+		sysMsg := s.state.AddSystemMessage(fmt.Sprintf("%s left", name))
+		s.mu.Unlock()
+
+		s.conns.Remove(name)
+
+		leftNotif := protocol.NewNotification(protocol.MethodLeft, protocol.LeftParams{Name: name})
+		if data, err := protocol.EncodeLine(leftNotif); err == nil {
+			s.conns.Broadcast(data)
+		}
+
+		sysNotif := protocol.NewNotification(protocol.MethodMessage, sysMsg)
+		if data, err := protocol.EncodeLine(sysNotif); err == nil {
+			s.conns.Broadcast(data)
+		}
 	}
 }

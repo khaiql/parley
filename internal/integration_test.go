@@ -2,12 +2,14 @@ package integration_test
 
 import (
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/khaiql/parley/internal/client"
+	"github.com/khaiql/parley/internal/command"
+	"github.com/khaiql/parley/internal/persistence"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 	"github.com/khaiql/parley/internal/server"
 )
 
@@ -48,8 +50,10 @@ func readMsgWithMethod(t *testing.T, c *client.TCPClient, method string, timeout
 func TestEndToEndHostAndJoin(t *testing.T) {
 	const timeout = 2 * time.Second
 
-	// 1. Start a server with a topic.
-	srv, err := server.New("127.0.0.1:0", "Design the persistence layer")
+	// 1. Start a server with a room.State.
+	state := room.New(nil, command.Context{})
+	state.Restore(state.GetID(), "Design the persistence layer", nil, nil, false)
+	srv, err := server.New("127.0.0.1:0", state)
 	if err != nil {
 		t.Fatalf("start server: %v", err)
 	}
@@ -203,31 +207,35 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 
 	// --- Persistence tests ---
 
-	// 14. After the conversation, call SaveRoom to a temp dir.
-	tmpDir, err := os.MkdirTemp("", "parley-integration-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	// Close the server and wait for all handleConn goroutines to finish.
+	// This ensures no goroutines are mutating state when we read it.
+	srv.Close()
 
-	if err := server.SaveRoom(tmpDir, srv.Room()); err != nil {
-		t.Fatalf("SaveRoom: %v", err)
+	// 14. After the conversation, save room state via persistence.JSONStore.
+	tmpDir := t.TempDir()
+	store := persistence.NewJSONStore(tmpDir)
+	roomID := state.GetID()
+	if err := store.Save(protocol.RoomSnapshot{
+		RoomID:       roomID,
+		Topic:        state.GetTopic(),
+		Participants: state.GetParticipants(),
+		Messages:     state.Messages(),
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 
-	// 15. Call LoadRoom and verify topic and messages were persisted.
-	loaded, err := server.LoadRoom(tmpDir)
+	// 15. Load and verify topic and messages were persisted.
+	snapshot, err := store.Load(roomID)
 	if err != nil {
-		t.Fatalf("LoadRoom: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	if loaded.Topic != "Design the persistence layer" {
-		t.Errorf("persisted topic: expected %q, got %q", "Design the persistence layer", loaded.Topic)
+	if snapshot.Topic != "Design the persistence layer" {
+		t.Errorf("persisted topic: expected %q, got %q", "Design the persistence layer", snapshot.Topic)
 	}
-	msgs := loaded.GetMessages()
 	// We expect at least the two chat messages (human and agent) plus system messages.
-	// The human chat message and the agent chat message are the key ones.
 	foundHuman := false
 	foundAgent := false
-	for _, m := range msgs {
+	for _, m := range snapshot.Messages {
 		if m.Source == "human" && len(m.Content) > 0 && m.Content[0].Text == "Hello @GoExpert, what do you think?" {
 			foundHuman = true
 		}
@@ -236,9 +244,9 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 		}
 	}
 	if !foundHuman {
-		t.Errorf("human message not found in persisted messages (got %d messages)", len(msgs))
+		t.Errorf("human message not found in persisted messages (got %d messages)", len(snapshot.Messages))
 	}
 	if !foundAgent {
-		t.Errorf("agent message not found in persisted messages (got %d messages)", len(msgs))
+		t.Errorf("agent message not found in persisted messages (got %d messages)", len(snapshot.Messages))
 	}
 }

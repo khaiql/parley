@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -19,6 +20,15 @@ func main() {
 var rootCmd = &cobra.Command{
 	Use:   "parley",
 	Short: "TUI group chat for coding agents",
+}
+
+// defaultParleyDir returns the canonical base directory for persisted room data.
+func defaultParleyDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".parley", "rooms")
 }
 
 // detectRepo runs git remote get-url origin and returns the trimmed output,

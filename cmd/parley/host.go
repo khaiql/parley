@@ -10,6 +10,7 @@ import (
 
 	"github.com/khaiql/parley/internal/client"
 	"github.com/khaiql/parley/internal/command"
+	"github.com/khaiql/parley/internal/persistence"
 	"github.com/khaiql/parley/internal/protocol"
 	"github.com/khaiql/parley/internal/room"
 	"github.com/khaiql/parley/internal/server"
@@ -52,19 +53,46 @@ func (a *RoomAdapter) GetParticipants() []protocol.Participant { return a.state.
 func (a *RoomAdapter) GetMessageCount() int                    { return a.state.GetMessageCount() }
 
 func runHost(_ *cobra.Command, _ []string) error {
-	srv, err := createServer()
+	store := persistence.NewJSONStore(defaultParleyDir())
+
+	// Create room.State first, optionally restoring from snapshot.
+	roomState := room.New(nil, command.Context{})
+	if hostYolo {
+		roomState.SetAutoApprove(true)
+	}
+
+	if hostResume != "" {
+		snapshot, err := store.Load(hostResume)
+		if err != nil {
+			return fmt.Errorf("host: load room %q: %w", hostResume, err)
+		}
+		roomState.Restore(snapshot.RoomID, snapshot.Topic, snapshot.Participants, snapshot.Messages, snapshot.AutoApprove)
+		if hostTopic == "" {
+			hostTopic = snapshot.Topic
+		}
+		if hostYolo {
+			roomState.SetAutoApprove(true)
+		}
+	} else {
+		if hostTopic == "" {
+			return fmt.Errorf("host: --topic is required when not using --resume")
+		}
+		roomState.Restore(roomState.GetID(), hostTopic, nil, nil, hostYolo)
+	}
+
+	addr := fmt.Sprintf(":%d", hostPort)
+	srv, err := server.New(addr, roomState)
 	if err != nil {
-		return err
+		return fmt.Errorf("host: create server: %w", err)
 	}
 	go srv.Serve()
 
 	port := srv.Port()
-	roomID := srv.Room().ID
-	roomDir := server.RoomDir(roomID)
+	roomID := roomState.GetID()
 	fmt.Fprintf(os.Stderr, "Parley server listening on port %d\n", port)
 	fmt.Fprintf(os.Stderr, "Room ID: %s\n", roomID)
 
-	stopAutoSave := startPersistence(srv, roomDir)
+	stopAutoSave := startPersistence(store, roomState, roomID)
 	defer stopAutoSave()
 
 	c, err := client.New(srv.Addr())
@@ -82,7 +110,9 @@ func runHost(_ *cobra.Command, _ []string) error {
 		_ = c.Send(protocol.Content{Type: "text", Text: text}, mentions)
 	}
 
-	roomState, reg, cmdCtx := setupRoomState(sendFn, c, port, roomDir, srv)
+	reg, cmdCtx := setupRoomState(c, port, store, roomState, roomID)
+	roomState.SetSendFn(sendFn)
+	roomState.SetCommands(reg, cmdCtx)
 
 	app := tui.NewApp(hostTopic, port, tui.InputModeHuman, name, sendFn)
 	app.SetCommandRegistry(reg, cmdCtx)
@@ -95,52 +125,26 @@ func runHost(_ *cobra.Command, _ []string) error {
 
 	_, err = p.Run()
 
-	shutdown(srv, roomDir)
+	shutdown(srv, store, roomState, roomID)
 	return err
-}
-
-// createServer creates either a new or resumed server based on CLI flags.
-func createServer() (server.Server, error) {
-	addr := fmt.Sprintf(":%d", hostPort)
-
-	if hostResume != "" {
-		dir := server.RoomDir(hostResume)
-		rm, err := server.LoadRoom(dir)
-		if err != nil {
-			return nil, fmt.Errorf("host: load room %q: %w", hostResume, err)
-		}
-		srv, err := server.NewWithRoom(addr, rm)
-		if err != nil {
-			return nil, fmt.Errorf("host: create server: %w", err)
-		}
-		if hostTopic == "" {
-			hostTopic = rm.Topic
-		}
-		if hostYolo {
-			srv.Room().AutoApprove = true
-		}
-		return srv, nil
-	}
-
-	if hostTopic == "" {
-		return nil, fmt.Errorf("host: --topic is required when not using --resume")
-	}
-	srv, err := server.New(addr, hostTopic)
-	if err != nil {
-		return nil, fmt.Errorf("host: create server: %w", err)
-	}
-	if hostYolo {
-		srv.Room().AutoApprove = true
-	}
-	return srv, nil
 }
 
 // startPersistence saves room state immediately, on a 30s interval, and on
 // exit. Returns a cleanup function that stops the auto-save ticker and
 // performs a final save.
-func startPersistence(srv server.Server, roomDir string) func() {
+func startPersistence(store *persistence.JSONStore, roomState *room.State, roomID string) func() {
+	saveSnapshot := func() error {
+		return store.Save(protocol.RoomSnapshot{
+			RoomID:       roomID,
+			Topic:        roomState.GetTopic(),
+			AutoApprove:  roomState.AutoApprove(),
+			Participants: roomState.GetParticipants(),
+			Messages:     roomState.Messages(),
+		})
+	}
+
 	// Save immediately so the room folder exists from the start.
-	if err := server.SaveRoom(roomDir, srv.Room()); err != nil {
+	if err := saveSnapshot(); err != nil {
 		fmt.Fprintf(os.Stderr, "Initial save failed: %v\n", err)
 	}
 
@@ -151,7 +155,7 @@ func startPersistence(srv server.Server, roomDir string) func() {
 		for {
 			select {
 			case <-ticker.C:
-				if err := server.SaveRoom(roomDir, srv.Room()); err != nil {
+				if err := saveSnapshot(); err != nil {
 					fmt.Fprintf(os.Stderr, "Auto-save failed: %v\n", err)
 				}
 			case <-stop:
@@ -162,26 +166,20 @@ func startPersistence(srv server.Server, roomDir string) func() {
 
 	return func() {
 		close(stop)
-		if err := server.SaveRoom(roomDir, srv.Room()); err != nil {
+		if err := saveSnapshot(); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to save room: %v\n", err)
 		}
 	}
 }
 
-// setupRoomState creates the room.State, command registry, and command context.
+// setupRoomState creates the command registry and command context.
 func setupRoomState(
-	sendFn func(string, []string),
 	c *client.TCPClient,
 	port int,
-	roomDir string,
-	srv server.Server,
-) (*room.State, *command.Registry, command.Context) {
-	roomState := room.New(nil, command.Context{})
-	roomState.SetSendFn(sendFn)
-	if hostYolo {
-		roomState.SetAutoApprove(true)
-	}
-
+	store *persistence.JSONStore,
+	roomState *room.State,
+	roomID string,
+) (*command.Registry, command.Context) {
 	reg := command.NewRegistry()
 	reg.Register(command.InfoCommand)
 	reg.Register(command.SaveCommand)
@@ -190,15 +188,20 @@ func setupRoomState(
 	cmdCtx := command.Context{
 		Room: &RoomAdapter{state: roomState, port: port},
 		SaveFn: func() error {
-			return server.SaveRoom(roomDir, srv.Room())
+			return store.Save(protocol.RoomSnapshot{
+				RoomID:       roomID,
+				Topic:        roomState.GetTopic(),
+				AutoApprove:  roomState.AutoApprove(),
+				Participants: roomState.GetParticipants(),
+				Messages:     roomState.Messages(),
+			})
 		},
 		SendFn: func(to, text string) {
 			_ = c.Send(protocol.Content{Type: "text", Text: fmt.Sprintf("@%s %s", to, text)}, []string{to})
 		},
 	}
 
-	roomState.SetCommands(reg, cmdCtx)
-	return roomState, reg, cmdCtx
+	return reg, cmdCtx
 }
 
 // bridgeEvents subscribes to room events and forwards them to the TUI.
@@ -227,8 +230,14 @@ func startNetworkLoop(c *client.TCPClient, roomState *room.State, name, dir, rep
 }
 
 // shutdown saves room state and closes the server.
-func shutdown(srv server.Server, roomDir string) {
-	if err := server.SaveRoom(roomDir, srv.Room()); err != nil {
+func shutdown(srv server.Server, store *persistence.JSONStore, roomState *room.State, roomID string) {
+	if err := store.Save(protocol.RoomSnapshot{
+		RoomID:       roomID,
+		Topic:        roomState.GetTopic(),
+		AutoApprove:  roomState.AutoApprove(),
+		Participants: roomState.GetParticipants(),
+		Messages:     roomState.Messages(),
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to save room on exit: %v\n", err)
 	}
 	srv.Close()

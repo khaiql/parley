@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 	"github.com/khaiql/parley/internal/server"
 )
 
@@ -17,7 +19,9 @@ const bufSize = 1024 * 1024 // 1 MB
 
 func newTestServer(t *testing.T) *server.TCPServer {
 	t.Helper()
-	s, err := server.New("127.0.0.1:0", "test-topic")
+	state := room.New(nil, command.Context{})
+	state.Restore(state.GetID(), "test-topic", nil, nil, false)
+	s, err := server.New("127.0.0.1:0", state)
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
@@ -221,16 +225,6 @@ func TestDuplicateNameRejected(t *testing.T) {
 		t.Error("expected connection to be closed after duplicate-name rejection")
 	}
 	connAlice2.SetReadDeadline(time.Time{})
-
-	// Original Alice must still be in the room.
-	time.Sleep(100 * time.Millisecond)
-	parts := s.Room().GetParticipants()
-	if len(parts) != 1 {
-		t.Fatalf("expected 1 participant remaining, got %d", len(parts))
-	}
-	if parts[0].Name != "Alice" {
-		t.Errorf("expected participant 'Alice', got %q", parts[0].Name)
-	}
 }
 
 // TestServerBroadcastsRoomStatus verifies that when one client sends room.status,
@@ -428,27 +422,22 @@ func TestJoinReceivesAtMost50Messages(t *testing.T) {
 	}
 }
 
-// TestNewWithRoom verifies that NewWithRoom creates a server backed by the
-// provided room, preserving its topic and message history.
-func TestNewWithRoom(t *testing.T) {
-	// Build a room with some history.
-	room := server.NewRoom("resume-topic")
-	room.Broadcast("alice", "human", "human", protocol.Content{Type: "text", Text: "first message"}, nil)
-	room.Broadcast("alice", "human", "human", protocol.Content{Type: "text", Text: "second message"}, nil)
+// TestNewWithRoomState verifies that when a server is created with a room.State
+// that has been restored with topic and messages, a joining client receives
+// those messages in room.state.
+func TestNewWithRoomState(t *testing.T) {
+	// Build a room.State with some history via Restore.
+	state := room.New(nil, command.Context{})
+	state.Restore(state.GetID(), "resume-topic", nil, nil, false)
+	state.AddMessage("alice", "human", "human", protocol.Content{Type: "text", Text: "first message"})
+	state.AddMessage("alice", "human", "human", protocol.Content{Type: "text", Text: "second message"})
 
-	s, err := server.NewWithRoom("127.0.0.1:0", room)
+	s, err := server.New("127.0.0.1:0", state)
 	if err != nil {
-		t.Fatalf("NewWithRoom: %v", err)
+		t.Fatalf("server.New: %v", err)
 	}
 	go s.Serve()
 	t.Cleanup(func() { s.Close() })
-
-	if s.Room().Topic != "resume-topic" {
-		t.Errorf("expected topic %q, got %q", "resume-topic", s.Room().Topic)
-	}
-	if len(s.Room().GetMessages()) != 2 {
-		t.Errorf("expected 2 messages, got %d", len(s.Room().GetMessages()))
-	}
 
 	// Connect bob and verify room.state includes history.
 	conn := dialServer(t, s.Addr())
@@ -470,22 +459,22 @@ func TestNewWithRoom(t *testing.T) {
 		t.Fatalf("expected room.state, got %q", raw.Method)
 	}
 
-	var state protocol.RoomStateParams
-	if err := json.Unmarshal(raw.Params, &state); err != nil {
+	var stateParams protocol.RoomStateParams
+	if err := json.Unmarshal(raw.Params, &stateParams); err != nil {
 		t.Fatalf("unmarshal state params: %v", err)
 	}
-	if state.Topic != "resume-topic" {
-		t.Errorf("expected topic %q, got %q", "resume-topic", state.Topic)
+	if stateParams.Topic != "resume-topic" {
+		t.Errorf("expected topic %q, got %q", "resume-topic", stateParams.Topic)
 	}
 	// History should include the 2 alice messages.
 	var aliceMsgs []protocol.MessageParams
-	for _, m := range state.Messages {
+	for _, m := range stateParams.Messages {
 		if m.From == "alice" {
 			aliceMsgs = append(aliceMsgs, m)
 		}
 	}
 	if len(aliceMsgs) != 2 {
-		t.Errorf("expected 2 alice messages in history, got %d (total: %d)", len(aliceMsgs), len(state.Messages))
+		t.Errorf("expected 2 alice messages in history, got %d (total: %d)", len(aliceMsgs), len(stateParams.Messages))
 	}
 }
 

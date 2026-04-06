@@ -16,9 +16,9 @@ import (
 	"github.com/khaiql/parley/internal/client"
 	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/driver"
+	"github.com/khaiql/parley/internal/persistence"
 	"github.com/khaiql/parley/internal/protocol"
 	"github.com/khaiql/parley/internal/room"
-	"github.com/khaiql/parley/internal/server"
 	"github.com/khaiql/parley/internal/tui"
 )
 
@@ -136,10 +136,10 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 
 	// If --resume is set and we know the room ID, look up the prior session ID.
+	store := persistence.NewJSONStore(defaultParleyDir())
 	var resumeSessionID string
 	if joinResume && roomID != "" {
-		roomDir := server.RoomDir(roomID)
-		sid, lookupErr := server.FindAgentSessionID(roomDir, joinName)
+		sid, lookupErr := store.FindAgentSession(roomID, joinName)
 		if lookupErr != nil {
 			fmt.Fprintf(os.Stderr, "join: warning: could not load prior session ID: %v\n", lookupErr)
 		} else if sid != "" {
@@ -270,8 +270,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	// Save the agent's session ID so it can be resumed next time.
 	if roomID != "" {
 		if sid := d.SessionID(); sid != "" {
-			roomDir := server.RoomDir(roomID)
-			if saveErr := server.UpdateAgentSessionID(roomDir, joinName, sid); saveErr != nil {
+			if saveErr := store.SaveAgentSession(roomID, joinName, sid); saveErr != nil {
 				fmt.Fprintf(os.Stderr, "join: warning: could not save session ID: %v\n", saveErr)
 			}
 		}

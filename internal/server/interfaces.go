@@ -1,11 +1,10 @@
 package server
 
 // Server is the interface for a Parley chat server.
-// Implementations manage client connections and route messages through a Room.
+// Implementations manage client connections and route messages.
 type Server interface {
 	Addr() string
 	Port() int
-	Room() *Room
 	Serve()
 	Close() error
 }

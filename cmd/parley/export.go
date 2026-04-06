@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/khaiql/parley/internal/server"
+	"github.com/khaiql/parley/internal/persistence"
 	"github.com/khaiql/parley/internal/web"
 )
 
@@ -27,7 +27,8 @@ func init() {
 
 func runExport(_ *cobra.Command, args []string) error {
 	roomID := args[0]
-	dir := server.RoomDir(roomID)
+	store := persistence.NewJSONStore(defaultParleyDir())
+	dir := store.RoomDir(roomID)
 
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return fmt.Errorf("export: room %q not found at %s", roomID, dir)

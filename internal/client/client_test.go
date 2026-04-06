@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/khaiql/parley/internal/client"
+	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 	"github.com/khaiql/parley/internal/server"
 )
 
@@ -25,14 +27,21 @@ func drain(ch <-chan *protocol.RawMessage, n int) []*protocol.RawMessage {
 	return msgs
 }
 
-func TestClientConnectsAndJoins(t *testing.T) {
-	// Start a real server on a random port.
-	srv, err := server.New("127.0.0.1:0", "test-room")
+func newClientTestServer(t *testing.T) *server.TCPServer {
+	t.Helper()
+	state := room.New(nil, command.Context{})
+	state.Restore(state.GetID(), "test-room", nil, nil, false)
+	srv, err := server.New("127.0.0.1:0", state)
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
-	defer srv.Close()
 	go srv.Serve()
+	t.Cleanup(func() { srv.Close() })
+	return srv
+}
+
+func TestClientConnectsAndJoins(t *testing.T) {
+	srv := newClientTestServer(t)
 
 	// Connect a client.
 	c, err := client.New(srv.Addr())
@@ -73,14 +82,7 @@ func TestClientConnectsAndJoins(t *testing.T) {
 }
 
 func TestClientSendsAndReceives(t *testing.T) {
-	// Start a real server on a random port.
-	srv, err := server.New("127.0.0.1:0", "test-room")
-	if err != nil {
-		t.Fatalf("server.New: %v", err)
-	}
-	defer srv.Close()
-	go srv.Serve()
-
+	srv := newClientTestServer(t)
 	addr := srv.Addr()
 
 	// Connect first client (alice).
@@ -138,13 +140,7 @@ func TestClientSendsAndReceives(t *testing.T) {
 // TestClientSendStatus verifies that sending a room.status notification results
 // in other participants receiving it.
 func TestClientSendStatus(t *testing.T) {
-	srv, err := server.New("127.0.0.1:0", "test-room")
-	if err != nil {
-		t.Fatalf("server.New: %v", err)
-	}
-	defer srv.Close()
-	go srv.Serve()
-
+	srv := newClientTestServer(t)
 	addr := srv.Addr()
 
 	// Connect alice.
@@ -197,12 +193,7 @@ func TestClientSendStatus(t *testing.T) {
 // TestClientConcurrentClose verifies that calling Close() from two goroutines
 // simultaneously does not panic.
 func TestClientConcurrentClose(t *testing.T) {
-	srv, err := server.New("127.0.0.1:0", "test-room")
-	if err != nil {
-		t.Fatalf("server.New: %v", err)
-	}
-	defer srv.Close()
-	go srv.Serve()
+	srv := newClientTestServer(t)
 
 	c, err := client.New(srv.Addr())
 	if err != nil {
@@ -222,12 +213,7 @@ func TestClientConcurrentClose(t *testing.T) {
 // TestClientIncomingClosesAfterDisconnect verifies that ranging over Incoming()
 // terminates (does not hang) after Close() is called.
 func TestClientIncomingClosesAfterDisconnect(t *testing.T) {
-	srv, err := server.New("127.0.0.1:0", "test-room")
-	if err != nil {
-		t.Fatalf("server.New: %v", err)
-	}
-	defer srv.Close()
-	go srv.Serve()
+	srv := newClientTestServer(t)
 
 	c, err := client.New(srv.Addr())
 	if err != nil {

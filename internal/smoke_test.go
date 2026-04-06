@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/khaiql/parley/internal/command"
+	"github.com/khaiql/parley/internal/persistence"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 	"github.com/khaiql/parley/internal/server"
 )
 
@@ -16,7 +19,9 @@ import (
 // host creates room → agent joins → messages exchanged → agent leaves → sidebar updates
 func TestSmokeFullFlow(t *testing.T) {
 	// 1. Start server
-	srv, err := server.New("127.0.0.1:0", "Smoke test: Go best practices")
+	state := room.New(nil, command.Context{})
+	state.Restore(state.GetID(), "Smoke test: Go best practices", nil, nil, false)
+	srv, err := server.New("127.0.0.1:0", state)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -31,13 +36,13 @@ func TestSmokeFullFlow(t *testing.T) {
 
 	// Should get room.state
 	msg := human.readMethod(t, protocol.MethodState, 2*time.Second)
-	var state protocol.RoomStateParams
-	json.Unmarshal(msg.Params, &state)
-	if state.Topic != "Smoke test: Go best practices" {
-		t.Errorf("topic = %q, want expected topic", state.Topic)
+	var stateParams protocol.RoomStateParams
+	json.Unmarshal(msg.Params, &stateParams)
+	if stateParams.Topic != "Smoke test: Go best practices" {
+		t.Errorf("topic = %q, want expected topic", stateParams.Topic)
 	}
-	if len(state.Participants) != 1 {
-		t.Errorf("participants = %d, want 1", len(state.Participants))
+	if len(stateParams.Participants) != 1 {
+		t.Errorf("participants = %d, want 1", len(stateParams.Participants))
 	}
 
 	// 3. Agent joins
@@ -99,20 +104,30 @@ func TestSmokeFullFlow(t *testing.T) {
 		t.Errorf("left name = %q, want GoExpert", left.Name)
 	}
 
-	// 7. Verify persistence
+	// 7. Verify persistence — close connections and server, waiting for all handlers.
+	humanConn.Close()
+	srv.Close() // waits for all handleConn goroutines to finish
+
 	dir := t.TempDir()
-	if err := server.SaveRoom(dir, srv.Room()); err != nil {
+	store := persistence.NewJSONStore(dir)
+	roomID := state.GetID()
+	if err := store.Save(protocol.RoomSnapshot{
+		RoomID:       roomID,
+		Topic:        state.GetTopic(),
+		Participants: state.GetParticipants(),
+		Messages:     state.Messages(),
+	}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	loaded, err := server.LoadRoom(dir)
+	snapshot, err := store.Load(roomID)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if loaded.Topic != "Smoke test: Go best practices" {
-		t.Errorf("loaded topic = %q", loaded.Topic)
+	if snapshot.Topic != "Smoke test: Go best practices" {
+		t.Errorf("loaded topic = %q", snapshot.Topic)
 	}
-	if len(loaded.Messages) < 3 {
-		t.Errorf("loaded %d messages, want >= 3", len(loaded.Messages))
+	if len(snapshot.Messages) < 3 {
+		t.Errorf("loaded %d messages, want >= 3", len(snapshot.Messages))
 	}
 
 	t.Log("Smoke test passed — full flow verified")
