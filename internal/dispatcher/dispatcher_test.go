@@ -1,4 +1,4 @@
-package room
+package dispatcher
 
 import (
 	"strings"
@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 )
 
 type collector struct {
@@ -38,30 +39,30 @@ func makeMsg(from, text string, mentions []string) protocol.MessageParams {
 	}
 }
 
-func TestDebounceRouter_IgnoresOwnMessages(t *testing.T) {
+func TestDebounce_IgnoresOwnMessages(t *testing.T) {
 	col := &collector{}
-	r := NewDebounceRouter("bot", 50*time.Millisecond, col.send)
+	d := NewDebounce("bot", 50*time.Millisecond, col.send)
 
-	events := make(chan Event, 8)
-	r.Start(events)
+	events := make(chan room.Event, 8)
+	d.Start(events)
 
-	events <- MessageReceived{Message: makeMsg("bot", "my own message", nil)}
+	events <- room.MessageReceived{Message: makeMsg("bot", "my own message", nil)}
 	close(events)
-	r.Close()
+	d.Close()
 
 	if msgs := col.get(); len(msgs) != 0 {
 		t.Errorf("expected no messages, got %v", msgs)
 	}
 }
 
-func TestDebounceRouter_MentionDeliversImmediately(t *testing.T) {
+func TestDebounce_MentionDeliversImmediately(t *testing.T) {
 	col := &collector{}
-	r := NewDebounceRouter("bot", 50*time.Millisecond, col.send)
+	d := NewDebounce("bot", 50*time.Millisecond, col.send)
 
-	events := make(chan Event, 8)
-	r.Start(events)
+	events := make(chan room.Event, 8)
+	d.Start(events)
 
-	events <- MessageReceived{Message: makeMsg("alice", "@bot help me", []string{"bot"})}
+	events <- room.MessageReceived{Message: makeMsg("alice", "@bot help me", []string{"bot"})}
 	time.Sleep(10 * time.Millisecond)
 
 	msgs := col.get()
@@ -73,17 +74,17 @@ func TestDebounceRouter_MentionDeliversImmediately(t *testing.T) {
 	}
 
 	close(events)
-	r.Close()
+	d.Close()
 }
 
-func TestDebounceRouter_NonMentionBatchesWithDelay(t *testing.T) {
+func TestDebounce_NonMentionBatchesWithDelay(t *testing.T) {
 	col := &collector{}
-	r := NewDebounceRouter("bot", 50*time.Millisecond, col.send)
+	d := NewDebounce("bot", 50*time.Millisecond, col.send)
 
-	events := make(chan Event, 8)
-	r.Start(events)
+	events := make(chan room.Event, 8)
+	d.Start(events)
 
-	events <- MessageReceived{Message: makeMsg("alice", "hello", nil)}
+	events <- room.MessageReceived{Message: makeMsg("alice", "hello", nil)}
 
 	time.Sleep(10 * time.Millisecond)
 	if msgs := col.get(); len(msgs) != 0 {
@@ -96,20 +97,20 @@ func TestDebounceRouter_NonMentionBatchesWithDelay(t *testing.T) {
 	}
 
 	close(events)
-	r.Close()
+	d.Close()
 }
 
-func TestDebounceRouter_MentionFlushesPendingBatch(t *testing.T) {
+func TestDebounce_MentionFlushesPendingBatch(t *testing.T) {
 	col := &collector{}
-	r := NewDebounceRouter("bot", 200*time.Millisecond, col.send)
+	d := NewDebounce("bot", 200*time.Millisecond, col.send)
 
-	events := make(chan Event, 8)
-	r.Start(events)
+	events := make(chan room.Event, 8)
+	d.Start(events)
 
-	events <- MessageReceived{Message: makeMsg("alice", "first", nil)}
+	events <- room.MessageReceived{Message: makeMsg("alice", "first", nil)}
 	time.Sleep(10 * time.Millisecond)
 
-	events <- MessageReceived{Message: makeMsg("bob", "@bot second", []string{"bot"})}
+	events <- room.MessageReceived{Message: makeMsg("bob", "@bot second", []string{"bot"})}
 	time.Sleep(10 * time.Millisecond)
 
 	msgs := col.get()
@@ -124,21 +125,21 @@ func TestDebounceRouter_MentionFlushesPendingBatch(t *testing.T) {
 	}
 
 	close(events)
-	r.Close()
+	d.Close()
 }
 
-func TestDebounceRouter_CloseFlushes(t *testing.T) {
+func TestDebounce_CloseFlushes(t *testing.T) {
 	col := &collector{}
-	r := NewDebounceRouter("bot", 5*time.Second, col.send)
+	d := NewDebounce("bot", 5*time.Second, col.send)
 
-	events := make(chan Event, 8)
-	r.Start(events)
+	events := make(chan room.Event, 8)
+	d.Start(events)
 
-	events <- MessageReceived{Message: makeMsg("alice", "pending", nil)}
+	events <- room.MessageReceived{Message: makeMsg("alice", "pending", nil)}
 	time.Sleep(10 * time.Millisecond)
 
 	close(events)
-	r.Close()
+	d.Close()
 
 	msgs := col.get()
 	if len(msgs) != 1 {
@@ -146,14 +147,14 @@ func TestDebounceRouter_CloseFlushes(t *testing.T) {
 	}
 }
 
-func TestDebounceRouter_FormatsNameColonText(t *testing.T) {
+func TestDebounce_FormatsNameColonText(t *testing.T) {
 	col := &collector{}
-	r := NewDebounceRouter("bot", 50*time.Millisecond, col.send)
+	d := NewDebounce("bot", 50*time.Millisecond, col.send)
 
-	events := make(chan Event, 8)
-	r.Start(events)
+	events := make(chan room.Event, 8)
+	d.Start(events)
 
-	events <- MessageReceived{Message: makeMsg("alice", "@bot do this", []string{"bot"})}
+	events <- room.MessageReceived{Message: makeMsg("alice", "@bot do this", []string{"bot"})}
 	time.Sleep(10 * time.Millisecond)
 
 	msgs := col.get()
@@ -166,20 +167,20 @@ func TestDebounceRouter_FormatsNameColonText(t *testing.T) {
 	}
 
 	close(events)
-	r.Close()
+	d.Close()
 }
 
-func TestDebounceRouter_DebounceResetsOnNewMessage(t *testing.T) {
+func TestDebounce_DebounceResetsOnNewMessage(t *testing.T) {
 	col := &collector{}
-	r := NewDebounceRouter("bot", 50*time.Millisecond, col.send)
+	d := NewDebounce("bot", 50*time.Millisecond, col.send)
 
-	events := make(chan Event, 8)
-	r.Start(events)
+	events := make(chan room.Event, 8)
+	d.Start(events)
 
-	events <- MessageReceived{Message: makeMsg("alice", "msg1", nil)}
+	events <- room.MessageReceived{Message: makeMsg("alice", "msg1", nil)}
 	time.Sleep(30 * time.Millisecond)
 
-	events <- MessageReceived{Message: makeMsg("bob", "msg2", nil)}
+	events <- room.MessageReceived{Message: makeMsg("bob", "msg2", nil)}
 	time.Sleep(30 * time.Millisecond)
 
 	if msgs := col.get(); len(msgs) != 0 {
@@ -196,5 +197,5 @@ func TestDebounceRouter_DebounceResetsOnNewMessage(t *testing.T) {
 	}
 
 	close(events)
-	r.Close()
+	d.Close()
 }

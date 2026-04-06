@@ -15,6 +15,7 @@ import (
 
 	"github.com/khaiql/parley/internal/client"
 	"github.com/khaiql/parley/internal/command"
+	"github.com/khaiql/parley/internal/dispatcher"
 	"github.com/khaiql/parley/internal/driver"
 	"github.com/khaiql/parley/internal/persistence"
 	"github.com/khaiql/parley/internal/protocol"
@@ -97,7 +98,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 
 	bridgeEvents(p, rs)
 	replayRoomState(rs, roomState)
-	startRouter(rs, d)
+	startDispatcher(rs, d)
 	startJoinNetworkLoop(c, rs, p)
 	startAgentBridge(c, d, p)
 
@@ -249,13 +250,13 @@ func replayRoomState(rs *room.State, roomState protocol.RoomStateParams) {
 	})
 }
 
-// startRouter subscribes a DebounceRouter to room events for routing messages
-// to the agent driver.
-func startRouter(rs *room.State, d driver.AgentDriver) {
-	router := room.NewDebounceRouter(joinName, 2*time.Second, func(text string) {
+// startDispatcher subscribes a Debounce dispatcher to room events for
+// delivering messages to the agent driver.
+func startDispatcher(rs *room.State, d driver.AgentDriver) {
+	disp := dispatcher.NewDebounce(joinName, 2*time.Second, func(text string) {
 		_ = d.Send(text)
 	})
-	router.Start(rs.Subscribe())
+	disp.Start(rs.Subscribe())
 }
 
 // startJoinNetworkLoop feeds incoming server messages to the TUI's room.State.
