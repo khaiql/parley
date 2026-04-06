@@ -6,7 +6,7 @@ package command
 import "github.com/khaiql/parley/internal/protocol"
 
 // RoomQuerier abstracts the read-only room data that commands need.
-// This avoids coupling commands directly to *server.Room.
+// This avoids coupling commands directly to room.State or server internals.
 type RoomQuerier interface {
 	GetID() string
 	GetTopic() string

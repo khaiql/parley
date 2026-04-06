@@ -144,10 +144,9 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 			role = effectiveRole
 
 			cc = &ClientConn{
-				Name:   params.Name,
-				Send:   make(chan []byte, 64),
-				Done:   make(chan struct{}),
-				Online: true,
+				Name: params.Name,
+				Send: make(chan []byte, 64),
+				Done: make(chan struct{}),
 			}
 
 			// Register connection for broadcasting.

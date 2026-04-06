@@ -2,9 +2,15 @@ package server
 
 import "sync"
 
+// ClientConn represents a connected participant's network connection.
+type ClientConn struct {
+	Name string
+	Send chan []byte
+	Done chan struct{}
+}
+
 // ConnectionManager tracks active client connections and provides
-// thread-safe broadcast capabilities. It is the first extraction from
-// Room as part of the strangler migration.
+// thread-safe broadcast capabilities.
 type ConnectionManager struct {
 	mu    sync.RWMutex
 	conns map[string]*ClientConn
