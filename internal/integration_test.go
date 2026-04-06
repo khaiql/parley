@@ -2,18 +2,20 @@ package integration_test
 
 import (
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/khaiql/parley/internal/client"
+	"github.com/khaiql/parley/internal/command"
+	"github.com/khaiql/parley/internal/persistence"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 	"github.com/khaiql/parley/internal/server"
 )
 
 // readMsg reads the next message from the client's incoming channel, failing
 // the test if nothing arrives within the timeout.
-func readMsg(t *testing.T, c *client.Client, timeout time.Duration) *protocol.RawMessage {
+func readMsg(t *testing.T, c *client.TCPClient, timeout time.Duration) *protocol.RawMessage {
 	t.Helper()
 	select {
 	case msg := <-c.Incoming():
@@ -26,7 +28,7 @@ func readMsg(t *testing.T, c *client.Client, timeout time.Duration) *protocol.Ra
 
 // readMsgWithMethod reads messages from the client until one with the expected
 // method is found, discarding any that don't match.
-func readMsgWithMethod(t *testing.T, c *client.Client, method string, timeout time.Duration) *protocol.RawMessage {
+func readMsgWithMethod(t *testing.T, c *client.TCPClient, method string, timeout time.Duration) *protocol.RawMessage {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -48,8 +50,10 @@ func readMsgWithMethod(t *testing.T, c *client.Client, method string, timeout ti
 func TestEndToEndHostAndJoin(t *testing.T) {
 	const timeout = 2 * time.Second
 
-	// 1. Start a server with a topic.
-	srv, err := server.New("127.0.0.1:0", "Design the persistence layer")
+	// 1. Start a server with a room.State.
+	state := room.New(nil, command.Context{})
+	state.Restore(state.GetID(), "Design the persistence layer", nil, nil, false)
+	srv, err := server.New("127.0.0.1:0", state)
 	if err != nil {
 		t.Fatalf("start server: %v", err)
 	}
@@ -73,7 +77,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// 3. Verify human receives room.state with correct topic.
-	stateMsg := readMsgWithMethod(t, humanClient, "room.state", timeout)
+	stateMsg := readMsgWithMethod(t, humanClient, protocol.MethodState, timeout)
 	var humanState protocol.RoomStateParams
 	if err := json.Unmarshal(stateMsg.Params, &humanState); err != nil {
 		t.Fatalf("unmarshal room.state: %v", err)
@@ -86,7 +90,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// Drain the system message ("Alice joined") that the human receives about themselves.
-	readMsgWithMethod(t, humanClient, "room.message", timeout)
+	readMsgWithMethod(t, humanClient, protocol.MethodMessage, timeout)
 
 	// 4. Connect agent client, join as agent (with agent_type "claude").
 	agentClient, err := client.New(addr)
@@ -104,7 +108,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// 5. Verify human receives room.joined notification for the agent.
-	joinedMsg := readMsgWithMethod(t, humanClient, "room.joined", timeout)
+	joinedMsg := readMsgWithMethod(t, humanClient, protocol.MethodJoined, timeout)
 	var joined protocol.JoinedParams
 	if err := json.Unmarshal(joinedMsg.Params, &joined); err != nil {
 		t.Fatalf("unmarshal room.joined: %v", err)
@@ -117,7 +121,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// 6. Verify agent receives room.state with both participants.
-	agentStateMsg := readMsgWithMethod(t, agentClient, "room.state", timeout)
+	agentStateMsg := readMsgWithMethod(t, agentClient, protocol.MethodState, timeout)
 	var agentState protocol.RoomStateParams
 	if err := json.Unmarshal(agentStateMsg.Params, &agentState); err != nil {
 		t.Fatalf("unmarshal agent room.state: %v", err)
@@ -127,9 +131,9 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// Drain the "GoExpert joined" system message that goes to human.
-	readMsgWithMethod(t, humanClient, "room.message", timeout)
+	readMsgWithMethod(t, humanClient, protocol.MethodMessage, timeout)
 	// Drain the "GoExpert joined" system message that goes to agent too.
-	readMsgWithMethod(t, agentClient, "room.message", timeout)
+	readMsgWithMethod(t, agentClient, protocol.MethodMessage, timeout)
 
 	// 7. Human sends a message with a mention.
 	if err := humanClient.Send(
@@ -140,7 +144,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// 8. Verify agent receives room.message with correct content, source="human", mentions=["GoExpert"].
-	agentMsg := readMsgWithMethod(t, agentClient, "room.message", timeout)
+	agentMsg := readMsgWithMethod(t, agentClient, protocol.MethodMessage, timeout)
 	var agentRecv protocol.MessageParams
 	if err := json.Unmarshal(agentMsg.Params, &agentRecv); err != nil {
 		t.Fatalf("unmarshal room.message (agent recv): %v", err)
@@ -156,7 +160,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// Human also receives its own broadcast.
-	readMsgWithMethod(t, humanClient, "room.message", timeout)
+	readMsgWithMethod(t, humanClient, protocol.MethodMessage, timeout)
 
 	// 9. Agent sends a message back.
 	if err := agentClient.Send(
@@ -167,7 +171,7 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// 10. Verify human receives room.message with correct content, source="agent".
-	humanMsg := readMsgWithMethod(t, humanClient, "room.message", timeout)
+	humanMsg := readMsgWithMethod(t, humanClient, protocol.MethodMessage, timeout)
 	var humanRecv protocol.MessageParams
 	if err := json.Unmarshal(humanMsg.Params, &humanRecv); err != nil {
 		t.Fatalf("unmarshal room.message (human recv): %v", err)
@@ -180,13 +184,13 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 	}
 
 	// Agent also receives its own broadcast.
-	readMsgWithMethod(t, agentClient, "room.message", timeout)
+	readMsgWithMethod(t, agentClient, protocol.MethodMessage, timeout)
 
 	// 11. Disconnect agent.
 	agentClient.Close()
 
 	// 12. Verify human receives system message about agent leaving.
-	leaveMsg := readMsgWithMethod(t, humanClient, "room.message", timeout)
+	leaveMsg := readMsgWithMethod(t, humanClient, protocol.MethodMessage, timeout)
 	var leaveParams protocol.MessageParams
 	if err := json.Unmarshal(leaveMsg.Params, &leaveParams); err != nil {
 		t.Fatalf("unmarshal leave system message: %v", err)
@@ -203,31 +207,35 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 
 	// --- Persistence tests ---
 
-	// 14. After the conversation, call SaveRoom to a temp dir.
-	tmpDir, err := os.MkdirTemp("", "parley-integration-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	// Close the server and wait for all handleConn goroutines to finish.
+	// This ensures no goroutines are mutating state when we read it.
+	srv.Close()
 
-	if err := server.SaveRoom(tmpDir, srv.Room()); err != nil {
-		t.Fatalf("SaveRoom: %v", err)
+	// 14. After the conversation, save room state via persistence.JSONStore.
+	tmpDir := t.TempDir()
+	store := persistence.NewJSONStore(tmpDir)
+	roomID := state.GetID()
+	if err := store.Save(protocol.RoomSnapshot{
+		RoomID:       roomID,
+		Topic:        state.GetTopic(),
+		Participants: state.GetParticipants(),
+		Messages:     state.Messages(),
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
 	}
 
-	// 15. Call LoadRoom and verify topic and messages were persisted.
-	loaded, err := server.LoadRoom(tmpDir)
+	// 15. Load and verify topic and messages were persisted.
+	snapshot, err := store.Load(roomID)
 	if err != nil {
-		t.Fatalf("LoadRoom: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	if loaded.Topic != "Design the persistence layer" {
-		t.Errorf("persisted topic: expected %q, got %q", "Design the persistence layer", loaded.Topic)
+	if snapshot.Topic != "Design the persistence layer" {
+		t.Errorf("persisted topic: expected %q, got %q", "Design the persistence layer", snapshot.Topic)
 	}
-	msgs := loaded.GetMessages()
 	// We expect at least the two chat messages (human and agent) plus system messages.
-	// The human chat message and the agent chat message are the key ones.
 	foundHuman := false
 	foundAgent := false
-	for _, m := range msgs {
+	for _, m := range snapshot.Messages {
 		if m.Source == "human" && len(m.Content) > 0 && m.Content[0].Text == "Hello @GoExpert, what do you think?" {
 			foundHuman = true
 		}
@@ -236,9 +244,9 @@ func TestEndToEndHostAndJoin(t *testing.T) {
 		}
 	}
 	if !foundHuman {
-		t.Errorf("human message not found in persisted messages (got %d messages)", len(msgs))
+		t.Errorf("human message not found in persisted messages (got %d messages)", len(snapshot.Messages))
 	}
 	if !foundAgent {
-		t.Errorf("agent message not found in persisted messages (got %d messages)", len(msgs))
+		t.Errorf("agent message not found in persisted messages (got %d messages)", len(snapshot.Messages))
 	}
 }

@@ -8,6 +8,18 @@ import (
 	"time"
 )
 
+// ---- Protocol method names ---------------------------------------------------
+
+const (
+	MethodJoin    = "room.join"    // client → server: join a room
+	MethodSend    = "room.send"    // client → server: send a chat message
+	MethodStatus  = "room.status"  // bidirectional: participant activity status
+	MethodState   = "room.state"   // server → client: full room state on join
+	MethodMessage = "room.message" // server → client: broadcast chat message
+	MethodJoined  = "room.joined"  // server → client: participant joined
+	MethodLeft    = "room.left"    // server → client: participant left
+)
+
 // ---- JSON-RPC 2.0 base types ------------------------------------------------
 
 // Notification is a JSON-RPC 2.0 notification (no id, no reply expected).
@@ -108,9 +120,31 @@ type LeftParams struct {
 	Name string `json:"name"`
 }
 
+// ---- Status constants -------------------------------------------------------
+
+const (
+	StatusIdle       = ""           // participant is idle
+	StatusThinking   = "thinking"   // processing input
+	StatusGenerating = "generating" // producing output
+	StatusListening  = "listening"  // passively observing
+)
+
+// StatusUsingTool returns a status string for tool use, optionally with name.
+func StatusUsingTool(toolName string) string {
+	if toolName != "" {
+		return "using: " + toolName
+	}
+	return "using tool"
+}
+
+// IsUsingTool reports whether status indicates tool use.
+func IsUsingTool(status string) bool {
+	return status == "using tool" || len(status) > 7 && status[:7] == "using: "
+}
+
 // StatusParams is the params payload for a "room.status" notification.
 // Status is a short description of what the participant is doing, e.g.
-// "thinking…", "using: Read", or "" to indicate idle.
+// "thinking", "using: Read", or "" to indicate idle.
 type StatusParams struct {
 	Name   string `json:"name"`
 	Status string `json:"status"`
@@ -153,6 +187,15 @@ type RoomStateParams struct {
 	Messages     []MessageParams `json:"messages,omitempty"`
 }
 
+// RoomSnapshot is a plain data container for persisting and restoring room state.
+type RoomSnapshot struct {
+	RoomID       string          `json:"room_id"`
+	Topic        string          `json:"topic"`
+	AutoApprove  bool            `json:"auto_approve,omitempty"`
+	Participants []Participant   `json:"participants"`
+	Messages     []MessageParams `json:"messages"`
+}
+
 // ---- Helper functions -------------------------------------------------------
 
 // ParseMentions extracts @mention tokens from a message string.
@@ -167,6 +210,37 @@ func ParseMentions(text string) []string {
 		}
 	}
 	return mentions
+}
+
+// MatchMentions matches @tokens in text against a list of known names.
+// Returns matched names in order of appearance. Case-insensitive.
+// Handles punctuation after names (e.g. "@bob's", "@alice!").
+func MatchMentions(text string, names []string) []string {
+	var mentions []string
+	seen := make(map[string]bool)
+	for _, word := range strings.Fields(text) {
+		if !strings.HasPrefix(word, "@") || len(word) < 2 {
+			continue
+		}
+		token := word[1:]
+		for _, name := range names {
+			lower := strings.ToLower(token)
+			lowerName := strings.ToLower(name)
+			if strings.EqualFold(token, name) ||
+				(strings.HasPrefix(lower, lowerName) && len(token) > len(name) && !isNameChar(token[len(name)])) {
+				if !seen[name] {
+					mentions = append(mentions, name)
+					seen[name] = true
+				}
+			}
+		}
+	}
+	return mentions
+}
+
+// isNameChar returns true if c could be part of a participant name.
+func isNameChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
 }
 
 // EncodeLine marshals v to JSON and appends a newline, returning the result.

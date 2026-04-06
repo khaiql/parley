@@ -35,7 +35,7 @@ func (s *Sidebar) SetPort(port int) {
 func (s *Sidebar) TickSpinner() bool {
 	s.spinnerFrame = (s.spinnerFrame + 1) % len(spinnerFrames)
 	for _, p := range s.participants {
-		if s.statuses[p.Name] == "generating" {
+		if s.statuses[p.Name] == protocol.StatusGenerating {
 			return true
 		}
 	}
@@ -152,12 +152,12 @@ func (s Sidebar) View() string {
 
 		// Status display
 		status := s.statuses[p.Name]
-		if status == "generating" {
+		if status == protocol.StatusGenerating {
 			senderColor := ColorForSender(p.Name, false)
 			frame := spinnerFrames[s.spinnerFrame%len(spinnerFrames)]
 			statusText := agentNameStyleFor(senderColor).Render(frame + " generating")
 			lines = append(lines, "  "+statusText)
-		} else if status != "" && status != "listening" {
+		} else if status != "" && status != protocol.StatusListening {
 			lines = append(lines, participantStatusStyle.Render("  "+status))
 		}
 

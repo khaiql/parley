@@ -9,8 +9,8 @@ import (
 	"github.com/khaiql/parley/internal/protocol"
 )
 
-// Client manages a single TCP connection to a Parley server.
-type Client struct {
+// TCPClient manages a single TCP connection to a Parley server.
+type TCPClient struct {
 	conn      net.Conn
 	incoming  chan *protocol.RawMessage
 	done      chan struct{}
@@ -19,12 +19,12 @@ type Client struct {
 
 // New dials the server at addr, starts the read loop goroutine, and returns
 // the Client. The caller must call Close when finished.
-func New(addr string) (*Client, error) {
+func New(addr string) (*TCPClient, error) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	c := &Client{
+	c := &TCPClient{
 		conn:     conn,
 		incoming: make(chan *protocol.RawMessage, 64),
 		done:     make(chan struct{}),
@@ -34,13 +34,13 @@ func New(addr string) (*Client, error) {
 }
 
 // Incoming returns a read-only channel of messages arriving from the server.
-func (c *Client) Incoming() <-chan *protocol.RawMessage {
+func (c *TCPClient) Incoming() <-chan *protocol.RawMessage {
 	return c.incoming
 }
 
 // Join sends a room.join notification to the server.
-func (c *Client) Join(params protocol.JoinParams) error {
-	notif := protocol.NewNotification("room.join", params)
+func (c *TCPClient) Join(params protocol.JoinParams) error {
+	notif := protocol.NewNotification(protocol.MethodJoin, params)
 	data, err := protocol.EncodeLine(notif)
 	if err != nil {
 		return err
@@ -50,12 +50,12 @@ func (c *Client) Join(params protocol.JoinParams) error {
 }
 
 // Send sends a room.send notification with the given content and optional mentions.
-func (c *Client) Send(content protocol.Content, mentions []string) error {
+func (c *TCPClient) Send(content protocol.Content, mentions []string) error {
 	params := protocol.SendParams{
 		Content:  []protocol.Content{content},
 		Mentions: mentions,
 	}
-	notif := protocol.NewNotification("room.send", params)
+	notif := protocol.NewNotification(protocol.MethodSend, params)
 	data, err := protocol.EncodeLine(notif)
 	if err != nil {
 		return err
@@ -66,12 +66,12 @@ func (c *Client) Send(content protocol.Content, mentions []string) error {
 
 // SendStatus sends a room.status notification with the given status string.
 // An empty status string means the participant is idle.
-func (c *Client) SendStatus(name, status string) error {
+func (c *TCPClient) SendStatus(name, status string) error {
 	params := protocol.StatusParams{
 		Name:   name,
 		Status: status,
 	}
-	notif := protocol.NewNotification("room.status", params)
+	notif := protocol.NewNotification(protocol.MethodStatus, params)
 	data, err := protocol.EncodeLine(notif)
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func (c *Client) SendStatus(name, status string) error {
 
 // Close signals the read loop to stop and closes the underlying connection.
 // It is safe to call Close concurrently or more than once.
-func (c *Client) Close() error {
+func (c *TCPClient) Close() error {
 	c.closeOnce.Do(func() { close(c.done) })
 	return c.conn.Close()
 }
@@ -91,9 +91,12 @@ func (c *Client) Close() error {
 // and sends it to the incoming channel. It exits when the connection is closed
 // or the done channel is closed. It closes the incoming channel on exit so that
 // consumers using range will unblock.
-func (c *Client) readLoop() {
+const scanBufSize = 1024 * 1024 // 1 MB — must match server's buffer
+
+func (c *TCPClient) readLoop() {
 	defer close(c.incoming)
 	sc := bufio.NewScanner(c.conn)
+	sc.Buffer(make([]byte, scanBufSize), scanBufSize)
 	for sc.Scan() {
 		line := sc.Bytes()
 		msg, err := protocol.DecodeLine(line)

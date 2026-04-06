@@ -21,7 +21,7 @@ func TestBuildSystemPrompt_ContainsTopic(t *testing.T) {
 		Role:      "backend engineer",
 		Directory: "/home/alice/repo",
 		Topic:     "refactor the auth module",
-		Participants: []ParticipantInfo{
+		Participants: []protocol.Participant{
 			{Name: "Alice", Role: "backend engineer", Directory: "/home/alice/repo"},
 			{Name: "Bob", Role: "frontend engineer", Directory: "/home/bob/repo"},
 		},
@@ -38,7 +38,7 @@ func TestBuildSystemPrompt_ContainsParticipantNames(t *testing.T) {
 		Role:      "backend engineer",
 		Directory: "/home/alice/repo",
 		Topic:     "test topic",
-		Participants: []ParticipantInfo{
+		Participants: []protocol.Participant{
 			{Name: "Alice", Role: "backend engineer", Directory: "/home/alice/repo"},
 			{Name: "Bob", Role: "frontend engineer", Directory: "/home/bob/repo"},
 			{Name: "Carol", Role: "QA", Directory: "/home/carol/repo"},
@@ -58,7 +58,7 @@ func TestBuildSystemPrompt_ContainsRoleAndDirectory(t *testing.T) {
 		Role:      "backend engineer",
 		Directory: "/home/alice/special-dir",
 		Topic:     "test topic",
-		Participants: []ParticipantInfo{
+		Participants: []protocol.Participant{
 			{Name: "Alice", Role: "backend engineer", Directory: "/home/alice/special-dir"},
 		},
 	}
@@ -77,7 +77,7 @@ func TestBuildSystemPrompt_ContainsGuidelines(t *testing.T) {
 		Role:      "engineer",
 		Directory: "/tmp",
 		Topic:     "topic",
-		Participants: []ParticipantInfo{
+		Participants: []protocol.Participant{
 			{Name: "Alice", Role: "engineer", Directory: "/tmp"},
 		},
 	}
@@ -101,7 +101,7 @@ func TestBuildSystemPrompt_IdentifiesAgent(t *testing.T) {
 		Role:      "philosopher",
 		Directory: "/tmp/dt",
 		Topic:     "meaning of life",
-		Participants: []ParticipantInfo{
+		Participants: []protocol.Participant{
 			{Name: "DeepThought", Role: "philosopher", Directory: "/tmp/dt"},
 		},
 	}
@@ -542,7 +542,7 @@ func TestBuildSystemPrompt_ContainsListeningInstruction(t *testing.T) {
 		Role:      "engineer",
 		Directory: "/tmp",
 		Topic:     "topic",
-		Participants: []ParticipantInfo{
+		Participants: []protocol.Participant{
 			{Name: "Alice", Role: "engineer", Directory: "/tmp"},
 		},
 	}

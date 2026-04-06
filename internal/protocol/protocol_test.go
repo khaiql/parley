@@ -148,7 +148,7 @@ func TestStatusParamsEncodeDecodeRoundTrip(t *testing.T) {
 		Status: "thinking…",
 	}
 
-	n := protocol.NewNotification("room.status", params)
+	n := protocol.NewNotification(protocol.MethodStatus, params)
 	data, err := protocol.EncodeLine(n)
 	if err != nil {
 		t.Fatalf("EncodeLine error: %v", err)
@@ -158,7 +158,7 @@ func TestStatusParamsEncodeDecodeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeLine error: %v", err)
 	}
-	if msg.Method != "room.status" {
+	if msg.Method != protocol.MethodStatus {
 		t.Errorf("method mismatch: got %q", msg.Method)
 	}
 
@@ -176,7 +176,7 @@ func TestStatusParamsEncodeDecodeRoundTrip(t *testing.T) {
 
 func TestStatusParamsEmptyStatus(t *testing.T) {
 	params := protocol.StatusParams{Name: "bot1", Status: ""}
-	n := protocol.NewNotification("room.status", params)
+	n := protocol.NewNotification(protocol.MethodStatus, params)
 	data, err := protocol.EncodeLine(n)
 	if err != nil {
 		t.Fatalf("EncodeLine error: %v", err)
@@ -191,6 +191,39 @@ func TestStatusParamsEmptyStatus(t *testing.T) {
 	}
 	if decoded.Status != "" {
 		t.Errorf("expected empty status, got %q", decoded.Status)
+	}
+}
+
+func TestMatchMentions(t *testing.T) {
+	names := []string{"alice", "bob"}
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"exact match", "hey @alice", []string{"alice"}},
+		{"multiple", "hey @bob, and @alice!", []string{"bob", "alice"}},
+		{"with punctuation", "@bob's idea", []string{"bob"}},
+		{"no match", "hey @charlie", nil},
+		{"no at sign", "hey alice", nil},
+		{"case insensitive", "hey @Alice", []string{"alice"}},
+		{"partial non-match", "@bobcat", nil},
+		{"empty text", "", nil},
+		{"deduplicates", "@alice @alice", []string{"alice"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := protocol.MatchMentions(tt.text, names)
+			if len(got) != len(tt.want) {
+				t.Errorf("MatchMentions(%q) = %v, want %v", tt.text, got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("MatchMentions(%q)[%d] = %q, want %q", tt.text, i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
 

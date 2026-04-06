@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -10,14 +9,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 )
 
 const sidebarWidth = 30
-
-// ServerMsg wraps an incoming raw protocol message from the network.
-type ServerMsg struct {
-	Raw *protocol.RawMessage
-}
 
 // SpinnerTickMsg triggers a sidebar spinner frame advance.
 type SpinnerTickMsg struct{}
@@ -43,30 +38,36 @@ type LocalSystemMsg struct {
 	Text string
 }
 
-// HistoryLoadedMsg signals that message history has been loaded.
-type HistoryLoadedMsg struct {
-	Messages []protocol.MessageParams
-}
-
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
-	topbar            TopBar
-	chat              Chat
-	sidebar           Sidebar
-	input             Input
-	statusbar         StatusBar
-	modal             *Modal                   // non-nil when a modal overlay is active
-	sendFn            func(string, []string)   // callback to send messages over network
-	registry          *command.Registry        // slash command registry (nil = no commands)
-	cmdCtx            command.Context          // context passed to slash commands
-	lastInputHeight   int                      // cached to avoid redundant re-layouts
-	pendingHistory    []protocol.MessageParams // set during room.state, loaded async
-	spinnerActive     bool
-	suggestions       Suggestions
-	completionTrigger rune // '/' or '@', or 0 if inactive
-	completionStart   int  // cursor position where trigger character was typed
-	width             int
-	height            int
+	topbar          TopBar
+	chat            Chat
+	sidebar         Sidebar
+	input           Input
+	statusbar       StatusBar
+	modal           *Modal                 // non-nil when a modal overlay is active
+	sendFn          func(string, []string) // callback to send messages over network
+	registry        *command.Registry      // slash command registry (nil = no commands)
+	cmdCtx          command.Context        // context passed to slash commands
+	lastInputHeight int                    // cached to avoid redundant re-layouts
+	suggestions     Suggestions
+	inputFSM        *InputFSM
+	completionStart int // cursor position where trigger character was typed
+	roomState       *room.State
+
+	// TUI-owned state, built from room events.
+	localMessages     []protocol.MessageParams
+	localParticipants []protocol.Participant
+	localActivities   map[string]room.Activity
+
+	width  int
+	height int
+}
+
+// SetRoomState sets the room.State that the App will use for event-sourced
+// state management. The TUI does not use this yet (wired in Task 7).
+func (a *App) SetRoomState(s *room.State) {
+	a.roomState = s
 }
 
 // NewApp creates an App with the given topic, port, input mode, display name,
@@ -75,17 +76,23 @@ func NewApp(topic string, port int, mode InputMode, _ string, sendFn func(string
 	sb := NewSidebar()
 	sb.SetPort(port)
 	a := App{
-		topbar:    NewTopBar(topic, port),
-		chat:      NewChat(0, 0),
-		sidebar:   sb,
-		input:     NewInput(),
-		statusbar: NewStatusBar(),
-		sendFn:    sendFn,
+		topbar:          NewTopBar(topic, port),
+		chat:            NewChat(0, 0),
+		sidebar:         sb,
+		input:           NewInput(),
+		statusbar:       NewStatusBar(),
+		sendFn:          sendFn,
+		localActivities: make(map[string]room.Activity),
 	}
 	a.input.SetMode(mode)
 	if len(participants) > 0 {
 		a.sidebar.SetParticipants(participants)
 	}
+	// Callbacks are no-ops because Bubble Tea uses value semantics — the App
+	// is copied on every Update call, so closures captured here would mutate
+	// a stale copy. Suggestion population and hiding happen inline at the
+	// call sites in Update instead.
+	a.inputFSM = NewInputFSM(func(InputTrigger) {}, func() {})
 	return a
 }
 
@@ -127,111 +134,99 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		// Modal intercepts all keyboard input while visible.
+		// Layer 1: Overlay — modal intercepts ALL keys.
 		if a.modal != nil {
-			switch {
-			case m.Type == tea.KeyEsc, m.String() == "q":
+			cmd, dismiss := a.modal.HandleKey(m)
+			if dismiss {
 				a.modal = nil
-				return a, nil
-			default:
-				cmd := a.modal.Update(msg)
-				return a, cmd
 			}
+			return a, cmd
 		}
-		switch m.Type {
-		case tea.KeyCtrlC:
+
+		// Layer 2: Permission — placeholder for #50.
+		// When implemented: if pending permissions, y/n consumed, else pass through.
+
+		// Global keys (always available).
+		if m.Type == tea.KeyCtrlC {
 			return a, tea.Quit
+		}
 
-		case tea.KeyUp:
-			if a.suggestions.Visible() {
-				a.suggestions.MoveUp()
-				return a, nil
-			}
-		case tea.KeyDown:
-			if a.suggestions.Visible() {
-				a.suggestions.MoveDown()
-				return a, nil
-			}
-		case tea.KeyTab:
-			if a.suggestions.Visible() {
-				a.acceptSuggestion()
-				a.layout()
-				return a, nil
-			}
-		case tea.KeyEsc:
-			if a.suggestions.Visible() {
-				a.dismissSuggestions()
-				a.layout()
-				return a, nil
-			}
+		// Layer 3: Input FSM routing.
+		if cmd, handled := a.handleCompletingKeys(m); handled {
+			return a, cmd
+		}
 
-		case tea.KeyEnter:
-			if a.suggestions.Visible() {
-				a.dismissSuggestions()
-				a.layout()
+		// Normal input handling (StateNormal, or Enter fell through from StateCompleting).
+		if m.Type == tea.KeyEnter && a.input.mode == InputModeHuman {
+			text := a.input.Value()
+			if newText, consumed := handleBackslashNewline(text); consumed {
+				a.input.ta.SetValue(newText)
+				return a, nil
 			}
-			if a.input.mode == InputModeHuman {
-				text := a.input.Value()
-				// Check for backslash-newline
-				if newText, consumed := handleBackslashNewline(text); consumed {
-					a.input.ta.SetValue(newText)
+			text = strings.TrimSpace(text)
+			if text != "" {
+				a.input.Reset()
+				if a.registry != nil && command.IsCommand(text) {
+					result := a.registry.Execute(a.cmdCtx, text)
+					if result.Error != nil {
+						a.chat.AddMessage(systemMessage(result.Error.Error()))
+					} else if result.Modal != nil {
+						modal := NewModal(result.Modal, a.width, a.height)
+						a.modal = &modal
+					} else if result.LocalMessage != "" {
+						a.chat.AddMessage(systemMessage(result.LocalMessage))
+					}
 					return a, nil
 				}
-				text = strings.TrimSpace(text)
-				if text != "" {
-					a.input.Reset()
-					// Slash command dispatch.
-					if a.registry != nil && command.IsCommand(text) {
-						result := a.registry.Execute(a.cmdCtx, text)
-						if result.Error != nil {
-							a.chat.AddMessage(systemMessage(result.Error.Error()))
-						} else if result.Modal != nil {
-							modal := NewModal(result.Modal, a.width, a.height)
-							a.modal = &modal
-						} else if result.LocalMessage != "" {
-							a.chat.AddMessage(systemMessage(result.LocalMessage))
-						}
-						return a, nil
-					}
-					mentions := protocol.ParseMentions(text)
-					if a.sendFn != nil {
-						a.sendFn(text, mentions)
-					}
+				mentions := protocol.ParseMentions(text)
+				if a.sendFn != nil {
+					a.sendFn(text, mentions)
 				}
-				return a, nil
 			}
-		default:
-			// ignore other keys
+			return a, nil
 		}
+
+	// ---- Room events (from room.State via channel bridge) ----
+
+	case room.HistoryLoaded:
+		a.localMessages = m.Messages
+		a.localParticipants = m.Participants
+		a.localActivities = m.Activities
+		// Forward to existing components for rendering.
+		a.sidebar.SetParticipants(m.Participants)
+		a.chat.SetLoading(false)
+		a.chat.LoadMessages(m.Messages)
+		a.statusbar.SetYolo(a.roomState != nil && a.roomState.AutoApprove())
+		return a, a.maybeStartSpinnerFromActivities()
+
+	case room.MessageReceived:
+		a.localMessages = append(a.localMessages, m.Message)
+		a.chat.AddMessage(m.Message)
+		return a, nil
+
+	case room.ParticipantsChanged:
+		a.localParticipants = m.Participants
+		a.sidebar.SetParticipants(m.Participants)
+		return a, a.maybeStartSpinnerFromActivities()
+
+	case room.ParticipantActivityChanged:
+		a.localActivities[m.Name] = m.Activity
+		a.sidebar.SetParticipantStatus(m.Name, activityToStatus(m.Activity))
+		return a, a.maybeStartSpinnerFromActivities()
+
+	case room.ErrorOccurred:
+		a.chat.AddMessage(systemMessage(m.Error.Error()))
+		return a, nil
 
 	case ServerDisconnectedMsg:
 		return a, tea.Quit
 
 	case SpinnerTickMsg:
-		if a.sidebar.TickSpinner() {
+		a.sidebar.TickSpinner()
+		if isAnyGenerating(a.localActivities) {
 			return a, spinnerTick()
 		}
-		a.spinnerActive = false
-		return a, nil
-
-	case ServerMsg:
-		a.handleServerMsg(m.Raw)
-		// If history is pending, dispatch async load.
-		if len(a.pendingHistory) > 0 {
-			msgs := a.pendingHistory
-			a.pendingHistory = nil
-			return a, tea.Batch(
-				func() tea.Msg {
-					return HistoryLoadedMsg{Messages: msgs}
-				},
-				a.maybeStartSpinner(),
-			)
-		}
-		return a, a.maybeStartSpinner()
-
-	case HistoryLoadedMsg:
-		a.chat.SetLoading(false)
-		a.chat.LoadMessages(m.Messages)
+		// Self-terminates when no one is generating.
 		return a, nil
 
 	case AgentTypingMsg:
@@ -252,10 +247,39 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Check for suggestion triggers and update filter after input changes.
 	if _, ok := msg.(tea.KeyMsg); ok && a.input.mode == InputModeHuman {
 		wasVisible := a.suggestions.Visible()
-		if wasVisible {
-			a.updateSuggestionFilter()
+		if a.inputFSM.Current() == StateCompleting {
+			// Update filter based on current input.
+			val := a.input.Value()
+			runes := []rune(val)
+			if len(runes) <= a.completionStart {
+				_ = a.inputFSM.Fire(TriggerDismiss)
+				a.suggestions.Hide()
+			} else {
+				query := string(runes[a.completionStart+1:])
+				a.suggestions.Filter(query)
+			}
 		} else {
-			a.checkSuggestionTrigger()
+			// Check for new triggers.
+			val := a.input.Value()
+			if val != "" {
+				runes := []rune(val)
+				last := runes[len(runes)-1]
+				switch last {
+				case '/':
+					if len(runes) == 1 && a.registry != nil {
+						a.completionStart = 0
+						_ = a.inputFSM.Fire(TriggerSlash)
+						a.populateSlashSuggestions()
+					}
+				case '@':
+					pos := len(runes) - 1
+					if pos == 0 || runes[pos-1] == ' ' || runes[pos-1] == '\n' {
+						a.completionStart = pos
+						_ = a.inputFSM.Fire(TriggerMention)
+						a.populateMentionSuggestions()
+					}
+				}
+			}
 		}
 		if wasVisible != a.suggestions.Visible() {
 			a.layout()
@@ -316,154 +340,105 @@ func (a *App) layout() {
 	a.suggestions.SetWidth(a.width)
 }
 
-// maybeStartSpinner checks if any participant is generating and starts
-// the spinner tick if not already running.
-func (a *App) maybeStartSpinner() tea.Cmd {
-	if a.spinnerActive {
-		return nil
+// populateSlashSuggestions fills the suggestion list with available commands.
+// handleCompletingKeys handles key events when the input FSM is in StateCompleting.
+// Returns (cmd, handled). If handled is true, the key was consumed.
+func (a *App) handleCompletingKeys(m tea.KeyMsg) (tea.Cmd, bool) {
+	if a.inputFSM.Current() != StateCompleting {
+		return nil, false
 	}
-	for _, status := range a.sidebar.statuses {
-		if status == "generating" {
-			a.spinnerActive = true
-			return spinnerTick()
+	switch m.Type {
+	case tea.KeyUp:
+		a.suggestions.MoveUp()
+		return nil, true
+	case tea.KeyDown:
+		a.suggestions.MoveDown()
+		return nil, true
+	case tea.KeyTab:
+		sel := a.suggestions.Selected()
+		if sel.Label != "" {
+			end := len([]rune(a.input.Value()))
+			a.input.ReplaceRange(a.completionStart, end, sel.Label+" ")
 		}
+		_ = a.inputFSM.Fire(TriggerAccept)
+		a.suggestions.Hide()
+		a.layout()
+		return nil, true
+	case tea.KeyEsc:
+		_ = a.inputFSM.Fire(TriggerDismiss)
+		a.suggestions.Hide()
+		a.layout()
+		return nil, true
+	case tea.KeyEnter:
+		_ = a.inputFSM.Fire(TriggerSubmit)
+		a.suggestions.Hide()
+		a.layout()
+		// Not handled — fall through to normal Enter handling in Update.
+		return nil, false
+	default:
+		return nil, false
+	}
+}
+
+func (a *App) populateSlashSuggestions() {
+	if a.registry == nil {
+		return
+	}
+	items := make([]SuggestionItem, 0)
+	for _, cmd := range a.registry.Commands() {
+		items = append(items, SuggestionItem{
+			Label:       "/" + cmd.Name,
+			Description: cmd.Description,
+		})
+	}
+	a.suggestions.SetItems(items)
+}
+
+// populateMentionSuggestions fills the suggestion list with online participants.
+func (a *App) populateMentionSuggestions() {
+	items := make([]SuggestionItem, 0)
+	for _, p := range a.localParticipants {
+		if p.Online {
+			items = append(items, SuggestionItem{
+				Label:       "@" + p.Name,
+				Description: p.Role,
+			})
+		}
+	}
+	a.suggestions.SetItems(items)
+}
+
+// maybeStartSpinnerFromActivities returns a spinnerTick command if any
+// participant is generating. The spinner self-terminates in SpinnerTickMsg
+// when no one is generating — no flag needed.
+func (a *App) maybeStartSpinnerFromActivities() tea.Cmd {
+	if isAnyGenerating(a.localActivities) {
+		return spinnerTick()
 	}
 	return nil
 }
 
-// checkSuggestionTrigger scans the current input value for a trigger character
-// and activates suggestions if found.
-func (a *App) checkSuggestionTrigger() {
-	if a.suggestions.Visible() {
-		return // already active
-	}
-	val := a.input.Value()
-	if val == "" {
-		return
-	}
-	runes := []rune(val)
-	last := runes[len(runes)-1]
-
-	switch last {
-	case '/':
-		// Only trigger at the very start of input.
-		if len(runes) == 1 && a.registry != nil {
-			a.completionTrigger = '/'
-			a.completionStart = 0
-			items := make([]SuggestionItem, 0)
-			for _, cmd := range a.registry.Commands() {
-				items = append(items, SuggestionItem{
-					Label:       "/" + cmd.Name,
-					Description: cmd.Description,
-				})
-			}
-			a.suggestions.SetItems(items)
-		}
-	case '@':
-		// Trigger at start of input or after whitespace.
-		pos := len(runes) - 1
-		if pos == 0 || runes[pos-1] == ' ' || runes[pos-1] == '\n' {
-			a.completionTrigger = '@'
-			a.completionStart = pos
-			items := make([]SuggestionItem, 0)
-			for _, p := range a.sidebar.participants {
-				if p.Online {
-					items = append(items, SuggestionItem{
-						Label:       "@" + p.Name,
-						Description: p.Role,
-					})
-				}
-			}
-			a.suggestions.SetItems(items)
+// isAnyGenerating returns true if any participant has ActivityGenerating.
+func isAnyGenerating(activities map[string]room.Activity) bool {
+	for _, a := range activities {
+		if a == room.ActivityGenerating {
+			return true
 		}
 	}
+	return false
 }
 
-// updateSuggestionFilter extracts the query from the current input and filters.
-func (a *App) updateSuggestionFilter() {
-	if !a.suggestions.Visible() {
-		return
-	}
-	val := a.input.Value()
-	runes := []rune(val)
-
-	// If user deleted back past the trigger, dismiss.
-	if len(runes) <= a.completionStart {
-		a.dismissSuggestions()
-		return
-	}
-
-	query := string(runes[a.completionStart+1:])
-	a.suggestions.Filter(query)
-}
-
-// acceptSuggestion inserts the selected suggestion into the input.
-func (a *App) acceptSuggestion() {
-	sel := a.suggestions.Selected()
-	if sel.Label == "" {
-		a.dismissSuggestions()
-		return
-	}
-	end := len([]rune(a.input.Value()))
-	a.input.ReplaceRange(a.completionStart, end, sel.Label+" ")
-	a.dismissSuggestions()
-}
-
-// dismissSuggestions hides the suggestion list and resets trigger state.
-func (a *App) dismissSuggestions() {
-	a.suggestions.Hide()
-	a.completionTrigger = 0
-	a.completionStart = 0
-}
-
-// handleServerMsg dispatches an incoming RawMessage to the appropriate handler
-// based on its method.
-func (a *App) handleServerMsg(raw *protocol.RawMessage) {
-	if raw == nil {
-		return
-	}
-	switch raw.Method {
-	case "room.state":
-		var params protocol.RoomStateParams
-		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.sidebar.SetParticipants(params.Participants)
-			a.statusbar.SetYolo(params.AutoApprove)
-			if len(params.Messages) > 0 {
-				a.chat.SetLoading(true)
-				a.pendingHistory = params.Messages
-			}
-		}
-
-	case "room.message":
-		var params protocol.MessageParams
-		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.chat.AddMessage(params)
-		}
-
-	case "room.joined":
-		var params protocol.JoinedParams
-		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.sidebar.AddParticipant(protocol.Participant{
-				Name:      params.Name,
-				Role:      params.Role,
-				Directory: params.Directory,
-				Repo:      params.Repo,
-				AgentType: params.AgentType,
-				Online:    true,
-			})
-		}
-
-	case "room.left":
-		var params protocol.LeftParams
-		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.sidebar.SetParticipantOffline(params.Name)
-		}
-
-	case "room.status":
-		var params protocol.StatusParams
-		if err := json.Unmarshal(raw.Params, &params); err == nil {
-			a.sidebar.SetParticipantStatus(params.Name, params.Status)
-		}
+// activityToStatus converts a room.Activity to a protocol status string for the sidebar.
+func activityToStatus(a room.Activity) string {
+	switch a {
+	case room.ActivityGenerating:
+		return protocol.StatusGenerating
+	case room.ActivityThinking:
+		return protocol.StatusThinking
+	case room.ActivityUsingTool:
+		return protocol.StatusUsingTool("")
+	default:
+		return protocol.StatusIdle
 	}
 }
 

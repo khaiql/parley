@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/khaiql/parley/internal/command"
+	"github.com/khaiql/parley/internal/persistence"
 	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/room"
 	"github.com/khaiql/parley/internal/server"
 )
 
@@ -16,7 +19,9 @@ import (
 // host creates room → agent joins → messages exchanged → agent leaves → sidebar updates
 func TestSmokeFullFlow(t *testing.T) {
 	// 1. Start server
-	srv, err := server.New("127.0.0.1:0", "Smoke test: Go best practices")
+	state := room.New(nil, command.Context{})
+	state.Restore(state.GetID(), "Smoke test: Go best practices", nil, nil, false)
+	srv, err := server.New("127.0.0.1:0", state)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -30,14 +35,14 @@ func TestSmokeFullFlow(t *testing.T) {
 	human.sendJoin(t, "sle", "human", "/Users/sle/project", "")
 
 	// Should get room.state
-	msg := human.readMethod(t, "room.state", 2*time.Second)
-	var state protocol.RoomStateParams
-	json.Unmarshal(msg.Params, &state)
-	if state.Topic != "Smoke test: Go best practices" {
-		t.Errorf("topic = %q, want expected topic", state.Topic)
+	msg := human.readMethod(t, protocol.MethodState, 2*time.Second)
+	var stateParams protocol.RoomStateParams
+	json.Unmarshal(msg.Params, &stateParams)
+	if stateParams.Topic != "Smoke test: Go best practices" {
+		t.Errorf("topic = %q, want expected topic", stateParams.Topic)
 	}
-	if len(state.Participants) != 1 {
-		t.Errorf("participants = %d, want 1", len(state.Participants))
+	if len(stateParams.Participants) != 1 {
+		t.Errorf("participants = %d, want 1", len(stateParams.Participants))
 	}
 
 	// 3. Agent joins
@@ -47,7 +52,7 @@ func TestSmokeFullFlow(t *testing.T) {
 	agent.sendJoin(t, "GoExpert", "Go specialist", "/Users/sle/project", "claude")
 
 	// Agent gets room.state with 2 participants
-	agentStateMsg := agent.readMethod(t, "room.state", 2*time.Second)
+	agentStateMsg := agent.readMethod(t, protocol.MethodState, 2*time.Second)
 	var aState protocol.RoomStateParams
 	json.Unmarshal(agentStateMsg.Params, &aState)
 	if len(aState.Participants) != 2 {
@@ -55,7 +60,7 @@ func TestSmokeFullFlow(t *testing.T) {
 	}
 
 	// Human should get room.joined
-	msg = human.readMethod(t, "room.joined", 2*time.Second)
+	msg = human.readMethod(t, protocol.MethodJoined, 2*time.Second)
 	var joined protocol.JoinedParams
 	json.Unmarshal(msg.Params, &joined)
 	if joined.Name != "GoExpert" {
@@ -92,27 +97,37 @@ func TestSmokeFullFlow(t *testing.T) {
 
 	// 6. Agent disconnects — human should get room.left
 	agentConn.Close()
-	msg = human.readMethod(t, "room.left", 2*time.Second)
+	msg = human.readMethod(t, protocol.MethodLeft, 2*time.Second)
 	var left protocol.LeftParams
 	json.Unmarshal(msg.Params, &left)
 	if left.Name != "GoExpert" {
 		t.Errorf("left name = %q, want GoExpert", left.Name)
 	}
 
-	// 7. Verify persistence
+	// 7. Verify persistence — close connections and server, waiting for all handlers.
+	humanConn.Close()
+	srv.Close() // waits for all handleConn goroutines to finish
+
 	dir := t.TempDir()
-	if err := server.SaveRoom(dir, srv.Room()); err != nil {
+	store := persistence.NewJSONStore(dir)
+	roomID := state.GetID()
+	if err := store.Save(protocol.RoomSnapshot{
+		RoomID:       roomID,
+		Topic:        state.GetTopic(),
+		Participants: state.GetParticipants(),
+		Messages:     state.Messages(),
+	}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	loaded, err := server.LoadRoom(dir)
+	snapshot, err := store.Load(roomID)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if loaded.Topic != "Smoke test: Go best practices" {
-		t.Errorf("loaded topic = %q", loaded.Topic)
+	if snapshot.Topic != "Smoke test: Go best practices" {
+		t.Errorf("loaded topic = %q", snapshot.Topic)
 	}
-	if len(loaded.Messages) < 3 {
-		t.Errorf("loaded %d messages, want >= 3", len(loaded.Messages))
+	if len(snapshot.Messages) < 3 {
+		t.Errorf("loaded %d messages, want >= 3", len(snapshot.Messages))
 	}
 
 	t.Log("Smoke test passed — full flow verified")
@@ -133,7 +148,7 @@ func newTestClient(conn net.Conn) *testClient {
 
 func (tc *testClient) sendJoin(t *testing.T, name, role, dir, agentType string) {
 	t.Helper()
-	n := protocol.NewNotification("room.join", protocol.JoinParams{
+	n := protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
 		Name: name, Role: role, Directory: dir, AgentType: agentType,
 	})
 	data, _ := protocol.EncodeLine(n)
@@ -142,7 +157,7 @@ func (tc *testClient) sendJoin(t *testing.T, name, role, dir, agentType string) 
 
 func (tc *testClient) sendMsg(t *testing.T, text string, mentions []string) {
 	t.Helper()
-	n := protocol.NewNotification("room.send", protocol.SendParams{
+	n := protocol.NewNotification(protocol.MethodSend, protocol.SendParams{
 		Content:  []protocol.Content{{Type: "text", Text: text}},
 		Mentions: mentions,
 	})
@@ -174,7 +189,7 @@ func (tc *testClient) readMessageFrom(t *testing.T, from string, timeout time.Du
 		if err := json.Unmarshal(tc.scanner.Bytes(), &msg); err != nil {
 			continue
 		}
-		if msg.Method == "room.message" {
+		if msg.Method == protocol.MethodMessage {
 			var params protocol.MessageParams
 			if err := json.Unmarshal(msg.Params, &params); err == nil && params.From == from {
 				return &msg
