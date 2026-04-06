@@ -6,6 +6,9 @@ import (
 )
 
 // State holds the authoritative room state and emits events when it changes.
+// State is NOT safe for concurrent use. All mutations (HandleServerMessage,
+// SendMessage, etc.) must happen from a single goroutine. Subscribers receive
+// events on buffered channels and can process them concurrently.
 type State struct {
 	participants []protocol.Participant
 	activities   map[string]Activity

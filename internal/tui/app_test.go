@@ -423,3 +423,27 @@ func TestApp_RoomErrorOccurred_AddsSystemMessage(t *testing.T) {
 		t.Fatal("expected error message in chat")
 	}
 }
+
+func TestApp_SpinnerTickChainsWhenGenerating(t *testing.T) {
+	a := makeApp()
+	a.localActivities["agent-1"] = room.ActivityGenerating
+
+	model, cmd := a.Update(SpinnerTickMsg{})
+	a = model.(App)
+
+	if cmd == nil {
+		t.Fatal("expected spinnerTick command when someone is generating")
+	}
+}
+
+func TestApp_SpinnerTickStopsWhenNobodyGenerating(t *testing.T) {
+	a := makeApp()
+	a.localActivities["agent-1"] = room.ActivityListening
+
+	model, cmd := a.Update(SpinnerTickMsg{})
+	a = model.(App)
+
+	if cmd != nil {
+		t.Fatal("expected nil command when nobody is generating")
+	}
+}
