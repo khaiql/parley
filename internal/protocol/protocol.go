@@ -165,6 +165,15 @@ type RoomStateParams struct {
 	Messages     []MessageParams `json:"messages,omitempty"`
 }
 
+// RoomSnapshot is a plain data container for persisting and restoring room state.
+type RoomSnapshot struct {
+	RoomID       string          `json:"room_id"`
+	Topic        string          `json:"topic"`
+	AutoApprove  bool            `json:"auto_approve,omitempty"`
+	Participants []Participant   `json:"participants"`
+	Messages     []MessageParams `json:"messages"`
+}
+
 // ---- Helper functions -------------------------------------------------------
 
 // ParseMentions extracts @mention tokens from a message string.
@@ -179,6 +188,37 @@ func ParseMentions(text string) []string {
 		}
 	}
 	return mentions
+}
+
+// MatchMentions matches @tokens in text against a list of known names.
+// Returns matched names in order of appearance. Case-insensitive.
+// Handles punctuation after names (e.g. "@bob's", "@alice!").
+func MatchMentions(text string, names []string) []string {
+	var mentions []string
+	seen := make(map[string]bool)
+	for _, word := range strings.Fields(text) {
+		if !strings.HasPrefix(word, "@") || len(word) < 2 {
+			continue
+		}
+		token := word[1:]
+		for _, name := range names {
+			lower := strings.ToLower(token)
+			lowerName := strings.ToLower(name)
+			if strings.EqualFold(token, name) ||
+				(strings.HasPrefix(lower, lowerName) && len(token) > len(name) && !isNameChar(token[len(name)])) {
+				if !seen[name] {
+					mentions = append(mentions, name)
+					seen[name] = true
+				}
+			}
+		}
+	}
+	return mentions
+}
+
+// isNameChar returns true if c could be part of a participant name.
+func isNameChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
 }
 
 // EncodeLine marshals v to JSON and appends a newline, returning the result.

@@ -194,6 +194,39 @@ func TestStatusParamsEmptyStatus(t *testing.T) {
 	}
 }
 
+func TestMatchMentions(t *testing.T) {
+	names := []string{"alice", "bob"}
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"exact match", "hey @alice", []string{"alice"}},
+		{"multiple", "hey @bob, and @alice!", []string{"bob", "alice"}},
+		{"with punctuation", "@bob's idea", []string{"bob"}},
+		{"no match", "hey @charlie", nil},
+		{"no at sign", "hey alice", nil},
+		{"case insensitive", "hey @Alice", []string{"alice"}},
+		{"partial non-match", "@bobcat", nil},
+		{"empty text", "", nil},
+		{"deduplicates", "@alice @alice", []string{"alice"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := protocol.MatchMentions(tt.text, names)
+			if len(got) != len(tt.want) {
+				t.Errorf("MatchMentions(%q) = %v, want %v", tt.text, got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("MatchMentions(%q)[%d] = %q, want %q", tt.text, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestJoinParamsEncodeDecodeRoundTrip(t *testing.T) {
 	params := protocol.JoinParams{
 		Name:      "agent-x",
