@@ -54,7 +54,7 @@ func (a *RoomAdapter) GetMessageCount() int                    { return a.state.
 func runHost(_ *cobra.Command, _ []string) error {
 	addr := fmt.Sprintf(":%d", hostPort)
 
-	var srv *server.TCPServer
+	var srv server.Server
 	var err error
 
 	if hostResume != "" {
