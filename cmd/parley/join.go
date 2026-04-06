@@ -65,14 +65,57 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "No --name provided, using: %s\n", joinName)
 	}
 
-	// Extract agent command from args after "--".
+	agentCmd, agentArgs := parseAgentArgs(cmd, args)
+
+	c, err := client.New(fmt.Sprintf("localhost:%d", joinPort))
+	if err != nil {
+		return fmt.Errorf("join: connect: %w", err)
+	}
+	defer c.Close()
+
+	roomState, err := joinRoom(c, agentCmd)
+	if err != nil {
+		return err
+	}
+
+	store := persistence.NewJSONStore(defaultParleyDir())
+	resumeSessionID := lookupResumeSession(store, roomState.RoomID)
+
+	d, err := startAgent(agentArgs, roomState, resumeSessionID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = d.Stop() }()
+
+	rs := room.New(nil, command.Context{})
+	app := tui.NewApp(roomState.Topic, joinPort, tui.InputModeAgent, joinName, nil, roomState.Participants...)
+	app.SetAgent(joinName, joinRole)
+	app.SetYolo(roomState.AutoApprove)
+	app.SetRoomState(rs)
+
+	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	bridgeEvents(p, rs)
+	replayRoomState(rs, roomState)
+	startRouter(rs, d)
+	startJoinNetworkLoop(c, rs, p)
+	startAgentBridge(c, d, p)
+
+	_, err = p.Run()
+
+	saveAgentSession(store, roomState.RoomID, d)
+	return err
+}
+
+// parseAgentArgs extracts the agent command and arguments from CLI args after "--".
+func parseAgentArgs(cmd *cobra.Command, args []string) (string, []string) {
 	var agentArgs []string
 	dashPos := cmd.Flags().ArgsLenAtDash()
 	if dashPos >= 0 {
 		agentArgs = args[dashPos:]
 	}
 
-	agentCmd := protocol.AgentTypeClaude // default agent type
+	agentCmd := protocol.AgentTypeClaude
 	if len(agentArgs) > 0 {
 		base := agentArgs[0]
 		switch {
@@ -84,14 +127,11 @@ func runJoin(cmd *cobra.Command, args []string) error {
 			agentCmd = protocol.AgentTypeClaude
 		}
 	}
+	return agentCmd, agentArgs
+}
 
-	addr := fmt.Sprintf("localhost:%d", joinPort)
-	c, err := client.New(addr)
-	if err != nil {
-		return fmt.Errorf("join: connect: %w", err)
-	}
-	defer c.Close()
-
+// joinRoom sends a join request and waits for the room.state response.
+func joinRoom(c *client.TCPClient, agentType string) (protocol.RoomStateParams, error) {
 	dir, _ := os.Getwd()
 	repo := detectRepo()
 
@@ -100,34 +140,50 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		Role:      joinRole,
 		Directory: dir,
 		Repo:      repo,
-		AgentType: agentCmd,
+		AgentType: agentType,
 	}); err != nil {
-		return fmt.Errorf("join: room join: %w", err)
+		return protocol.RoomStateParams{}, fmt.Errorf("join: room join: %w", err)
 	}
 
-	// Wait for room.state to get topic and participants.
 	var roomState protocol.RoomStateParams
 	timeout := time.After(5 * time.Second)
-	found := false
-	for !found {
+	for {
 		select {
 		case msg, ok := <-c.Incoming():
 			if !ok {
-				return fmt.Errorf("join: connection closed before receiving room state")
+				return protocol.RoomStateParams{}, fmt.Errorf("join: connection closed before receiving room state")
 			}
 			if msg.Method == protocol.MethodState {
 				if err := json.Unmarshal(msg.Params, &roomState); err == nil {
-					found = true
+					return roomState, nil
 				}
 			}
 		case <-timeout:
-			return fmt.Errorf("join: timeout: server did not send room state within 5 seconds")
+			return protocol.RoomStateParams{}, fmt.Errorf("join: timeout: server did not send room state within 5 seconds")
 		}
 	}
+}
 
-	topic := roomState.Topic
-	roomID := roomState.RoomID
+// lookupResumeSession finds a prior agent session ID if --resume is set.
+func lookupResumeSession(store *persistence.JSONStore, roomID string) string {
+	if !joinResume || roomID == "" {
+		return ""
+	}
+	sid, err := store.FindAgentSession(roomID, joinName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "join: warning: could not load prior session ID: %v\n", err)
+		return ""
+	}
+	if sid != "" {
+		fmt.Fprintf(os.Stderr, "join: resuming session %s\n", sid)
+	} else {
+		fmt.Fprintf(os.Stderr, "join: no prior session found for %q, starting fresh\n", joinName)
+	}
+	return sid
+}
 
+// startAgent creates and starts the agent driver subprocess.
+func startAgent(agentArgs []string, roomState protocol.RoomStateParams, resumeSessionID string) (driver.AgentDriver, error) {
 	cmdName := "claude"
 	var extraArgs []string
 	if len(agentArgs) > 0 {
@@ -135,23 +191,10 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		extraArgs = agentArgs[1:]
 	}
 
-	// If --resume is set and we know the room ID, look up the prior session ID.
-	store := persistence.NewJSONStore(defaultParleyDir())
-	var resumeSessionID string
-	if joinResume && roomID != "" {
-		sid, lookupErr := store.FindAgentSession(roomID, joinName)
-		if lookupErr != nil {
-			fmt.Fprintf(os.Stderr, "join: warning: could not load prior session ID: %v\n", lookupErr)
-		} else if sid != "" {
-			resumeSessionID = sid
-			fmt.Fprintf(os.Stderr, "join: resuming session %s\n", sid)
-		} else {
-			fmt.Fprintf(os.Stderr, "join: no prior session found for %q, starting fresh\n", joinName)
-		}
-	}
+	dir, _ := os.Getwd()
+	repo := detectRepo()
 
-	// Build the intro message for the agent.
-	intro := fmt.Sprintf("You have joined a parley chat room. Topic: %s. Introduce yourself briefly.", topic)
+	intro := fmt.Sprintf("You have joined a parley chat room. Topic: %s. Introduce yourself briefly.", roomState.Topic)
 	history := driver.FormatHistory(roomState.Messages)
 	if history != "" {
 		intro = history + "\n" + intro
@@ -164,7 +207,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		Role:            joinRole,
 		Directory:       dir,
 		Repo:            repo,
-		Topic:           topic,
+		Topic:           roomState.Topic,
 		Participants:    roomState.Participants,
 		InitialMessage:  intro,
 		ResumeSessionID: resumeSessionID,
@@ -175,64 +218,58 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
 	d, err := driver.NewDriver(cmdName)
 	if err != nil {
-		return fmt.Errorf("join: %w", err)
+		return nil, fmt.Errorf("join: %w", err)
 	}
 	if err := d.Start(ctx, config); err != nil {
-		return fmt.Errorf("join: start agent driver: %w", err)
+		return nil, fmt.Errorf("join: start agent driver: %w", err)
 	}
-	defer func() { _ = d.Stop() }()
 
 	// For drivers that don't consume InitialMessage in Start() (e.g. Claude),
 	// send the intro explicitly.
 	if _, isGemini := d.(*driver.GeminiDriver); !isGemini {
 		if err := d.Send(intro); err != nil {
-			return fmt.Errorf("join: send initial prompt: %w", err)
+			_ = d.Stop()
+			return nil, fmt.Errorf("join: send initial prompt: %w", err)
 		}
 	}
 
-	app := tui.NewApp(topic, joinPort, tui.InputModeAgent, joinName, nil, roomState.Participants...)
-	app.SetAgent(joinName, joinRole)
-	app.SetYolo(roomState.AutoApprove)
+	return d, nil
+}
 
-	// Create room.State for event-sourced state management (join has no commands).
-	rs := room.New(nil, command.Context{})
-	app.SetRoomState(rs)
-
-	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
-
-	// Subscribe to room events BEFORE replaying state so no events are lost.
-	rsEvents := rs.Subscribe()
-	go func() {
-		for e := range rsEvents {
-			p.Send(e)
-		}
-	}()
-
-	// Replay the room.state we already consumed during the join handshake.
+// replayRoomState replays the room.state we consumed during the join handshake
+// so the TUI gets the initial HistoryLoaded event.
+func replayRoomState(rs *room.State, roomState protocol.RoomStateParams) {
 	stateJSON, err := json.Marshal(roomState)
 	if err != nil {
-		return fmt.Errorf("join: marshal room state for replay: %w", err)
+		return
 	}
 	rs.HandleServerMessage(&protocol.RawMessage{
 		Method: protocol.MethodState,
 		Params: stateJSON,
 	})
+}
 
-	// Subscribe router to room events — routes messages to the agent driver.
+// startRouter subscribes a DebounceRouter to room events for routing messages
+// to the agent driver.
+func startRouter(rs *room.State, d driver.AgentDriver) {
 	router := room.NewDebounceRouter(joinName, 2*time.Second, func(text string) {
 		_ = d.Send(text)
 	})
 	router.Start(rs.Subscribe())
+}
 
-	// Bridge network → room.State.
+// startJoinNetworkLoop feeds incoming server messages to the TUI's room.State.
+func startJoinNetworkLoop(c *client.TCPClient, rs *room.State, p *tea.Program) {
 	go func() {
 		for msg := range c.Incoming() {
 			rs.HandleServerMessage(msg)
 		}
 		p.Send(tui.ServerDisconnectedMsg{})
 	}()
+}
 
-	// Bridge agent → network.
+// startAgentBridge bridges agent driver events to the network and TUI.
+func startAgentBridge(c *client.TCPClient, d driver.AgentDriver, p *tea.Program) {
 	go func() {
 		var accumulated strings.Builder
 		for event := range d.Events() {
@@ -264,17 +301,18 @@ func runJoin(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}()
+}
 
-	_, err = p.Run()
-
-	// Save the agent's session ID so it can be resumed next time.
-	if roomID != "" {
-		if sid := d.SessionID(); sid != "" {
-			if saveErr := store.SaveAgentSession(roomID, joinName, sid); saveErr != nil {
-				fmt.Fprintf(os.Stderr, "join: warning: could not save session ID: %v\n", saveErr)
-			}
-		}
+// saveAgentSession persists the agent's session ID for future resume.
+func saveAgentSession(store *persistence.JSONStore, roomID string, d driver.AgentDriver) {
+	if roomID == "" {
+		return
 	}
-
-	return err
+	sid := d.SessionID()
+	if sid == "" {
+		return
+	}
+	if err := store.SaveAgentSession(roomID, joinName, sid); err != nil {
+		fmt.Fprintf(os.Stderr, "join: warning: could not save session ID: %v\n", err)
+	}
 }
