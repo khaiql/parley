@@ -24,10 +24,11 @@ import (
 )
 
 var (
-	joinPort   int
-	joinName   string
-	joinRole   string
-	joinResume bool
+	joinPort      int
+	joinName      string
+	joinRole      string
+	joinResume    bool
+	joinAgentType string
 )
 
 var joinCmd = &cobra.Command{
@@ -42,6 +43,7 @@ func init() {
 	joinCmd.Flags().StringVar(&joinName, "name", "", "Your name in the session (random if not set)")
 	joinCmd.Flags().StringVar(&joinRole, "role", "agent", "Your role in the session")
 	joinCmd.Flags().BoolVar(&joinResume, "resume", false, "Resume prior agent session (looks up session ID from saved agents.json)")
+	joinCmd.Flags().StringVarP(&joinAgentType, "agent-type", "t", protocol.AgentTypeClaude, fmt.Sprintf("Agent type (%s)", strings.Join(protocol.SupportedAgentTypes(), ", ")))
 	joinCmd.Flags().SetInterspersed(false)
 	_ = joinCmd.MarkFlagRequired("port")
 
@@ -66,7 +68,8 @@ func runJoin(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "No --name provided, using: %s\n", joinName)
 	}
 
-	agentCmd, agentArgs := parseAgentArgs(cmd, args)
+	agentType := protocol.NormalizeAgentType(joinAgentType)
+	extraArgs := parseExtraArgs(cmd, args)
 
 	c, err := client.New(fmt.Sprintf("localhost:%d", joinPort))
 	if err != nil {
@@ -74,7 +77,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	}
 	defer c.Close()
 
-	roomState, err := joinRoom(c, agentCmd)
+	roomState, err := joinRoom(c, agentType)
 	if err != nil {
 		return err
 	}
@@ -82,7 +85,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	store := persistence.NewJSONStore(defaultParleyDir())
 	resumeSessionID := lookupResumeSession(store, roomState.RoomID)
 
-	d, err := startAgent(agentArgs, roomState, resumeSessionID)
+	d, err := startAgent(agentType, extraArgs, roomState, resumeSessionID)
 	if err != nil {
 		return err
 	}
@@ -110,27 +113,13 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	return err
 }
 
-// parseAgentArgs extracts the agent command and arguments from CLI args after "--".
-func parseAgentArgs(cmd *cobra.Command, args []string) (string, []string) {
-	var agentArgs []string
+// parseExtraArgs extracts extra arguments after "--" to pass through to the agent executable.
+func parseExtraArgs(cmd *cobra.Command, args []string) []string {
 	dashPos := cmd.Flags().ArgsLenAtDash()
 	if dashPos >= 0 {
-		agentArgs = args[dashPos:]
+		return args[dashPos:]
 	}
-
-	agentCmd := protocol.AgentTypeClaude
-	if len(agentArgs) > 0 {
-		base := agentArgs[0]
-		switch {
-		case strings.Contains(base, "gemini"):
-			agentCmd = protocol.AgentTypeGemini
-		case strings.Contains(base, "codex"):
-			agentCmd = protocol.AgentTypeCodex
-		default:
-			agentCmd = protocol.AgentTypeClaude
-		}
-	}
-	return agentCmd, agentArgs
+	return nil
 }
 
 // joinRoom sends a join request and waits for the room.state response.
@@ -186,13 +175,9 @@ func lookupResumeSession(store *persistence.JSONStore, roomID string) string {
 }
 
 // startAgent creates and starts the agent driver subprocess.
-func startAgent(agentArgs []string, roomState protocol.RoomStateParams, resumeSessionID string) (driver.AgentDriver, error) {
-	cmdName := "claude"
-	var extraArgs []string
-	if len(agentArgs) > 0 {
-		cmdName = agentArgs[0]
-		extraArgs = agentArgs[1:]
-	}
+func startAgent(agentType string, extraArgs []string, roomState protocol.RoomStateParams, resumeSessionID string) (driver.AgentDriver, error) {
+	cmdName := protocol.DefaultCommand(agentType)
+	allArgs := append(protocol.DefaultArgs(agentType), extraArgs...)
 
 	dir, _ := os.Getwd()
 	repo := detectRepo()
@@ -205,7 +190,7 @@ func startAgent(agentArgs []string, roomState protocol.RoomStateParams, resumeSe
 
 	config := driver.AgentConfig{
 		Command:         cmdName,
-		Args:            extraArgs,
+		Args:            allArgs,
 		Name:            joinName,
 		Role:            joinRole,
 		Directory:       dir,
@@ -219,7 +204,7 @@ func startAgent(agentArgs []string, roomState protocol.RoomStateParams, resumeSe
 	config.SystemPrompt = driver.BuildSystemPrompt(config)
 
 	ctx := context.Background()
-	d, err := driver.NewDriver(cmdName)
+	d, err := driver.NewDriver(agentType)
 	if err != nil {
 		return nil, fmt.Errorf("join: %w", err)
 	}
@@ -227,9 +212,9 @@ func startAgent(agentArgs []string, roomState protocol.RoomStateParams, resumeSe
 		return nil, fmt.Errorf("join: start agent driver: %w", err)
 	}
 
-	// For drivers that don't consume InitialMessage in Start() (e.g. Claude),
-	// send the intro explicitly.
-	if _, isGemini := d.(*driver.GeminiDriver); !isGemini {
+	// For drivers that consume InitialMessage in Start() (e.g. Gemini, Rovodev),
+	// skip the explicit send.
+	if !driver.ConsumesInitialMessage(agentType) {
 		if err := d.Send(intro); err != nil {
 			_ = d.Stop()
 			return nil, fmt.Errorf("join: send initial prompt: %w", err)

@@ -270,3 +270,52 @@ func TestJoinParamsEncodeDecodeRoundTrip(t *testing.T) {
 		t.Errorf("AgentType mismatch: got %q", decoded.AgentType)
 	}
 }
+
+func TestDefaultCommand(t *testing.T) {
+	tests := []struct {
+		agentType string
+		want      string
+	}{
+		{protocol.AgentTypeClaude, "claude"},
+		{" Claude ", "claude"},
+		{protocol.AgentTypeGemini, "gemini"},
+		{"GeMiNi", "gemini"},
+		{protocol.AgentTypeRovodev, "acli"},
+		{"ROVODEV", "acli"},
+		{protocol.AgentTypeCodex, "claude"},
+	}
+	for _, tt := range tests {
+		if got := protocol.DefaultCommand(tt.agentType); got != tt.want {
+			t.Errorf("DefaultCommand(%q) = %q, want %q", tt.agentType, got, tt.want)
+		}
+	}
+}
+
+func TestDefaultArgs(t *testing.T) {
+	args := protocol.DefaultArgs(protocol.AgentTypeRovodev)
+	if len(args) != 0 {
+		t.Errorf("DefaultArgs(rovodev) = %v, want nil", args)
+	}
+	if args := protocol.DefaultArgs("RoVoDeV"); len(args) != 0 {
+		t.Errorf("DefaultArgs(RoVoDeV) = %v, want nil", args)
+	}
+	if args := protocol.DefaultArgs(protocol.AgentTypeClaude); len(args) != 0 {
+		t.Errorf("DefaultArgs(claude) = %v, want nil", args)
+	}
+}
+
+func TestNormalizeAgentType(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"claude", "claude"},
+		{" Gemini ", "gemini"},
+		{"ROVODEV", "rovodev"},
+	}
+	for _, tt := range tests {
+		if got := protocol.NormalizeAgentType(tt.input); got != tt.want {
+			t.Errorf("NormalizeAgentType(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

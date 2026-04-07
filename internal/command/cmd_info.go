@@ -35,14 +35,13 @@ var InfoCommand = &Command{
 
 				// Show resume hint for offline agents.
 				if !p.Online && p.AgentType != "" {
-					agentCmd := p.AgentType
-					info += fmt.Sprintf("      resume: parley join --port %d --name %s --resume -- %s\n", port, p.Name, agentCmd)
+					info += fmt.Sprintf("      resume: parley join --port %d --name %s -t %s --resume\n", port, p.Name, p.AgentType)
 				}
 			}
 		}
 
 		// Ready-to-copy join command.
-		info += fmt.Sprintf("\nJoin command:\n  parley join --port %d -- claude\n", port)
+		info += fmt.Sprintf("\nJoin command:\n  parley join --port %d -t claude\n", port)
 
 		return Result{Modal: &ModalContent{Title: "Room Info", Body: info}}
 	},

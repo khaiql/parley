@@ -15,7 +15,7 @@
          │   • Alice (backend) [online] — /home/alice/project         │         
          │                                                            │         
          │ Join command:                                              │         
-         │   parley join --port 1234 -- claude                        │         
+         │   parley join --port 1234 -t claude                        │         
          │                                                            │         
          │ esc · q  close                                             │         
          ╰────────────────────────────────────────────────────────────╯         

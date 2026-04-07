@@ -118,7 +118,7 @@ func TestVisualModal80x24(t *testing.T) {
 	// a command registry wired up.
 	content := &command.ModalContent{
 		Title: "Room Info",
-		Body:  "Room: test-room\nTopic: test topic\nPort: 1234\nParticipants: 2\nMessages: 5\n\nParticipants:\n  • sle (human) [online]\n  • Alice (backend) [online] — /home/alice/project\n\nJoin command:\n  parley join --port 1234 -- claude\n",
+		Body:  "Room: test-room\nTopic: test topic\nPort: 1234\nParticipants: 2\nMessages: 5\n\nParticipants:\n  • sle (human) [online]\n  • Alice (backend) [online] — /home/alice/project\n\nJoin command:\n  parley join --port 1234 -t claude\n",
 	}
 	modal := NewModal(content, 80, 24)
 	app.modal = &modal
