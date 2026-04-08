@@ -60,6 +60,8 @@ type App struct {
 	localParticipants []protocol.Participant
 	localActivities   map[string]room.Activity
 
+	spinnerFrame int // current braille spinner frame index
+
 	width  int
 	height int
 }
@@ -232,7 +234,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, tea.Quit
 
 	case SpinnerTickMsg:
-		a.sidebar.TickSpinner()
+		brailleFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		a.spinnerFrame = (a.spinnerFrame + 1) % len(brailleFrames)
+		a.sidebar.SetSpinnerView(brailleFrames[a.spinnerFrame])
 		if isAnyGenerating(a.localActivities) {
 			return a, spinnerTick()
 		}
