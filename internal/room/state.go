@@ -189,10 +189,17 @@ func (s *State) Join(name, role, dir, repo, agentType, source string) (protocol.
 		}
 	}
 
+	// Assign colour for non-human participants.
+	var colour string
+	if source != "human" {
+		colour = AssignColour(s.usedColours())
+	}
+
 	// New participant.
 	s.participants = append(s.participants, protocol.Participant{
 		Name:      name,
 		Role:      role,
+		Color:     colour,
 		Directory: dir,
 		Repo:      repo,
 		AgentType: agentType,
@@ -201,6 +208,17 @@ func (s *State) Join(name, role, dir, repo, agentType, source string) (protocol.
 	})
 	s.emitParticipantsChanged()
 	return s.stateSnapshot(), nil
+}
+
+// usedColours returns all colours currently assigned to participants.
+func (s *State) usedColours() []string {
+	var colours []string
+	for _, p := range s.participants {
+		if p.Color != "" {
+			colours = append(colours, p.Color)
+		}
+	}
+	return colours
 }
 
 // Leave marks the named participant as offline. No-op if name is not found.

@@ -149,6 +149,7 @@ type JoinParams struct {
 type JoinedParams struct {
 	Name      string    `json:"name"`
 	Role      string    `json:"role"`
+	Color     string    `json:"color,omitempty"`
 	Directory string    `json:"directory,omitempty"`
 	Repo      string    `json:"repo,omitempty"`
 	AgentType string    `json:"agent_type,omitempty"`

@@ -120,6 +120,26 @@ func TestHandleServerMessage_RoomJoined_EmitsParticipantsChanged(t *testing.T) {
 	noMoreEvents(t, ch)
 }
 
+func TestDispatch_Joined_ForwardsColor(t *testing.T) {
+	s := New(nil, command.Context{})
+
+	joined := protocol.JoinedParams{
+		Name:      "bot1",
+		Role:      "agent",
+		Color:     "#a78bfa",
+		AgentType: "claude",
+	}
+	s.HandleServerMessage(rawMsg(t, protocol.MethodJoined, joined))
+
+	ps := s.Participants()
+	if len(ps) != 1 {
+		t.Fatalf("expected 1 participant, got %d", len(ps))
+	}
+	if ps[0].Color != "#a78bfa" {
+		t.Errorf("expected Color %q, got %q", "#a78bfa", ps[0].Color)
+	}
+}
+
 func TestHandleServerMessage_RoomLeft_EmitsParticipantsChanged(t *testing.T) {
 	s := New(nil, command.Context{})
 	// Pre-populate a participant.
