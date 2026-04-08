@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -92,31 +93,64 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	store := persistence.NewJSONStore(defaultParleyDir())
 	resumeSessionID := lookupResumeSession(store, roomState.RoomID)
 
-	d, err := startAgent(agentType, extraArgs, roomState, resumeSessionID)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = d.Stop() }()
-
 	rs := room.New(nil, command.Context{})
 	app := tui.NewApp(roomState.Topic, joinPort, tui.InputModeAgent, joinName, nil, roomState.Participants...)
 	app.SetAgent(joinName, joinRole)
 	app.SetYolo(roomState.AutoApprove)
 	app.SetRoomState(rs)
+	app.SetInitializing(true, agentType)
 
 	p := tea.NewProgram(app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	bridgeEvents(p, rs)
 	replayRoomState(rs, roomState)
-	disp := startDispatcher(rs, d)
-	defer disp.Close()
 	startJoinNetworkLoop(c, rs, p)
-	startAgentBridge(c, d, p)
+
+	// Agent starts in background; TUI shows loading screen immediately.
+	var (
+		mu        sync.Mutex
+		theDriver driver.AgentDriver
+		theDisp   *dispatcher.Debounce
+		agentErr  error
+	)
+	go func() {
+		d, err := startAgent(agentType, extraArgs, roomState, resumeSessionID)
+		if err != nil {
+			mu.Lock()
+			agentErr = err
+			mu.Unlock()
+			p.Send(tui.AgentStartFailedMsg{Err: err})
+			return
+		}
+		disp := startDispatcher(rs, d)
+		mu.Lock()
+		theDriver = d
+		theDisp = disp
+		mu.Unlock()
+		p.Send(tui.AgentReadyMsg{})
+		startAgentBridge(c, d, p)
+	}()
 
 	_, err = p.Run()
 
 	rs.Close()
-	saveAgentSession(store, roomState.RoomID, d)
+
+	mu.Lock()
+	d := theDriver
+	disp := theDisp
+	startErr := agentErr
+	mu.Unlock()
+
+	if disp != nil {
+		disp.Close()
+	}
+	if d != nil {
+		_ = d.Stop()
+		saveAgentSession(store, roomState.RoomID, d)
+	}
+	if startErr != nil {
+		return fmt.Errorf("join: start agent driver: %w", startErr)
+	}
 	return err
 }
 
