@@ -195,8 +195,11 @@ git commit -m "feat: add colour palette and assignment logic to room package (#7
 ### Task 3: Integrate colour assignment into `room.State.Join()`
 
 **Files:**
-- Modify: `internal/room/state.go:172-203`
+- Modify: `internal/room/state.go` (Join method, ~lines 172-203)
 - Modify: `internal/room/state_test.go`
+- Modify: `internal/protocol/protocol.go` (add Color to JoinedParams)
+- Modify: `internal/server/server.go` (populate JoinedParams.Color from assigned participant)
+- Modify: `internal/room/dispatch.go` (forward Color from JoinedParams to Participant)
 
 - [ ] **Step 1: Write failing tests for colour assignment on join**
 
@@ -345,15 +348,107 @@ func (s *State) usedColours() []string {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Run room tests to verify they pass**
 
 Run: `go test ./internal/room/... -v`
 Expected: ALL PASS (new tests + existing tests)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Add `Color` to `JoinedParams`**
+
+In `internal/protocol/protocol.go`, add `Color` to `JoinedParams`:
+
+```go
+// JoinedParams is the server-side confirmation payload for "room/joined".
+type JoinedParams struct {
+	Name      string    `json:"name"`
+	Role      string    `json:"role"`
+	Color     string    `json:"color,omitempty"`
+	Directory string    `json:"directory,omitempty"`
+	Repo      string    `json:"repo,omitempty"`
+	AgentType string    `json:"agent_type,omitempty"`
+	JoinedAt  time.Time `json:"joined_at"`
+}
+```
+
+- [ ] **Step 6: Populate `JoinedParams.Color` in server.go**
+
+In `internal/server/server.go`, after `s.state.Join()` succeeds, the assigned colour can be found in the returned snapshot's participant list. Update the `jp` construction (around line 162) to look up the colour:
+
+```go
+// Find the newly joined participant's assigned colour from the state snapshot.
+var assignedColor string
+for _, p := range stateParams.Participants {
+	if p.Name == params.Name {
+		assignedColor = p.Color
+		break
+	}
+}
+
+// Notify other participants.
+jp := protocol.JoinedParams{
+	Name:      params.Name,
+	Role:      effectiveRole,
+	Color:     assignedColor,
+	Directory: params.Directory,
+	Repo:      params.Repo,
+	AgentType: params.AgentType,
+	JoinedAt:  time.Now().UTC(),
+}
+```
+
+Note: `stateParams` is the return value of `s.state.Join()` — verify this variable name by reading the existing handler code.
+
+- [ ] **Step 7: Forward `Color` in dispatch.go**
+
+In `internal/room/dispatch.go`, update the `MethodJoined` handler (around line 78) to include `Color` when constructing the `Participant`:
+
+```go
+p := protocol.Participant{
+	Name:      params.Name,
+	Role:      params.Role,
+	Color:     params.Color,
+	Directory: params.Directory,
+	Repo:      params.Repo,
+	AgentType: params.AgentType,
+	Online:    true,
+}
+```
+
+- [ ] **Step 8: Write test for dispatch forwarding the colour**
+
+Add to `internal/room/dispatch_test.go` (find the existing `MethodJoined` test around line 92):
+
+```go
+func TestDispatch_Joined_ForwardsColor(t *testing.T) {
+	s := New(nil, command.Context{})
+
+	joined := protocol.JoinedParams{
+		Name:      "bot1",
+		Role:      "agent",
+		Color:     "#a78bfa",
+		AgentType: "claude",
+	}
+	s.HandleServerMessage(rawMsg(t, protocol.MethodJoined, joined))
+
+	ps := s.Participants()
+	if len(ps) != 1 {
+		t.Fatalf("expected 1 participant, got %d", len(ps))
+	}
+	if ps[0].Color != "#a78bfa" {
+		t.Errorf("expected Color %q, got %q", "#a78bfa", ps[0].Color)
+	}
+}
+```
+
+- [ ] **Step 9: Run all tests**
+
+Run: `go test ./internal/... -timeout 30s`
+Expected: ALL PASS
+
+- [ ] **Step 10: Commit**
 
 ```bash
-git add internal/room/state.go internal/room/state_test.go
+git add internal/room/state.go internal/room/state_test.go internal/protocol/protocol.go internal/server/server.go internal/room/dispatch.go internal/room/dispatch_test.go
 git commit -m "feat: assign unique colour to agents on join (#75)"
 ```
 
