@@ -188,27 +188,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Normal input handling (StateNormal, or Enter fell through from StateCompleting).
 		if m.Type == tea.KeyEnter && a.input.mode == InputModeHuman {
-			text := a.input.Value()
-			text = strings.TrimSpace(text)
-			if text != "" {
-				a.input.Reset()
-				if a.registry != nil && command.IsCommand(text) {
-					result := a.registry.Execute(a.cmdCtx, text)
-					if result.Error != nil {
-						a.chat.AddMessage(systemMessage(result.Error.Error()))
-					} else if result.Modal != nil {
-						modal := NewModal(result.Modal, a.width, a.height)
-						a.modal = &modal
-					} else if result.LocalMessage != "" {
-						a.chat.AddMessage(systemMessage(result.LocalMessage))
-					}
-					return a, nil
-				}
-				mentions := protocol.ParseMentions(text)
-				if a.sendFn != nil {
-					a.sendFn(text, mentions)
-				}
-			}
+			a.handleEnterKey()
 			return a, nil
 		}
 
@@ -377,6 +357,32 @@ func (a *App) layout() {
 	a.input.SetWidth(a.width)
 	a.statusbar.SetWidth(a.width)
 	a.suggestions.SetWidth(a.width)
+}
+
+// handleEnterKey processes a human Enter keypress: trims input, dispatches slash
+// commands or sends a chat message.
+func (a *App) handleEnterKey() {
+	text := strings.TrimSpace(a.input.Value())
+	if text == "" {
+		return
+	}
+	a.input.Reset()
+	if a.registry != nil && command.IsCommand(text) {
+		result := a.registry.Execute(a.cmdCtx, text)
+		if result.Error != nil {
+			a.chat.AddMessage(systemMessage(result.Error.Error()))
+		} else if result.Modal != nil {
+			modal := NewModal(result.Modal, a.width, a.height)
+			a.modal = &modal
+		} else if result.LocalMessage != "" {
+			a.chat.AddMessage(systemMessage(result.LocalMessage))
+		}
+		return
+	}
+	mentions := protocol.ParseMentions(text)
+	if a.sendFn != nil {
+		a.sendFn(text, mentions)
+	}
 }
 
 // populateSlashSuggestions fills the suggestion list with available commands.

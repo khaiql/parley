@@ -236,7 +236,6 @@ func TestSidebarViewSectionHeader(t *testing.T) {
 	}
 }
 
-
 func TestSidebarAgentWithSourceHumanGetsAgentColor(t *testing.T) {
 	// Real-world case: agents join with Source="human" but Role != "human".
 	// Only the actual human (Role="human") should get orange.
