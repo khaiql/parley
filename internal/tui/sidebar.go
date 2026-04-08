@@ -134,7 +134,7 @@ func (s Sidebar) View() string {
 		}
 
 		// Name line
-		senderColor := ColorForSender(p.Name, false, p.Color)
+		senderColor := ColorForSender(p.Name, p.IsHuman(), p.Color)
 		var nameLine string
 		if p.IsHuman() {
 			nameLine = humanNameStyle.Render(p.Name)

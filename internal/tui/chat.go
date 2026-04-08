@@ -26,6 +26,9 @@ type Chat struct {
 }
 
 // SetParticipantColors updates the name→color mapping used for message rendering.
+// This is a merge (not replace): entries for participants that leave are retained
+// so historical messages from departed participants keep their original colour.
+// Only non-empty colours are written to the map.
 func (c *Chat) SetParticipantColors(participants []protocol.Participant) {
 	if c.colorMap == nil {
 		c.colorMap = make(map[string]string)
