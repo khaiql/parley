@@ -188,6 +188,49 @@ func TestJSONStore_AgentSessions(t *testing.T) {
 	}
 }
 
+func TestJSONStore_SaveLoad_PreservesColor(t *testing.T) {
+	tmpDir := t.TempDir()
+	store := NewJSONStore(tmpDir)
+
+	snapshot := protocol.RoomSnapshot{
+		RoomID: "room-1",
+		Topic:  "test",
+		Participants: []protocol.Participant{
+			{Name: "bot1", Role: "agent", Color: "#a78bfa", Source: "agent", AgentType: "claude"},
+			{Name: "alice", Role: "human", Source: "human"}, // no colour
+		},
+		Messages: nil,
+	}
+
+	if err := store.Save(snapshot); err != nil {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	loaded, err := store.Load("room-1")
+	if err != nil {
+		t.Fatalf("load failed: %v", err)
+	}
+
+	if len(loaded.Participants) != 2 {
+		t.Fatalf("expected 2 participants, got %d", len(loaded.Participants))
+	}
+
+	// Find bot1 and verify its colour was preserved
+	var bot1 *protocol.Participant
+	for i, p := range loaded.Participants {
+		if p.Name == "bot1" {
+			bot1 = &loaded.Participants[i]
+			break
+		}
+	}
+	if bot1 == nil {
+		t.Fatal("bot1 not found in loaded participants")
+	}
+	if bot1.Color != "#a78bfa" {
+		t.Errorf("expected bot1.Color = %q, got %q", "#a78bfa", bot1.Color)
+	}
+}
+
 func TestJSONStore_SavePreservesExistingSessionIDs(t *testing.T) {
 	dir := t.TempDir()
 	store := NewJSONStore(dir)

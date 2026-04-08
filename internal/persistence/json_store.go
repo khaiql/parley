@@ -40,6 +40,7 @@ type roomData struct {
 type agentData struct {
 	Name      string `json:"name"`
 	Role      string `json:"role"`
+	Color     string `json:"color,omitempty"`
 	Directory string `json:"directory"`
 	Repo      string `json:"repo,omitempty"`
 	AgentType string `json:"agent_type,omitempty"`
@@ -84,6 +85,7 @@ func (s *JSONStore) Save(snapshot protocol.RoomSnapshot) error {
 		ad := agentData{
 			Name:      p.Name,
 			Role:      p.Role,
+			Color:     p.Color,
 			Directory: p.Directory,
 			Repo:      p.Repo,
 			AgentType: p.AgentType,
@@ -123,6 +125,7 @@ func (s *JSONStore) Load(roomID string) (protocol.RoomSnapshot, error) {
 		participants = append(participants, protocol.Participant{
 			Name:      a.Name,
 			Role:      a.Role,
+			Color:     a.Color,
 			Directory: a.Directory,
 			Repo:      a.Repo,
 			AgentType: a.AgentType,
