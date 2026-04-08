@@ -37,14 +37,8 @@ func (s *StatusBar) SetYolo(y bool) {
 func (s StatusBar) View() string {
 	barBg := lipgloss.NewStyle().Background(colorSidebarBg)
 
-	helpStyle := lipgloss.NewStyle().
-		Bold(true).
-		Background(colorStatusBarBg).
-		Foreground(colorText).
-		Padding(0, 1)
-
-	// Left: help, plus optional YOLO badge.
-	left := helpStyle.Render("? help")
+	// Left: optional YOLO badge.
+	var left string
 	if s.yolo {
 		yoloStyle := lipgloss.NewStyle().
 			Bold(true).

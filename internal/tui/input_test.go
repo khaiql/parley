@@ -131,6 +131,72 @@ func TestInput_ReplaceRange_AtStart(t *testing.T) {
 	}
 }
 
+// TestInputAgentMode_HeightExpandsWithLongText verifies that Height() grows
+// beyond minInputLines when the agent text wraps to multiple lines.
+func TestInputAgentMode_HeightExpandsWithLongText(t *testing.T) {
+	inp := NewInput()
+	inp.SetMode(InputModeAgent)
+	inp.SetWidth(40) // narrow enough to force wrapping
+
+	// Default height before text is set.
+	defaultHeight := inp.Height()
+
+	// Set text that will definitely wrap to many lines.
+	inp.SetAgentText(strings.Repeat("word ", 50)) // lots of words
+	expandedHeight := inp.Height()
+
+	if expandedHeight <= defaultHeight {
+		t.Errorf("expected Height() to expand beyond %d for long agent text, got %d", defaultHeight, expandedHeight)
+	}
+	if expandedHeight > maxInputLines+1 { // +1 for border
+		t.Errorf("expected Height() to be capped at %d, got %d", maxInputLines+1, expandedHeight)
+	}
+}
+
+// TestInputAgentMode_MultipleWrappedLinesVisible verifies that View() shows
+// multiple lines of wrapped agent text (not just the last line).
+func TestInputAgentMode_MultipleWrappedLinesVisible(t *testing.T) {
+	inp := NewInput()
+	inp.SetMode(InputModeAgent)
+	inp.SetWidth(40) // narrow enough to force wrapping
+
+	// Set text that wraps to at least 3 lines at width=40.
+	// 40 chars of padding minus borders/padding leaves ~34 usable chars per line.
+	text := strings.Repeat("abcdefghij ", 10) // 110 chars, wraps to 3+ lines
+	inp.SetAgentText(text)
+
+	view := inp.View()
+	plain := stripANSI(view)
+
+	// Count non-empty lines in the rendered output. Expect at least 3:
+	// the border-top line plus at least 2 content lines.
+	lines := strings.Split(plain, "\n")
+	nonEmpty := 0
+	for _, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			nonEmpty++
+		}
+	}
+	if nonEmpty < 3 {
+		t.Errorf("expected at least 3 non-empty lines (border + 2+ content lines) for long agent text, got %d:\n%s", nonEmpty, plain)
+	}
+}
+
+// TestInputAgentMode_HeightMinimumWhenShortText verifies that a short agent
+// text (one line) still returns the minimum height.
+func TestInputAgentMode_HeightMinimumWhenShortText(t *testing.T) {
+	inp := NewInput()
+	inp.SetMode(InputModeAgent)
+	inp.SetWidth(80)
+	inp.SetAgentText("short text")
+
+	h := inp.Height()
+	expected := minInputLines + 1 // +1 for border
+	if h != expected {
+		t.Errorf("expected min height %d for short agent text, got %d", expected, h)
+	}
+}
+
 func TestNewInput_CustomKeyMap(t *testing.T) {
 	inp := NewInput()
 

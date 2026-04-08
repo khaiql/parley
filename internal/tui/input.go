@@ -88,6 +88,17 @@ func (i *Input) Reset() {
 	i.ta.Reset()
 }
 
+// agentLines returns how many lines the current agentText wraps to at the
+// current content width. Returns 1 when there is no text or no width yet.
+func (i Input) agentLines() int {
+	if i.agentText == "" || i.width == 0 {
+		return 1
+	}
+	cw := i.contentWidth()
+	wrapped := lipgloss.NewStyle().Width(cw).Render(i.agentText)
+	return strings.Count(wrapped, "\n") + 1
+}
+
 // Height returns the total height the input component needs (content lines + border).
 func (i Input) Height() int {
 	lines := minInputLines
@@ -98,9 +109,14 @@ func (i Input) Height() int {
 		if n > lines {
 			lines = n
 		}
-		if lines > maxInputLines {
-			lines = maxInputLines
+	} else {
+		n := i.agentLines()
+		if n > lines {
+			lines = n
 		}
+	}
+	if lines > maxInputLines {
+		lines = maxInputLines
 	}
 	return lines + 1 // +1 for border-top
 }
@@ -142,12 +158,20 @@ func (i Input) View() string {
 	switch i.mode {
 	case InputModeAgent:
 		if i.agentText != "" {
-			// Wrap the streaming text to the content width, then show the last line
+			// Wrap the streaming text to the content width, then show the last
+			// N lines that fit within the current height.
 			wrapped := lipgloss.NewStyle().Width(cw).Render(i.agentText)
 			lines := strings.Split(wrapped, "\n")
-			lastLine := lines[len(lines)-1]
-			content = lipgloss.NewStyle().Foreground(colorPrimary).Render(lastLine) +
-				systemMsgStyle.Render(" ▊")
+			maxLines := i.Height() - 1 // -1 for border-top
+			if len(lines) > maxLines {
+				lines = lines[len(lines)-maxLines:]
+			}
+			rendered := make([]string, len(lines))
+			for j, line := range lines {
+				rendered[j] = lipgloss.NewStyle().Foreground(colorPrimary).Render(line)
+			}
+			rendered[len(rendered)-1] += systemMsgStyle.Render(" ▊")
+			content = strings.Join(rendered, "\n")
 		} else {
 			content = lipgloss.NewStyle().Foreground(colorDimText).Render("(waiting for messages…)")
 		}
