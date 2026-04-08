@@ -521,3 +521,49 @@ func TestApp_SingleEsc_DoesNotClear(t *testing.T) {
 		t.Error("single Esc should not clear input")
 	}
 }
+
+func TestApp_LoadingScreen_ViewShowsCenteredText(t *testing.T) {
+	a := makeApp()
+	a.SetInitializing(true, "claude")
+
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
+
+	view := stripANSI(a.View())
+	if !strings.Contains(view, "Starting claude") {
+		t.Errorf("loading screen should contain 'Starting claude', got:\n%s", view)
+	}
+	if strings.Contains(view, "PARTICIPANTS") {
+		t.Errorf("loading screen should not show sidebar, got:\n%s", view)
+	}
+}
+
+func TestApp_AgentReadyMsg_ExitsLoadingScreen(t *testing.T) {
+	a := makeApp()
+	a.SetInitializing(true, "claude")
+
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
+
+	model, _ = a.Update(AgentReadyMsg{})
+	a = model.(App)
+
+	if a.initializing {
+		t.Error("expected initializing=false after AgentReadyMsg")
+	}
+	view := stripANSI(a.View())
+	if strings.Contains(view, "Starting claude") {
+		t.Errorf("after AgentReadyMsg, should show chat not loading screen")
+	}
+}
+
+func TestApp_AgentStartFailedMsg_ReturnsQuit(t *testing.T) {
+	a := makeApp()
+	a.SetInitializing(true, "claude")
+
+	_, cmd := a.Update(AgentStartFailedMsg{Err: fmt.Errorf("process failed")})
+
+	if cmd == nil {
+		t.Error("expected tea.Quit command from AgentStartFailedMsg")
+	}
+}

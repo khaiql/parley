@@ -29,6 +29,16 @@ type LocalSystemMsg struct {
 	Text string
 }
 
+// AgentReadyMsg signals that the agent subprocess started successfully.
+// The App transitions from the loading screen to the full chat layout.
+type AgentReadyMsg struct{}
+
+// AgentStartFailedMsg signals that the agent subprocess failed to start.
+// The App quits so the caller can return the error.
+type AgentStartFailedMsg struct {
+	Err error
+}
+
 // App is the root Bubble Tea model that composes all TUI components.
 type App struct {
 	topbar          TopBar
@@ -53,6 +63,9 @@ type App struct {
 
 	spinner spinner.Model
 
+	initializing  bool
+	agentTypeName string
+
 	width  int
 	height int
 }
@@ -61,6 +74,13 @@ type App struct {
 // state management. The TUI does not use this yet (wired in Task 7).
 func (a *App) SetRoomState(s *room.State) {
 	a.roomState = s
+}
+
+// SetInitializing puts the App into loading-screen mode.
+// agentType is shown in the loading text (e.g. "claude", "gemini").
+func (a *App) SetInitializing(v bool, agentType string) {
+	a.initializing = v
+	a.agentTypeName = agentType
 }
 
 // NewApp creates an App with the given topic, port, input mode, display name,
@@ -111,7 +131,9 @@ func (a *App) SetCommandRegistry(reg *command.Registry, ctx command.Context) {
 
 // Init satisfies tea.Model. Returns textarea.Blink to animate the cursor.
 func (a App) Init() tea.Cmd {
-
+	if a.initializing {
+		return tea.Batch(textarea.Blink, a.spinner.Tick)
+	}
 	return textarea.Blink
 }
 
@@ -231,7 +253,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		a.spinner, cmd = a.spinner.Update(m)
 		a.sidebar.SetSpinnerView(a.spinner.View())
-		if isAnyGenerating(a.localActivities) {
+		if a.initializing || isAnyGenerating(a.localActivities) {
 			return a, cmd
 		}
 		return a, nil // self-terminate
@@ -244,6 +266,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LocalSystemMsg:
 		a.chat.AddMessage(systemMessage(m.Text))
 		return a, nil
+
+	case AgentReadyMsg:
+		a.initializing = false
+		a.layout()
+		return a, nil
+
+	case AgentStartFailedMsg:
+		return a, tea.Quit
 	}
 
 	// Forward key events only to input, not chat (prevents scroll jumping).
@@ -305,6 +335,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View satisfies tea.Model. When a modal is active it renders full-screen;
 // otherwise renders topbar, chat+sidebar, and input stacked vertically.
 func (a App) View() string {
+	if a.initializing {
+		return a.loadingView()
+	}
 	if a.modal != nil {
 		return a.modal.View()
 	}
@@ -423,9 +456,17 @@ func (a *App) relayoutIfInputChanged() {
 	}
 }
 
+// loadingView renders a centered loading screen shown while the agent starts.
+func (a App) loadingView() string {
+	msg := lipgloss.NewStyle().
+		Foreground(colorDimText).
+		Render(a.spinner.View() + " Starting " + a.agentTypeName + "…")
+	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center, msg)
+}
+
 // maybeStartSpinner returns a.spinner.Tick if the spinner should be running.
 func (a *App) maybeStartSpinner() tea.Cmd {
-	if isAnyGenerating(a.localActivities) {
+	if a.initializing || isAnyGenerating(a.localActivities) {
 		return a.spinner.Tick
 	}
 	return nil
