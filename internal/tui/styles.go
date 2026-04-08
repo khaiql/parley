@@ -4,6 +4,7 @@ import (
 	"hash/fnv"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/khaiql/parley/internal/room"
 )
 
 var (
@@ -19,22 +20,21 @@ var (
 	colorStatusBarBg = lipgloss.Color("#30363d")
 )
 
-var agentPalette = []lipgloss.Color{
-	"#a78bfa", "#7dd3fc", "#34d399", "#fbbf24",
-	"#f472b6", "#60a5fa", "#a3e635", "#fb923c",
-}
-
-// ColorForSender returns a deterministic color for a participant.
-// Humans always get colorHuman; agents get a color from the palette
-// based on an FNV hash of their name.
-func ColorForSender(name string, isHuman bool) lipgloss.Color {
+// ColorForSender returns the display colour for a participant.
+// If assignedColor is non-empty, it is used directly (server-assigned).
+// Humans always get colorHuman. Agents with no assigned colour fall back
+// to FNV hash of name (for 9+ participants or legacy data).
+func ColorForSender(name string, isHuman bool, assignedColor string) lipgloss.Color {
 	if isHuman {
 		return colorHuman
 	}
+	if assignedColor != "" {
+		return lipgloss.Color(assignedColor)
+	}
 	h := fnv.New32a()
 	h.Write([]byte(name))
-	idx := int(h.Sum32()) % len(agentPalette)
-	return agentPalette[idx]
+	idx := int(h.Sum32()) % len(room.AgentPalette)
+	return lipgloss.Color(room.AgentPalette[idx])
 }
 
 // agentNameStyleFor returns a bold style with the given foreground color.

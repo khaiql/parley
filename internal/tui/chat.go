@@ -19,9 +19,22 @@ const timestampGap = 5 * time.Minute
 type Chat struct {
 	vp       viewport.Model
 	messages []protocol.MessageParams
+	colorMap map[string]string // name → assigned hex colour
 	loading  bool
 	width    int
 	height   int
+}
+
+// SetParticipantColors updates the name→color mapping used for message rendering.
+func (c *Chat) SetParticipantColors(participants []protocol.Participant) {
+	if c.colorMap == nil {
+		c.colorMap = make(map[string]string)
+	}
+	for _, p := range participants {
+		if p.Color != "" {
+			c.colorMap[p.Name] = p.Color
+		}
+	}
 }
 
 // NewChat creates a Chat component with the given dimensions.
@@ -59,7 +72,7 @@ func (c *Chat) LoadMessages(msgs []protocol.MessageParams) {
 
 // rebuildContent re-renders all messages into the viewport.
 func (c *Chat) rebuildContent() {
-	c.vp.SetContent(renderMessages(c.messages, c.width))
+	c.vp.SetContent(renderMessages(c.messages, c.width, c.colorMap))
 }
 
 // Update passes tea.Msg events to the underlying viewport (for scrolling).
@@ -150,7 +163,7 @@ func summarizeSystemRun(msgs []protocol.MessageParams) string {
 }
 
 // renderMessages renders a slice of messages with grouping, borders, and separators.
-func renderMessages(msgs []protocol.MessageParams, width int) string {
+func renderMessages(msgs []protocol.MessageParams, width int, colorMap map[string]string) string {
 	if len(msgs) == 0 {
 		return ""
 	}
@@ -177,7 +190,11 @@ func renderMessages(msgs []protocol.MessageParams, width int) string {
 
 		text := extractText(msg.Content)
 		isHuman := msg.IsHuman()
-		senderColor := ColorForSender(msg.From, isHuman)
+		assignedColor := ""
+		if colorMap != nil {
+			assignedColor = colorMap[msg.From]
+		}
+		senderColor := ColorForSender(msg.From, isHuman, assignedColor)
 		sameSender := msg.From == lastSender && lastSender != ""
 
 		// Determine whether to show timestamp.
@@ -198,7 +215,7 @@ func renderMessages(msgs []protocol.MessageParams, width int) string {
 		if bodyWidth < 1 {
 			bodyWidth = 1
 		}
-		body := highlightMentions(renderMarkdown(text, bodyWidth))
+		body := highlightMentions(renderMarkdown(text, bodyWidth), colorMap)
 		var content string
 		if !sameSender {
 			// First message in group: show header + blank line + body.
@@ -263,7 +280,7 @@ func renderHeader(msg protocol.MessageParams, isHuman bool, senderColor lipgloss
 // Handles Glamour-rendered text where ANSI codes may be interleaved with the @mention.
 var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
-func highlightMentions(text string) string {
+func highlightMentions(text string, colorMap map[string]string) string {
 	// Strip ANSI to find mention positions in plain text.
 	plain := ansiSeq.ReplaceAllString(text, "")
 	mentionRe := regexp.MustCompile(`@(\w+)`)
@@ -300,7 +317,11 @@ func highlightMentions(text string) string {
 		oStart := plainToOrig[pStart]
 		oEnd := plainToOrig[pEnd]
 
-		c := ColorForSender(name, false)
+		assignedColor := ""
+		if colorMap != nil {
+			assignedColor = colorMap[name]
+		}
+		c := ColorForSender(name, false, assignedColor)
 		styled := lipgloss.NewStyle().Bold(true).Foreground(c).Render("@" + name)
 		result = result[:oStart] + styled + result[oEnd:]
 	}
