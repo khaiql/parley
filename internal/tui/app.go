@@ -239,6 +239,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AgentTypingMsg:
 		a.input.SetAgentText(m.Text)
+		a.relayoutIfInputChanged()
 		return a, nil
 
 	case LocalSystemMsg:
@@ -296,9 +297,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Re-layout only if input height actually changed.
 	if a.width > 0 && a.height > 0 {
-		if a.input.Height() != a.lastInputHeight {
-			a.layout()
-		}
+		a.relayoutIfInputChanged()
 	}
 
 	return a, tea.Batch(cmds...)
@@ -414,6 +413,15 @@ func (a *App) populateMentionSuggestions() {
 		}
 	}
 	a.suggestions.SetItems(items)
+}
+
+// relayoutIfInputChanged calls layout() when the input height has changed since
+// the last layout pass. This avoids redundant relayouts and keeps Update's
+// cyclomatic complexity within the linter limit.
+func (a *App) relayoutIfInputChanged() {
+	if a.input.Height() != a.lastInputHeight {
+		a.layout()
+	}
 }
 
 // maybeStartSpinnerFromActivities returns a spinnerTick command if any

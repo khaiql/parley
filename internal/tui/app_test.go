@@ -477,6 +477,30 @@ func TestApp_DoubleEsc_ClearsInput(t *testing.T) {
 	}
 }
 
+// TestApp_AgentTypingMsg_TriggersRelayout verifies that when AgentTypingMsg causes
+// the input height to change, the app recalculates the chat viewport height.
+func TestApp_AgentTypingMsg_TriggersRelayout(t *testing.T) {
+	a := NewApp("test", 9000, InputModeAgent, "agent", nil)
+
+	// Give the app a size so layout is active.
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
+
+	chatHeightBefore := a.chat.vp.Height
+
+	// Send a long text that will wrap to many lines, expanding input height.
+	longText := strings.Repeat("word ", 100)
+	model, _ = a.Update(AgentTypingMsg{Text: longText})
+	a = model.(App)
+
+	chatHeightAfter := a.chat.vp.Height
+
+	// Chat viewport should shrink to make room for the expanded input.
+	if chatHeightAfter >= chatHeightBefore {
+		t.Errorf("expected chat height to shrink after agent text expansion: before=%d after=%d", chatHeightBefore, chatHeightAfter)
+	}
+}
+
 func TestApp_SingleEsc_DoesNotClear(t *testing.T) {
 	a := makeApp()
 	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
