@@ -277,8 +277,8 @@ func TestSidebarAgentWithSourceHumanGetsAgentColor(t *testing.T) {
 	view := s.View()
 
 	// sle should be in human orange (#f0883e)
-	sleColor := ColorForSender("sle", true)
-	atlasColor := ColorForSender("atlas", false)
+	sleColor := ColorForSender("sle", true, "")
+	atlasColor := ColorForSender("atlas", false, "")
 
 	if sleColor == atlasColor {
 		t.Fatalf("test invalid: sle and atlas should have different colors")
@@ -316,7 +316,7 @@ func TestSidebarColorLogicMatchesChat(t *testing.T) {
 
 	for _, tt := range tests {
 		isHuman := tt.role == "human" // must match sidebar.go logic
-		color := ColorForSender(tt.name, isHuman)
+		color := ColorForSender(tt.name, isHuman, "")
 		if isHuman && color != colorHuman {
 			t.Errorf("%s: role=%q should be human (orange), got %v", tt.name, tt.role, color)
 		}

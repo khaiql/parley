@@ -202,6 +202,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.localActivities = m.Activities
 		// Forward to existing components for rendering.
 		a.sidebar.SetParticipants(m.Participants)
+		a.chat.SetParticipantColors(m.Participants)
 		a.chat.SetLoading(false)
 		a.chat.LoadMessages(m.Messages)
 		a.statusbar.SetYolo(a.roomState != nil && a.roomState.AutoApprove())
@@ -215,6 +216,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case room.ParticipantsChanged:
 		a.localParticipants = m.Participants
 		a.sidebar.SetParticipants(m.Participants)
+		a.chat.SetParticipantColors(m.Participants)
 		return a, a.maybeStartSpinnerFromActivities()
 
 	case room.ParticipantActivityChanged:

@@ -130,11 +130,14 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 				return
 			}
 
-			// Capture the effective role from the state (may differ on reconnection).
+			// Capture the effective role and assigned colour from the state
+			// (may differ on reconnection).
 			effectiveRole := params.Role
+			var assignedColor string
 			for _, p := range stateParams.Participants {
 				if p.Name == params.Name {
 					effectiveRole = p.Role
+					assignedColor = p.Color
 					break
 				}
 			}
@@ -162,6 +165,7 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 			jp := protocol.JoinedParams{
 				Name:      params.Name,
 				Role:      effectiveRole,
+				Color:     assignedColor,
 				Directory: params.Directory,
 				Repo:      params.Repo,
 				AgentType: params.AgentType,

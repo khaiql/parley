@@ -175,7 +175,8 @@ func (s *State) Join(name, role, dir, repo, agentType, source string) (protocol.
 			if p.Online {
 				return protocol.RoomStateParams{}, fmt.Errorf("name already taken: %q", name)
 			}
-			// Reconnect offline participant.
+			// Reconnect offline participant — keep existing colour if present,
+			// otherwise back-fill for legacy rooms.
 			if role != "" {
 				s.participants[i].Role = role
 			}
@@ -184,15 +185,25 @@ func (s *State) Join(name, role, dir, repo, agentType, source string) (protocol.
 			s.participants[i].AgentType = agentType
 			s.participants[i].Source = source
 			s.participants[i].Online = true
+			if s.participants[i].Color == "" && source == "agent" {
+				s.participants[i].Color = AssignColour(s.usedColours())
+			}
 			s.emitParticipantsChanged()
 			return s.stateSnapshot(), nil
 		}
+	}
+
+	// Assign colour only for agent participants.
+	var colour string
+	if source == "agent" {
+		colour = AssignColour(s.usedColours())
 	}
 
 	// New participant.
 	s.participants = append(s.participants, protocol.Participant{
 		Name:      name,
 		Role:      role,
+		Color:     colour,
 		Directory: dir,
 		Repo:      repo,
 		AgentType: agentType,
@@ -201,6 +212,17 @@ func (s *State) Join(name, role, dir, repo, agentType, source string) (protocol.
 	})
 	s.emitParticipantsChanged()
 	return s.stateSnapshot(), nil
+}
+
+// usedColours returns all colours currently assigned to participants.
+func (s *State) usedColours() []string {
+	var colours []string
+	for _, p := range s.participants {
+		if p.Color != "" {
+			colours = append(colours, p.Color)
+		}
+	}
+	return colours
 }
 
 // Leave marks the named participant as offline. No-op if name is not found.

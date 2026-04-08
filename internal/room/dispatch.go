@@ -78,6 +78,7 @@ func (s *State) HandleServerMessage(raw *protocol.RawMessage) {
 		p := protocol.Participant{
 			Name:      params.Name,
 			Role:      params.Role,
+			Color:     params.Color,
 			Directory: params.Directory,
 			Repo:      params.Repo,
 			AgentType: params.AgentType,

@@ -134,17 +134,16 @@ func (s Sidebar) View() string {
 		}
 
 		// Name line
+		senderColor := ColorForSender(p.Name, p.IsHuman(), p.Color)
 		var nameLine string
 		if p.IsHuman() {
 			nameLine = humanNameStyle.Render(p.Name)
 		} else {
-			senderColor := ColorForSender(p.Name, false)
 			nameLine = agentNameStyleFor(senderColor).Render(p.Name)
 		}
 
 		// AgentType badge (instead of Role badge)
 		if p.AgentType != "" {
-			senderColor := ColorForSender(p.Name, false)
 			badge := agentBadgeStyleFor(senderColor).Render(p.AgentType)
 			nameLine = lipgloss.JoinHorizontal(lipgloss.Top, nameLine, " ", badge)
 		}
@@ -153,7 +152,6 @@ func (s Sidebar) View() string {
 		// Status display
 		status := s.statuses[p.Name]
 		if status == protocol.StatusGenerating {
-			senderColor := ColorForSender(p.Name, false)
 			frame := spinnerFrames[s.spinnerFrame%len(spinnerFrames)]
 			statusText := agentNameStyleFor(senderColor).Render(frame + " generating")
 			lines = append(lines, "  "+statusText)
