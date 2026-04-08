@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -13,16 +14,6 @@ import (
 )
 
 const sidebarWidth = 30
-
-// SpinnerTickMsg triggers a sidebar spinner frame advance.
-type SpinnerTickMsg struct{}
-
-// spinnerTick returns a tea.Cmd that sends a SpinnerTickMsg after 100ms.
-func spinnerTick() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
-		return SpinnerTickMsg{}
-	})
-}
 
 // AgentTypingMsg carries text to display in agent-typing mode.
 type AgentTypingMsg struct {
@@ -60,7 +51,7 @@ type App struct {
 	localParticipants []protocol.Participant
 	localActivities   map[string]room.Activity
 
-	spinnerFrame int // current braille spinner frame index
+	spinner spinner.Model
 
 	width  int
 	height int
@@ -95,6 +86,9 @@ func NewApp(topic string, port int, mode InputMode, _ string, sendFn func(string
 	// a stale copy. Suggestion population and hiding happen inline at the
 	// call sites in Update instead.
 	a.inputFSM = NewInputFSM(func(InputTrigger) {}, func() {})
+	sp := spinner.New()
+	sp.Spinner = spinner.Line
+	a.spinner = sp
 	return a
 }
 
@@ -208,7 +202,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.chat.SetLoading(false)
 		a.chat.LoadMessages(m.Messages)
 		a.statusbar.SetYolo(a.roomState != nil && a.roomState.AutoApprove())
-		return a, a.maybeStartSpinnerFromActivities()
+		return a, a.maybeStartSpinner()
 
 	case room.MessageReceived:
 		a.localMessages = append(a.localMessages, m.Message)
@@ -219,12 +213,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.localParticipants = m.Participants
 		a.sidebar.SetParticipants(m.Participants)
 		a.chat.SetParticipantColors(m.Participants)
-		return a, a.maybeStartSpinnerFromActivities()
+		return a, a.maybeStartSpinner()
 
 	case room.ParticipantActivityChanged:
 		a.localActivities[m.Name] = m.Activity
 		a.sidebar.SetParticipantStatus(m.Name, activityToStatus(m.Activity))
-		return a, a.maybeStartSpinnerFromActivities()
+		return a, a.maybeStartSpinner()
 
 	case room.ErrorOccurred:
 		a.chat.AddMessage(systemMessage(m.Error.Error()))
@@ -233,15 +227,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ServerDisconnectedMsg:
 		return a, tea.Quit
 
-	case SpinnerTickMsg:
-		brailleFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-		a.spinnerFrame = (a.spinnerFrame + 1) % len(brailleFrames)
-		a.sidebar.SetSpinnerView(brailleFrames[a.spinnerFrame])
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		a.spinner, cmd = a.spinner.Update(m)
+		a.sidebar.SetSpinnerView(a.spinner.View())
 		if isAnyGenerating(a.localActivities) {
-			return a, spinnerTick()
+			return a, cmd
 		}
-		// Self-terminates when no one is generating.
-		return a, nil
+		return a, nil // self-terminate
 
 	case AgentTypingMsg:
 		a.input.SetAgentText(m.Text)
@@ -430,12 +423,10 @@ func (a *App) relayoutIfInputChanged() {
 	}
 }
 
-// maybeStartSpinnerFromActivities returns a spinnerTick command if any
-// participant is generating. The spinner self-terminates in SpinnerTickMsg
-// when no one is generating — no flag needed.
-func (a *App) maybeStartSpinnerFromActivities() tea.Cmd {
+// maybeStartSpinner returns a.spinner.Tick if the spinner should be running.
+func (a *App) maybeStartSpinner() tea.Cmd {
 	if isAnyGenerating(a.localActivities) {
-		return spinnerTick()
+		return a.spinner.Tick
 	}
 	return nil
 }
