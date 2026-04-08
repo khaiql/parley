@@ -367,6 +367,55 @@ func TestState_Join_ReconnectKeepsColour(t *testing.T) {
 	}
 }
 
+func TestState_Join_AfterRestoreAvoidsUsedColour(t *testing.T) {
+	s := New(nil, command.Context{})
+
+	// Restore a room containing an offline agent with an assigned colour.
+	restoredColour := AgentPalette[0]
+	s.Restore("room-1", "topic", []protocol.Participant{
+		{Name: "old-bot", Role: "agent", Color: restoredColour, Source: "agent", Online: false},
+	}, nil, false)
+
+	// A new agent joins. It must not receive the restored colour.
+	snap, err := s.Join("new-bot", "agent", "", "", "claude", "agent")
+	if err != nil {
+		t.Fatalf("join failed: %v", err)
+	}
+
+	var newBotColour string
+	for _, p := range snap.Participants {
+		if p.Name == "new-bot" {
+			newBotColour = p.Color
+			break
+		}
+	}
+
+	if newBotColour == restoredColour {
+		t.Errorf("new-bot got colour %q which was already used by restored old-bot", restoredColour)
+	}
+	if newBotColour == "" {
+		t.Error("new-bot should have been assigned a colour")
+	}
+}
+
+func TestState_Join_LegacyParticipantGetsColourOnReconnect(t *testing.T) {
+	s := New(nil, command.Context{})
+
+	// Simulate a legacy room: agent participant restored with no colour.
+	s.Restore("room-1", "topic", []protocol.Participant{
+		{Name: "legacy-bot", Role: "agent", Color: "", Source: "agent", Online: false},
+	}, nil, false)
+
+	snap, err := s.Join("legacy-bot", "agent", "", "", "claude", "agent")
+	if err != nil {
+		t.Fatalf("rejoin failed: %v", err)
+	}
+
+	if snap.Participants[0].Color == "" {
+		t.Error("expected legacy participant to receive a colour on reconnect")
+	}
+}
+
 func TestState_Leave(t *testing.T) {
 	s := New(nil, command.Context{})
 	ch := s.Subscribe()
