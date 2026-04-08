@@ -22,12 +22,12 @@ func TestStatusBarShowsDisconnected(t *testing.T) {
 	}
 }
 
-func TestStatusBarShowsHelp(t *testing.T) {
+func TestStatusBarNoHelpText(t *testing.T) {
 	sb := NewStatusBar()
 	sb.SetWidth(80)
 	out := sb.View()
-	if !contains(out, "? help") {
-		t.Errorf("expected '? help' in output, got: %q", stripANSI(out))
+	if contains(out, "help") {
+		t.Errorf("expected no help text in status bar, got: %q", stripANSI(out))
 	}
 }
 
