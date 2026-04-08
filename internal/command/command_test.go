@@ -120,13 +120,13 @@ func TestInfoCommand(t *testing.T) {
 			t.Errorf("Modal.Body should contain %q, got:\n%s", want, body)
 		}
 	}
-	if !strings.Contains(body, "parley join --port 9000 -- claude") {
+	if !strings.Contains(body, "parley join --port 9000 -t claude") {
 		t.Errorf("Modal.Body should contain join command, got:\n%s", body)
 	}
-	if !strings.Contains(body, "resume: parley join --port 9000 --name nova --resume -- claude") {
+	if !strings.Contains(body, "resume: parley join --port 9000 --name nova -t claude --resume") {
 		t.Errorf("Modal.Body should contain resume command for nova, got:\n%s", body)
 	}
-	if !strings.Contains(body, "resume: parley join --port 9000 --name echo --resume -- gemini") {
+	if !strings.Contains(body, "resume: parley join --port 9000 --name echo -t gemini --resume") {
 		t.Errorf("Modal.Body should contain resume command for echo, got:\n%s", body)
 	}
 }

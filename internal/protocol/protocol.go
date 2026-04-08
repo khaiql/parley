@@ -4,6 +4,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 )
@@ -91,10 +92,49 @@ type SendParams struct {
 
 // Known agent types.
 const (
-	AgentTypeClaude = "claude"
-	AgentTypeGemini = "gemini"
-	AgentTypeCodex  = "codex"
+	AgentTypeClaude  = "claude"
+	AgentTypeGemini  = "gemini"
+	AgentTypeCodex   = "codex"
+	AgentTypeRovodev = "rovodev"
 )
+
+// NormalizeAgentType canonicalizes a user-supplied agent type.
+func NormalizeAgentType(agentType string) string {
+	return strings.ToLower(strings.TrimSpace(agentType))
+}
+
+// DefaultCommand returns the default executable for a given agent type.
+func DefaultCommand(agentType string) string {
+	switch NormalizeAgentType(agentType) {
+	case AgentTypeGemini:
+		return "gemini"
+	case AgentTypeRovodev:
+		return "acli"
+	default:
+		return "claude"
+	}
+}
+
+// DefaultArgs returns the default argument prefix for a given agent type.
+// The Rovodev driver adds its own subcommands internally, so join-time extra
+// args can pass through untouched for all current agent types.
+func DefaultArgs(agentType string) []string {
+	switch NormalizeAgentType(agentType) {
+	case AgentTypeClaude, AgentTypeGemini, AgentTypeCodex, AgentTypeRovodev:
+		return nil
+	default:
+		return nil
+	}
+}
+
+// SupportedAgentTypes returns the supported join-time agent types in stable order.
+func SupportedAgentTypes() []string {
+	return slices.Clone([]string{
+		AgentTypeClaude,
+		AgentTypeGemini,
+		AgentTypeRovodev,
+	})
+}
 
 // JoinParams is the params payload for a "room/join" notification.
 type JoinParams struct {
