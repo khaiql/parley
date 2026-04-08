@@ -51,15 +51,22 @@ func init() {
 }
 
 func randomName() string {
-	names := []string{
+	adjectives := []string{
+		"swift", "quiet", "bold", "bright", "fuzzy",
+		"clever", "gentle", "keen", "lucky", "nimble",
+		"plucky", "rusty", "snowy", "spry", "steady",
+		"tidy", "vivid", "warm", "witty", "zesty",
+	}
+	nouns := []string{
 		"babbage", "bramble", "cosmo", "dingo", "ember",
 		"ferris", "goblin", "hickory", "ibex", "junco",
 		"kitsune", "loki", "moss", "noodle", "orca",
 		"pascal", "pickle", "quokka", "ruckus", "sprocket",
 		"turing", "umbra", "vortex", "wombat", "yeti",
 	}
-	n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(names))))
-	return names[n.Int64()]
+	ai, _ := rand.Int(rand.Reader, big.NewInt(int64(len(adjectives))))
+	ni, _ := rand.Int(rand.Reader, big.NewInt(int64(len(nouns))))
+	return adjectives[ai.Int64()] + "-" + nouns[ni.Int64()]
 }
 
 func runJoin(cmd *cobra.Command, args []string) error {
