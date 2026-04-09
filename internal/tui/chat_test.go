@@ -636,11 +636,27 @@ func TestMentionRegex_MatchesHyphenatedNames(t *testing.T) {
 		{"@vivid-junco hello", "@vivid-junco"},
 		{"@alice hello", "@alice"},
 		{"@bob-the-builder", "@bob-the-builder"},
+		// Trailing hyphen must NOT be included in the match.
+		{"@vivid- hello", "@vivid"},
+		// Double hyphen: stops before the second hyphen.
+		{"@a--b hello", "@a"},
 	}
 	for _, tt := range tests {
 		got := mentionRe.FindString(tt.input)
 		if got != tt.want {
 			t.Errorf("mentionRe.FindString(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestHighlightMentions_HyphenatedNamePreservedInPlainText(t *testing.T) {
+	// Even in a no-color environment, @vivid-junco must survive as a whole token
+	// after highlightMentions runs (not be split into "@vivid" + "-junco").
+	colorMap := map[string]string{"vivid-junco": "#ff0000"}
+	input := "hello @vivid-junco how are you"
+	result := highlightMentions(input, colorMap)
+	plain := stripANSI(result)
+	if !strings.Contains(plain, "@vivid-junco") {
+		t.Errorf("expected plain text to contain @vivid-junco, got: %q", plain)
 	}
 }

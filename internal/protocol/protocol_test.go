@@ -255,6 +255,17 @@ func TestMatchMentions_HyphenatedNames(t *testing.T) {
 	}
 }
 
+func TestMatchMentions_PrefixAmbiguity(t *testing.T) {
+	// When both "vivid" and "vivid-junco" are participants, @vivid-junco must
+	// match "vivid-junco" (not "vivid"), because the hyphen is a name character
+	// and isNameChar('-') prevents the prefix path from matching "vivid".
+	names := []string{"vivid", "vivid-junco"}
+	got := protocol.MatchMentions("hey @vivid-junco", names)
+	if len(got) != 1 || got[0] != "vivid-junco" {
+		t.Errorf("MatchMentions with prefix ambiguity = %v, want [vivid-junco]", got)
+	}
+}
+
 func TestJoinParamsEncodeDecodeRoundTrip(t *testing.T) {
 	params := protocol.JoinParams{
 		Name:      "agent-x",

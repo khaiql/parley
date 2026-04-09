@@ -284,7 +284,9 @@ func renderHeader(msg protocol.MessageParams, isHuman bool, senderColor lipgloss
 var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // mentionRe matches @mention tokens including hyphenated names (e.g. @vivid-junco).
-var mentionRe = regexp.MustCompile(`@(\w[\w-]*)`)
+// The pattern @(\w+(?:-\w+)*) requires each hyphen to be followed by a word
+// character, which prevents trailing hyphens (@vivid-) and double hyphens (@a--b).
+var mentionRe = regexp.MustCompile(`@(\w+(?:-\w+)*)`)
 
 func highlightMentions(text string, colorMap map[string]string) string {
 	// Strip ANSI to find mention positions in plain text.
