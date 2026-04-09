@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/khaiql/parley/internal/command"
 	"github.com/khaiql/parley/internal/protocol"
@@ -424,27 +425,27 @@ func TestApp_RoomErrorOccurred_AddsSystemMessage(t *testing.T) {
 	}
 }
 
-func TestApp_SpinnerTickChainsWhenGenerating(t *testing.T) {
+func TestApp_SpinnerTick_ContinuesWhenGenerating(t *testing.T) {
 	a := makeApp()
 	a.localActivities["agent-1"] = room.ActivityGenerating
 
-	model, cmd := a.Update(SpinnerTickMsg{})
-	a = model.(App)
+	model, cmd := a.Update(spinner.TickMsg{})
+	_ = model
 
 	if cmd == nil {
-		t.Fatal("expected spinnerTick command when someone is generating")
+		t.Fatal("expected spinner tick command to continue when someone is generating")
 	}
 }
 
-func TestApp_SpinnerTickStopsWhenNobodyGenerating(t *testing.T) {
+func TestApp_SpinnerTick_StopsWhenNobodyGenerating(t *testing.T) {
 	a := makeApp()
 	a.localActivities["agent-1"] = room.ActivityIdle
 
-	model, cmd := a.Update(SpinnerTickMsg{})
-	a = model.(App)
+	model, cmd := a.Update(spinner.TickMsg{})
+	_ = model
 
 	if cmd != nil {
-		t.Fatal("expected nil command when nobody is generating")
+		t.Fatal("expected nil command when nobody is generating and not initializing")
 	}
 }
 
@@ -518,5 +519,51 @@ func TestApp_SingleEsc_DoesNotClear(t *testing.T) {
 
 	if a.input.Value() == "" {
 		t.Error("single Esc should not clear input")
+	}
+}
+
+func TestApp_LoadingScreen_ViewShowsCenteredText(t *testing.T) {
+	a := makeApp()
+	a.SetInitializing(true, "claude")
+
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
+
+	view := stripANSI(a.View())
+	if !strings.Contains(view, "Starting claude") {
+		t.Errorf("loading screen should contain 'Starting claude', got:\n%s", view)
+	}
+	if strings.Contains(view, "PARTICIPANTS") {
+		t.Errorf("loading screen should not show sidebar, got:\n%s", view)
+	}
+}
+
+func TestApp_AgentReadyMsg_ExitsLoadingScreen(t *testing.T) {
+	a := makeApp()
+	a.SetInitializing(true, "claude")
+
+	model, _ := a.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	a = model.(App)
+
+	model, _ = a.Update(AgentReadyMsg{})
+	a = model.(App)
+
+	if a.initializing {
+		t.Error("expected initializing=false after AgentReadyMsg")
+	}
+	view := stripANSI(a.View())
+	if strings.Contains(view, "Starting claude") {
+		t.Errorf("after AgentReadyMsg, should show chat not loading screen")
+	}
+}
+
+func TestApp_AgentStartFailedMsg_ReturnsQuit(t *testing.T) {
+	a := makeApp()
+	a.SetInitializing(true, "claude")
+
+	_, cmd := a.Update(AgentStartFailedMsg{Err: fmt.Errorf("process failed")})
+
+	if cmd == nil {
+		t.Error("expected tea.Quit command from AgentStartFailedMsg")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -13,16 +14,6 @@ import (
 )
 
 const sidebarWidth = 30
-
-// SpinnerTickMsg triggers a sidebar spinner frame advance.
-type SpinnerTickMsg struct{}
-
-// spinnerTick returns a tea.Cmd that sends a SpinnerTickMsg after 100ms.
-func spinnerTick() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
-		return SpinnerTickMsg{}
-	})
-}
 
 // AgentTypingMsg carries text to display in agent-typing mode.
 type AgentTypingMsg struct {
@@ -36,6 +27,16 @@ type ServerDisconnectedMsg struct{}
 // These messages are not broadcast to other participants.
 type LocalSystemMsg struct {
 	Text string
+}
+
+// AgentReadyMsg signals that the agent subprocess started successfully.
+// The App transitions from the loading screen to the full chat layout.
+type AgentReadyMsg struct{}
+
+// AgentStartFailedMsg signals that the agent subprocess failed to start.
+// The App quits so the caller can return the error.
+type AgentStartFailedMsg struct {
+	Err error
 }
 
 // App is the root Bubble Tea model that composes all TUI components.
@@ -60,6 +61,11 @@ type App struct {
 	localParticipants []protocol.Participant
 	localActivities   map[string]room.Activity
 
+	spinner spinner.Model
+
+	initializing  bool
+	agentTypeName string
+
 	width  int
 	height int
 }
@@ -68,6 +74,13 @@ type App struct {
 // state management. The TUI does not use this yet (wired in Task 7).
 func (a *App) SetRoomState(s *room.State) {
 	a.roomState = s
+}
+
+// SetInitializing puts the App into loading-screen mode.
+// agentType is shown in the loading text (e.g. "claude", "gemini").
+func (a *App) SetInitializing(v bool, agentType string) {
+	a.initializing = v
+	a.agentTypeName = agentType
 }
 
 // NewApp creates an App with the given topic, port, input mode, display name,
@@ -93,6 +106,9 @@ func NewApp(topic string, port int, mode InputMode, _ string, sendFn func(string
 	// a stale copy. Suggestion population and hiding happen inline at the
 	// call sites in Update instead.
 	a.inputFSM = NewInputFSM(func(InputTrigger) {}, func() {})
+	sp := spinner.New()
+	sp.Spinner = spinner.Line
+	a.spinner = sp
 	return a
 }
 
@@ -115,7 +131,9 @@ func (a *App) SetCommandRegistry(reg *command.Registry, ctx command.Context) {
 
 // Init satisfies tea.Model. Returns textarea.Blink to animate the cursor.
 func (a App) Init() tea.Cmd {
-
+	if a.initializing {
+		return tea.Batch(textarea.Blink, a.spinner.Tick)
+	}
 	return textarea.Blink
 }
 
@@ -170,27 +188,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Normal input handling (StateNormal, or Enter fell through from StateCompleting).
 		if m.Type == tea.KeyEnter && a.input.mode == InputModeHuman {
-			text := a.input.Value()
-			text = strings.TrimSpace(text)
-			if text != "" {
-				a.input.Reset()
-				if a.registry != nil && command.IsCommand(text) {
-					result := a.registry.Execute(a.cmdCtx, text)
-					if result.Error != nil {
-						a.chat.AddMessage(systemMessage(result.Error.Error()))
-					} else if result.Modal != nil {
-						modal := NewModal(result.Modal, a.width, a.height)
-						a.modal = &modal
-					} else if result.LocalMessage != "" {
-						a.chat.AddMessage(systemMessage(result.LocalMessage))
-					}
-					return a, nil
-				}
-				mentions := protocol.ParseMentions(text)
-				if a.sendFn != nil {
-					a.sendFn(text, mentions)
-				}
-			}
+			a.handleEnterKey()
 			return a, nil
 		}
 
@@ -206,7 +204,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.chat.SetLoading(false)
 		a.chat.LoadMessages(m.Messages)
 		a.statusbar.SetYolo(a.roomState != nil && a.roomState.AutoApprove())
-		return a, a.maybeStartSpinnerFromActivities()
+		return a, a.maybeStartSpinner()
 
 	case room.MessageReceived:
 		a.localMessages = append(a.localMessages, m.Message)
@@ -217,12 +215,12 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.localParticipants = m.Participants
 		a.sidebar.SetParticipants(m.Participants)
 		a.chat.SetParticipantColors(m.Participants)
-		return a, a.maybeStartSpinnerFromActivities()
+		return a, a.maybeStartSpinner()
 
 	case room.ParticipantActivityChanged:
 		a.localActivities[m.Name] = m.Activity
 		a.sidebar.SetParticipantStatus(m.Name, activityToStatus(m.Activity))
-		return a, a.maybeStartSpinnerFromActivities()
+		return a, a.maybeStartSpinner()
 
 	case room.ErrorOccurred:
 		a.chat.AddMessage(systemMessage(m.Error.Error()))
@@ -231,13 +229,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ServerDisconnectedMsg:
 		return a, tea.Quit
 
-	case SpinnerTickMsg:
-		a.sidebar.TickSpinner()
-		if isAnyGenerating(a.localActivities) {
-			return a, spinnerTick()
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		a.spinner, cmd = a.spinner.Update(m)
+		a.sidebar.SetSpinnerView(a.spinner.View())
+		if a.initializing || isAnyGenerating(a.localActivities) {
+			return a, cmd
 		}
-		// Self-terminates when no one is generating.
-		return a, nil
+		return a, nil // self-terminate
 
 	case AgentTypingMsg:
 		a.input.SetAgentText(m.Text)
@@ -247,6 +246,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LocalSystemMsg:
 		a.chat.AddMessage(systemMessage(m.Text))
 		return a, nil
+
+	case AgentReadyMsg:
+		a.initializing = false
+		a.layout()
+		return a, nil
+
+	case AgentStartFailedMsg:
+		return a, tea.Quit
 	}
 
 	// Forward key events only to input, not chat (prevents scroll jumping).
@@ -308,6 +315,9 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View satisfies tea.Model. When a modal is active it renders full-screen;
 // otherwise renders topbar, chat+sidebar, and input stacked vertically.
 func (a App) View() string {
+	if a.initializing {
+		return a.loadingView()
+	}
 	if a.modal != nil {
 		return a.modal.View()
 	}
@@ -347,6 +357,32 @@ func (a *App) layout() {
 	a.input.SetWidth(a.width)
 	a.statusbar.SetWidth(a.width)
 	a.suggestions.SetWidth(a.width)
+}
+
+// handleEnterKey processes a human Enter keypress: trims input, dispatches slash
+// commands or sends a chat message.
+func (a *App) handleEnterKey() {
+	text := strings.TrimSpace(a.input.Value())
+	if text == "" {
+		return
+	}
+	a.input.Reset()
+	if a.registry != nil && command.IsCommand(text) {
+		result := a.registry.Execute(a.cmdCtx, text)
+		if result.Error != nil {
+			a.chat.AddMessage(systemMessage(result.Error.Error()))
+		} else if result.Modal != nil {
+			modal := NewModal(result.Modal, a.width, a.height)
+			a.modal = &modal
+		} else if result.LocalMessage != "" {
+			a.chat.AddMessage(systemMessage(result.LocalMessage))
+		}
+		return
+	}
+	mentions := protocol.ParseMentions(text)
+	if a.sendFn != nil {
+		a.sendFn(text, mentions)
+	}
 }
 
 // populateSlashSuggestions fills the suggestion list with available commands.
@@ -426,12 +462,18 @@ func (a *App) relayoutIfInputChanged() {
 	}
 }
 
-// maybeStartSpinnerFromActivities returns a spinnerTick command if any
-// participant is generating. The spinner self-terminates in SpinnerTickMsg
-// when no one is generating — no flag needed.
-func (a *App) maybeStartSpinnerFromActivities() tea.Cmd {
-	if isAnyGenerating(a.localActivities) {
-		return spinnerTick()
+// loadingView renders a centered loading screen shown while the agent starts.
+func (a App) loadingView() string {
+	msg := lipgloss.NewStyle().
+		Foreground(colorDimText).
+		Render(a.spinner.View() + " Starting " + a.agentTypeName + "…")
+	return lipgloss.Place(a.width, a.height, lipgloss.Center, lipgloss.Center, msg)
+}
+
+// maybeStartSpinner returns a.spinner.Tick if the spinner should be running.
+func (a *App) maybeStartSpinner() tea.Cmd {
+	if a.initializing || isAnyGenerating(a.localActivities) {
+		return a.spinner.Tick
 	}
 	return nil
 }

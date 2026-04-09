@@ -111,6 +111,15 @@ func TestVisualLayoutSmall40x10(t *testing.T) {
 	assertGolden(t, "layout_40x10", output)
 }
 
+func TestVisualLoadingScreen80x24(t *testing.T) {
+	app := NewApp("test topic", 1234, InputModeHuman, "sle", nil)
+	app.SetInitializing(true, "claude")
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = model.(App)
+	output := app.View()
+	assertGolden(t, "loading_screen_80x24", output)
+}
+
 func TestVisualModal80x24(t *testing.T) {
 	app := buildTestApp(t, 80, 24)
 

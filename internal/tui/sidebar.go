@@ -7,9 +7,6 @@ import (
 	"github.com/khaiql/parley/internal/protocol"
 )
 
-// spinnerFrames are braille characters used for the generating animation.
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
 // Sidebar renders the participant list panel.
 type Sidebar struct {
 	participants []protocol.Participant
@@ -17,7 +14,7 @@ type Sidebar struct {
 	width        int
 	height       int
 	port         int
-	spinnerFrame int
+	spinnerView  string
 }
 
 // NewSidebar creates an empty Sidebar.
@@ -30,16 +27,9 @@ func (s *Sidebar) SetPort(port int) {
 	s.port = port
 }
 
-// TickSpinner advances the spinner frame and returns true if any participant
-// has "generating" status (caller should keep ticking).
-func (s *Sidebar) TickSpinner() bool {
-	s.spinnerFrame = (s.spinnerFrame + 1) % len(spinnerFrames)
-	for _, p := range s.participants {
-		if s.statuses[p.Name] == protocol.StatusGenerating {
-			return true
-		}
-	}
-	return false
+// SetSpinnerView sets the spinner character to display next to "generating" status.
+func (s *Sidebar) SetSpinnerView(v string) {
+	s.spinnerView = v
 }
 
 // SetSize updates the sidebar dimensions.
@@ -152,8 +142,7 @@ func (s Sidebar) View() string {
 		// Status display
 		status := s.statuses[p.Name]
 		if status == protocol.StatusGenerating {
-			frame := spinnerFrames[s.spinnerFrame%len(spinnerFrames)]
-			statusText := agentNameStyleFor(senderColor).Render(frame + " generating")
+			statusText := agentNameStyleFor(senderColor).Render(s.spinnerView + " generating")
 			lines = append(lines, "  "+statusText)
 		} else if status != "" && status != protocol.StatusListening {
 			lines = append(lines, participantStatusStyle.Render("  "+status))

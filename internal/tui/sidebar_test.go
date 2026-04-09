@@ -236,26 +236,6 @@ func TestSidebarViewSectionHeader(t *testing.T) {
 	}
 }
 
-func TestSidebarTickSpinner(t *testing.T) {
-	s := NewSidebar()
-	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder"})
-
-	// No generating status — should return false
-	if s.TickSpinner() {
-		t.Error("TickSpinner should return false when no participant is generating")
-	}
-
-	s.SetParticipantStatus("bot1", "generating")
-	if !s.TickSpinner() {
-		t.Error("TickSpinner should return true when a participant is generating")
-	}
-
-	// Verify frame advanced
-	if s.spinnerFrame != 2 { // ticked twice
-		t.Errorf("expected spinnerFrame=2, got %d", s.spinnerFrame)
-	}
-}
-
 func TestSidebarAgentWithSourceHumanGetsAgentColor(t *testing.T) {
 	// Real-world case: agents join with Source="human" but Role != "human".
 	// Only the actual human (Role="human") should get orange.
@@ -296,6 +276,22 @@ func TestSidebarAgentWithSourceHumanGetsAgentColor(t *testing.T) {
 	}
 	if !contains(view, "atlas") {
 		t.Error("sidebar should contain 'atlas'")
+	}
+}
+
+func TestSidebarViewGeneratingSpinner_UsesSpinnerView(t *testing.T) {
+	s := NewSidebar()
+	s.SetSize(30, 20)
+	s.AddParticipant(protocol.Participant{Name: "bot1", Role: "coder", Source: "agent", Online: true})
+	s.SetParticipantStatus("bot1", "generating")
+	s.SetSpinnerView("⠋")
+
+	view := stripANSI(s.View())
+	if !contains(view, "⠋") {
+		t.Errorf("sidebar view should contain spinner frame '⠋', got: %q", view)
+	}
+	if !contains(view, "generating") {
+		t.Errorf("sidebar view should contain 'generating', got: %q", view)
 	}
 }
 
