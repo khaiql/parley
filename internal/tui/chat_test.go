@@ -624,3 +624,23 @@ func TestMentionColorMatchesSenderColor(t *testing.T) {
 	// via ANSI codes since lipgloss converts hex to nearest 256-color.
 	_ = robertColor
 }
+
+func TestMentionRegex_MatchesHyphenatedNames(t *testing.T) {
+	// mentionRe must match hyphenated participant names like "vivid-junco" in full.
+	// Previously the regex was @(\w+) which stopped at the hyphen, leaving
+	// @vivid-junco matched as just @vivid.
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"@vivid-junco hello", "@vivid-junco"},
+		{"@alice hello", "@alice"},
+		{"@bob-the-builder", "@bob-the-builder"},
+	}
+	for _, tt := range tests {
+		got := mentionRe.FindString(tt.input)
+		if got != tt.want {
+			t.Errorf("mentionRe.FindString(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

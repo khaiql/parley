@@ -283,10 +283,12 @@ func renderHeader(msg protocol.MessageParams, isHuman bool, senderColor lipgloss
 // Handles Glamour-rendered text where ANSI codes may be interleaved with the @mention.
 var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
+// mentionRe matches @mention tokens including hyphenated names (e.g. @vivid-junco).
+var mentionRe = regexp.MustCompile(`@(\w[\w-]*)`)
+
 func highlightMentions(text string, colorMap map[string]string) string {
 	// Strip ANSI to find mention positions in plain text.
 	plain := ansiSeq.ReplaceAllString(text, "")
-	mentionRe := regexp.MustCompile(`@(\w+)`)
 	mentions := mentionRe.FindAllStringIndex(plain, -1)
 	if len(mentions) == 0 {
 		return text

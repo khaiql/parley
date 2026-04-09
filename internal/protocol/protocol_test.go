@@ -227,6 +227,34 @@ func TestMatchMentions(t *testing.T) {
 	}
 }
 
+func TestMatchMentions_HyphenatedNames(t *testing.T) {
+	names := []string{"vivid-junco", "alice"}
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"exact hyphenated match", "hey @vivid-junco", []string{"vivid-junco"}},
+		{"hyphenated with trailing punctuation", "@vivid-junco: hello", []string{"vivid-junco"}},
+		{"partial hyphenated does not match shorter name", "@vivid hello", nil},
+		{"partial with extra char does not match", "@vivid-juncos extra", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := protocol.MatchMentions(tt.text, names)
+			if len(got) != len(tt.want) {
+				t.Errorf("MatchMentions(%q) = %v, want %v", tt.text, got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("MatchMentions(%q)[%d] = %q, want %q", tt.text, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestJoinParamsEncodeDecodeRoundTrip(t *testing.T) {
 	params := protocol.JoinParams{
 		Name:      "agent-x",
