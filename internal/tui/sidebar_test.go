@@ -84,10 +84,10 @@ func TestSidebarViewZeroWidth(t *testing.T) {
 		Directory: "/Users/sle/some/very/long/directory/path",
 	})
 
-	// Must not panic
+	// Must not panic. At width=0 the sidebar is hidden (returns empty string).
 	view := s.View()
-	if !contains(view, "alice") {
-		t.Errorf("sidebar view should contain 'alice' even at zero width")
+	if view != "" {
+		t.Errorf("sidebar view should be empty at zero width, got: %q", view)
 	}
 }
 
@@ -189,17 +189,6 @@ func TestSidebarViewContainsNames(t *testing.T) {
 	}
 }
 
-func TestSidebarViewShowsBranding(t *testing.T) {
-	s := NewSidebar()
-	s.SetSize(30, 20)
-	s.SetPort(55568)
-
-	view := stripANSI(s.View())
-	if !contains(view, "parley") {
-		t.Errorf("sidebar view should contain 'parley' branding, got: %q", view)
-	}
-}
-
 func TestSidebarViewColorMatchedNames(t *testing.T) {
 	s := NewSidebar()
 	s.SetSize(30, 20)
@@ -226,13 +215,13 @@ func TestSidebarViewGeneratingSpinner(t *testing.T) {
 	}
 }
 
-func TestSidebarViewSectionHeader(t *testing.T) {
+func TestSidebarViewRoomCount(t *testing.T) {
 	s := NewSidebar()
 	s.SetSize(30, 20)
 
 	view := stripANSI(s.View())
-	if !contains(view, "PARTICIPANTS") {
-		t.Errorf("sidebar view should contain 'PARTICIPANTS' header, got: %q", view)
+	if !contains(view, "in room") {
+		t.Errorf("sidebar view should contain 'in room' count, got: %q", view)
 	}
 }
 

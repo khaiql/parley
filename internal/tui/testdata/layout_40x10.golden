@@ -1,13 +1,10 @@
- parley     Topic: test topic     :1234  
-──────────│           parley             
-┃ sle 10:3│ PARTICIPANTS                 
-┃         │                              
-┃ Hello[0m[38;5;252m[38;5;252m [0m[0m  │ ──────────────────────────   
-┃ everyone[0m│ sle                          
-          │ ──────────────────────────   
-          │ Alice  claude                
-          │   /home/alice/project        
-──────────────────────────────────────── 
- ❯ ┃ Type a message… (Enter to send,     
- ┃ Shift+Enter for newline)              
-                            ● connected  
+ parley    test topic    localhost:1234 
+────────────────────────────────────────
+────────────────────────────────────────
+┃ sle 10:31                             
+┃                                       
+┃ Hello[0m[38;5;252m everyone[0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m[38;5;252m [0m     
+────────────────────────────────────────
+ ❯ ┃ Type a message… (Enter to send,    
+ ┃ Shift+Enter for newline)             
+                                        

@@ -43,18 +43,21 @@ func (t TopBar) View() string {
 		left += agentInfo
 	}
 
-	// Right: port in primary color (bright and visible)
+	// Right: port dimmed — technical detail, not primary focus
 	right := ""
 	if t.port > 0 {
-		right = lipgloss.NewStyle().Foreground(colorPrimary).Render(fmt.Sprintf(":%d", t.port))
+		right = lipgloss.NewStyle().Foreground(colorDimText).Render(fmt.Sprintf("localhost:%d", t.port))
 	}
 
-	// Center: "Topic:" label + topic text
+	// Center: topic as an accent pill — most important info gets visual weight.
 	middle := ""
 	if t.topic != "" {
-		label := lipgloss.NewStyle().Foreground(colorText).Render("Topic:")
-		text := lipgloss.NewStyle().Foreground(colorText).Render(t.topic)
-		middle = label + " " + text
+		middle = lipgloss.NewStyle().
+			Background(colorPrimary).
+			Foreground(colorSidebarBg).
+			Bold(true).
+			Padding(0, 1).
+			Render(t.topic)
 	}
 
 	// topBarStyle has Padding(0,1) which adds 1 char on each side = 2 total.

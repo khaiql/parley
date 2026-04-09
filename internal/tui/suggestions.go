@@ -134,28 +134,50 @@ func (s Suggestions) View() string {
 	}
 
 	labelStyle := lipgloss.NewStyle().Foreground(colorText).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(colorDimText)
-	selectedStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	selectedLabelStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	badgeStyle := lipgloss.NewStyle().
+		Background(colorStatusBarBg).
+		Foreground(colorDimText).
+		Padding(0, 1)
+	selectedBadgeStyle := lipgloss.NewStyle().
+		Background(colorStatusBarBg).
+		Foreground(colorPrimary).
+		Padding(0, 1)
 
 	var rows []string
 	for i := start; i < start+visible && i < n; i++ {
 		item := s.filtered[i]
+		var row string
 		if i == s.cursor {
-			row := selectedStyle.Render(item.Label + "  " + item.Description)
-			rows = append(rows, row)
+			name := selectedLabelStyle.Render(item.Label)
+			badge := selectedBadgeStyle.Render(item.Description)
+			row = lipgloss.JoinHorizontal(lipgloss.Top, name, " ", badge)
 		} else {
-			row := labelStyle.Render(item.Label) + "  " + descStyle.Render(item.Description)
-			rows = append(rows, row)
+			name := labelStyle.Render(item.Label)
+			badge := badgeStyle.Render(item.Description)
+			row = lipgloss.JoinHorizontal(lipgloss.Top, name, " ", badge)
 		}
+		rows = append(rows, row)
 	}
 
 	content := strings.Join(rows, "\n")
 
+	// Size box to content width rather than full terminal width.
+	maxContent := 0
+	for _, item := range s.filtered {
+		// label + space + badge (badge padding = 2 chars each side)
+		w := lipgloss.Width(item.Label) + 1 + lipgloss.Width(item.Description) + 2
+		if w > maxContent {
+			maxContent = w
+		}
+	}
+	boxWidth := min(maxContent+4, s.width) // +4 for border (2) + inner padding (2)
+
 	boxStyle := lipgloss.NewStyle().
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(colorBorder).
+		BorderStyle(lipgloss.RoundedBorder()).
+		BorderForeground(colorPrimary).
 		Padding(0, 1).
-		Width(s.width)
+		Width(boxWidth)
 
 	return boxStyle.Render(content)
 }
