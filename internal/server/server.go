@@ -240,7 +240,7 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 
 			statusNotif := protocol.NewNotification(protocol.MethodStatus, params)
 			if data, err := protocol.EncodeLine(statusNotif); err == nil {
-				s.conns.BroadcastExcept(name, data)
+				s.conns.Broadcast(data)
 			}
 		}
 	}
