@@ -21,6 +21,7 @@ type TCPServer struct {
 	conns    *ConnectionManager
 	mu       sync.Mutex
 	wg       sync.WaitGroup
+	done     chan struct{} // closed when Serve's accept loop exits
 }
 
 // New creates a new Server listening on addr using the given room.State.
@@ -33,6 +34,7 @@ func New(addr string, state *room.State) (*TCPServer, error) {
 		listener: ln,
 		state:    state,
 		conns:    NewConnectionManager(),
+		done:     make(chan struct{}),
 	}, nil
 }
 
@@ -48,6 +50,7 @@ func (s *TCPServer) Port() int {
 
 // Serve runs the accept loop. It blocks until the listener is closed.
 func (s *TCPServer) Serve() {
+	defer close(s.done)
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
@@ -80,7 +83,8 @@ func (s *TCPServer) Snapshot() protocol.RoomSnapshot {
 // handlers to finish.
 func (s *TCPServer) Close() error {
 	err := s.listener.Close()
-	s.wg.Wait()
+	<-s.done    // wait for accept loop to exit — no more wg.Add() calls after this
+	s.wg.Wait() // safe: all Add() calls have completed
 	return err
 }
 
