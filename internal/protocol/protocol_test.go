@@ -227,6 +227,45 @@ func TestMatchMentions(t *testing.T) {
 	}
 }
 
+func TestMatchMentions_HyphenatedNames(t *testing.T) {
+	names := []string{"vivid-junco", "alice"}
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"exact hyphenated match", "hey @vivid-junco", []string{"vivid-junco"}},
+		{"hyphenated with trailing punctuation", "@vivid-junco: hello", []string{"vivid-junco"}},
+		{"partial hyphenated does not match shorter name", "@vivid hello", nil},
+		{"partial with extra char does not match", "@vivid-juncos extra", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := protocol.MatchMentions(tt.text, names)
+			if len(got) != len(tt.want) {
+				t.Errorf("MatchMentions(%q) = %v, want %v", tt.text, got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("MatchMentions(%q)[%d] = %q, want %q", tt.text, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestMatchMentions_PrefixAmbiguity(t *testing.T) {
+	// When both "vivid" and "vivid-junco" are participants, @vivid-junco must
+	// match "vivid-junco" (not "vivid"), because the hyphen is a name character
+	// and isNameChar('-') prevents the prefix path from matching "vivid".
+	names := []string{"vivid", "vivid-junco"}
+	got := protocol.MatchMentions("hey @vivid-junco", names)
+	if len(got) != 1 || got[0] != "vivid-junco" {
+		t.Errorf("MatchMentions with prefix ambiguity = %v, want [vivid-junco]", got)
+	}
+}
+
 func TestJoinParamsEncodeDecodeRoundTrip(t *testing.T) {
 	params := protocol.JoinParams{
 		Name:      "agent-x",
