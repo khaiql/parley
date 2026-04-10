@@ -17,12 +17,13 @@ const timestampGap = 5 * time.Minute
 
 // Chat wraps a viewport and holds the message history.
 type Chat struct {
-	vp       viewport.Model
-	messages []protocol.MessageParams
-	colorMap map[string]string // name → assigned hex colour
-	loading  bool
-	width    int
-	height   int
+	vp          viewport.Model
+	messages    []protocol.MessageParams
+	colorMap    map[string]string // name → assigned hex colour
+	unreadCount int               // messages added while user was scrolled up
+	loading     bool
+	width       int
+	height      int
 }
 
 // SetParticipantColors updates the name→color mapping used for message rendering.
@@ -60,10 +61,19 @@ func (c *Chat) SetSize(width, height int) {
 }
 
 // AddMessage appends a message and refreshes the viewport content.
+// wasAtBottom is checked before rebuildContent because SetContent changes
+// maxYOffset, which would cause AtBottom() to return false even for users
+// sitting at the bottom of the chat.
 func (c *Chat) AddMessage(msg protocol.MessageParams) {
+	wasAtBottom := c.vp.AtBottom()
 	c.messages = append(c.messages, msg)
 	c.rebuildContent()
-	c.vp.GotoBottom()
+	if wasAtBottom {
+		c.vp.GotoBottom()
+		c.unreadCount = 0
+	} else {
+		c.unreadCount++
+	}
 }
 
 // LoadMessages bulk-loads messages without re-rendering after each one.
@@ -79,10 +89,29 @@ func (c *Chat) rebuildContent() {
 }
 
 // Update passes tea.Msg events to the underlying viewport (for scrolling).
+// Clears unread count when the user scrolls back to the bottom.
 func (c *Chat) Update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	c.vp, cmd = c.vp.Update(msg)
+	if c.vp.AtBottom() {
+		c.unreadCount = 0
+	}
 	return cmd
+}
+
+// UnreadBadge returns a rendered badge showing pending unread messages,
+// or an empty string when there are none or the view is at the bottom.
+func (c Chat) UnreadBadge() string {
+	if c.unreadCount == 0 || c.vp.AtBottom() {
+		return ""
+	}
+	label := fmt.Sprintf("↓ %d new", c.unreadCount)
+	return lipgloss.NewStyle().
+		Background(colorPrimary).
+		Foreground(colorSidebarBg).
+		Bold(true).
+		Padding(0, 1).
+		Render(label)
 }
 
 // SetLoading shows or hides the loading indicator.
@@ -92,6 +121,16 @@ func (c *Chat) SetLoading(loading bool) {
 		msg := lipgloss.NewStyle().Foreground(colorDimText).Render("Loading history…")
 		c.vp.SetContent(msg)
 	}
+}
+
+// ScrollPercent returns the viewport scroll position as a value 0.0–1.0.
+func (c Chat) ScrollPercent() float64 {
+	return c.vp.ScrollPercent()
+}
+
+// AtBottom returns true when the viewport is scrolled to the bottom.
+func (c Chat) AtBottom() bool {
+	return c.vp.AtBottom()
 }
 
 // View renders the chat area.
@@ -233,16 +272,28 @@ func renderMessages(msgs []protocol.MessageParams, width int, colorMap map[strin
 			content = body
 		}
 
-		// Apply thick left border in sender's color.
-		bordered := lipgloss.NewStyle().
-			BorderStyle(lipgloss.ThickBorder()).
-			BorderLeft(true).
-			BorderTop(false).
-			BorderRight(false).
-			BorderBottom(false).
-			BorderForeground(senderColor).
-			PaddingLeft(1).
-			Render(content)
+		// Apply left border in sender's color — thick for humans, normal for agents.
+		var borderStyle lipgloss.Style
+		if isHuman {
+			borderStyle = lipgloss.NewStyle().
+				BorderStyle(lipgloss.ThickBorder()).
+				BorderLeft(true).
+				BorderTop(false).
+				BorderRight(false).
+				BorderBottom(false).
+				BorderForeground(senderColor).
+				PaddingLeft(1)
+		} else {
+			borderStyle = lipgloss.NewStyle().
+				BorderStyle(lipgloss.NormalBorder()).
+				BorderLeft(true).
+				BorderTop(false).
+				BorderRight(false).
+				BorderBottom(false).
+				BorderForeground(senderColor).
+				PaddingLeft(1)
+		}
+		bordered := borderStyle.Render(content)
 
 		parts = append(parts, bordered)
 		lastSender = msg.From

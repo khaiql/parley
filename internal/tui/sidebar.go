@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -27,7 +28,7 @@ func (s *Sidebar) SetPort(port int) {
 	s.port = port
 }
 
-// SetSpinnerView sets the spinner character to display next to "generating" status.
+// SetSpinnerView sets the spinner character to display next to active statuses.
 func (s *Sidebar) SetSpinnerView(v string) {
 	s.spinnerView = v
 }
@@ -86,20 +87,33 @@ func (s *Sidebar) SetParticipantOffline(name string) {
 }
 
 // View renders the sidebar as a string.
+// Returns an empty string when width is 0 (sidebar hidden on narrow terminals).
 func (s Sidebar) View() string {
-	innerWidth := s.width - 4 // account for border + padding
+	if s.width == 0 {
+		return ""
+	}
+	// innerWidth: subtract sidebarStyle border (1) + padding (2) = 3 chars.
+	// Each participant card subtracts another 3 (thick border 1 + padding 1 + gap 1).
+	innerWidth := s.width - 4
 	if innerWidth < 1 {
 		innerWidth = 1
+	}
+	cardWidth := innerWidth - 3
+	if cardWidth < 1 {
+		cardWidth = 1
 	}
 
 	var lines []string
 
-	// Branding section
-	brand := sidebarBrandStyle.Width(innerWidth).Render("parley")
-	lines = append(lines, brand)
-
-	// Section header
-	lines = append(lines, sidebarTitleStyle.Render("PARTICIPANTS"))
+	// Room count — elevated to colorText so it reads clearly.
+	count := fmt.Sprintf("%d in room", len(s.participants))
+	countBadge := lipgloss.NewStyle().
+		Foreground(colorText).
+		Bold(true).
+		Align(lipgloss.Center).
+		Width(innerWidth).
+		Render(count)
+	lines = append(lines, countBadge)
 
 	// Sort: online participants first, then offline.
 	online := make([]protocol.Participant, 0, len(s.participants))
@@ -114,49 +128,65 @@ func (s Sidebar) View() string {
 	sorted := append(online, offline...)
 
 	for _, p := range sorted {
-		// Separator between participants
-		lines = append(lines, separatorStyle.Render(strings.Repeat("─", innerWidth)))
+		// Visible separator between participant cards (colorBorder not colorSeparator).
+		lines = append(lines, lipgloss.NewStyle().Foreground(colorBorder).Render(strings.Repeat("─", innerWidth)))
 
 		if !p.Online {
-			nameLine := offlineNameStyle.Render(p.Name + " (offline)")
-			lines = append(lines, nameLine)
+			card := offlineNameStyle.Render(p.Name + " (offline)")
+			lines = append(lines, card)
 			continue
 		}
 
-		// Name line
 		senderColor := ColorForSender(p.Name, p.IsHuman(), p.Color)
-		var nameLine string
+
+		// Build card content: name, status, directory.
+		icon := "◆"
 		if p.IsHuman() {
-			nameLine = humanNameStyle.Render(p.Name)
-		} else {
-			nameLine = agentNameStyleFor(senderColor).Render(p.Name)
+			icon = "◇"
 		}
 
-		// AgentType badge (instead of Role badge)
+		// Name line: white text so it reads on any sidebar bg regardless of
+		// participant color — color identity comes from the accent strip.
+		nameLine := lipgloss.NewStyle().Bold(true).Foreground(colorText).Render(icon + " " + p.Name)
 		if p.AgentType != "" {
 			badge := agentBadgeStyleFor(senderColor).Render(p.AgentType)
 			nameLine = lipgloss.JoinHorizontal(lipgloss.Top, nameLine, " ", badge)
 		}
-		lines = append(lines, nameLine)
 
-		// Status display
+		var cardLines []string
+		cardLines = append(cardLines, nameLine)
+
+		// Status with spinner prefix for all active states.
 		status := s.statuses[p.Name]
-		if status == protocol.StatusGenerating {
-			statusText := agentNameStyleFor(senderColor).Render(s.spinnerView + " generating")
-			lines = append(lines, "  "+statusText)
-		} else if status != "" && status != protocol.StatusListening {
-			lines = append(lines, participantStatusStyle.Render("  "+status))
+		if status != "" && status != protocol.StatusListening {
+			statusLine := lipgloss.NewStyle().
+				Foreground(senderColor).
+				Italic(true).
+				Render(s.spinnerView + " " + status)
+			cardLines = append(cardLines, statusLine)
 		}
 
-		// Directory
+		// Directory — truncated and dimmed.
 		if p.Directory != "" {
 			dir := p.Directory
-			maxLen := innerWidth - 2
-			if maxLen > 4 && len(dir) > maxLen {
-				dir = dir[:maxLen-1] + "…"
+			if len(dir) > cardWidth && cardWidth > 4 {
+				dir = dir[:cardWidth-1] + "…"
 			}
-			lines = append(lines, timestampStyle.Render("  "+dir))
+			cardLines = append(cardLines, timestampStyle.Render(dir))
 		}
+
+		// Wrap all card lines in a colored thick left border — same visual
+		// language as chat messages, ties the color to the participant card.
+		card := lipgloss.NewStyle().
+			BorderStyle(lipgloss.ThickBorder()).
+			BorderLeft(true).
+			BorderTop(false).BorderRight(false).BorderBottom(false).
+			BorderForeground(senderColor).
+			PaddingLeft(1).
+			Width(cardWidth).
+			Render(lipgloss.JoinVertical(lipgloss.Left, cardLines...))
+
+		lines = append(lines, card)
 	}
 
 	content := strings.Join(lines, "\n")

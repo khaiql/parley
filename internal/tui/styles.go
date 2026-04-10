@@ -16,7 +16,6 @@ var (
 	colorBorder      = lipgloss.Color("#3b3f47")
 	colorSeparator   = lipgloss.Color("#21262d")
 	colorSidebarBg   = lipgloss.Color("#161b22")
-	colorConnected   = lipgloss.Color("#3fb950")
 	colorStatusBarBg = lipgloss.Color("#30363d")
 )
 
@@ -42,18 +41,21 @@ func agentNameStyleFor(c lipgloss.Color) lipgloss.Style {
 	return lipgloss.NewStyle().Bold(true).Foreground(c)
 }
 
-// agentBadgeStyleFor returns a badge style with bg #30363d and the given foreground.
+// agentBadgeStyleFor returns a badge style with the status bar background and the given foreground.
 func agentBadgeStyleFor(c lipgloss.Color) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Background(lipgloss.Color("#30363d")).
+		Background(colorStatusBarBg).
 		Foreground(c).
 		Padding(0, 1)
 }
 
 var (
 	topBarStyle = lipgloss.NewStyle().
-			Background(colorSidebarBg).
+			Background(colorStatusBarBg).
 			Foreground(colorText).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderBottom(true).
+			BorderForeground(colorPrimary).
 			Padding(0, 1).
 			Bold(true)
 
@@ -64,15 +66,6 @@ var (
 			Foreground(colorText).
 			Padding(0, 1).
 			Background(colorSidebarBg)
-
-	sidebarTitleStyle = lipgloss.NewStyle().
-				Foreground(colorDimText).
-				MarginBottom(1)
-
-	sidebarBrandStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(colorPrimary).
-				Align(lipgloss.Center)
 
 	inputStyle = lipgloss.NewStyle().
 			BorderStyle(lipgloss.NormalBorder()).
@@ -90,10 +83,6 @@ var (
 
 	timestampStyle = lipgloss.NewStyle().
 			Foreground(colorDimText)
-
-	participantStatusStyle = lipgloss.NewStyle().
-				Foreground(colorSystem).
-				Italic(true)
 
 	offlineNameStyle = lipgloss.NewStyle().
 				Foreground(colorDimText).

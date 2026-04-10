@@ -2,13 +2,14 @@ package tui
 
 import "testing"
 
-func TestStatusBarShowsConnected(t *testing.T) {
+func TestStatusBarHidesConnectedWhenHealthy(t *testing.T) {
+	// Connected dot is only shown when disconnected (it's noise when always green).
 	sb := NewStatusBar()
 	sb.SetWidth(80)
 	sb.SetConnected(true)
-	out := sb.View()
-	if !contains(out, "connected") {
-		t.Errorf("expected 'connected' in output, got: %q", stripANSI(out))
+	out := stripANSI(sb.View())
+	if contains(out, "connected") {
+		t.Errorf("expected no 'connected' indicator when healthy, got: %q", out)
 	}
 }
 
@@ -48,5 +49,50 @@ func TestStatusBarHidesYoloBadgeWhenInactive(t *testing.T) {
 	out := sb.View()
 	if contains(out, "YOLO") {
 		t.Errorf("expected no 'YOLO' badge when yolo=false, got: %q", stripANSI(out))
+	}
+}
+
+func TestStatusBarScrollIndicatorShownWhenScrolledUp(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetWidth(80)
+	sb.SetScrollPosition(0.5, false)
+	out := stripANSI(sb.View())
+	if !contains(out, "↑") {
+		t.Errorf("expected scroll indicator when not at bottom, got: %q", out)
+	}
+	if !contains(out, "50%") {
+		t.Errorf("expected '50%%' in scroll indicator, got: %q", out)
+	}
+}
+
+func TestStatusBarScrollIndicatorHiddenAtBottom(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetWidth(80)
+	sb.SetScrollPosition(1.0, true)
+	out := stripANSI(sb.View())
+	if contains(out, "↑") {
+		t.Errorf("expected no scroll indicator when at bottom, got: %q", out)
+	}
+}
+
+func TestStatusBarMouseHintShowsSelectWhenEnabled(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetWidth(120)
+	sb.SetSidebarVisible(true)
+	sb.SetMouseEnabled(true)
+	out := stripANSI(sb.View())
+	if !contains(out, `Ctrl+\ select`) {
+		t.Errorf(`expected 'Ctrl+\ select' hint when mouse enabled, got: %q`, out)
+	}
+}
+
+func TestStatusBarMouseHintShowsScrollWhenDisabled(t *testing.T) {
+	sb := NewStatusBar()
+	sb.SetWidth(120)
+	sb.SetSidebarVisible(true)
+	sb.SetMouseEnabled(false)
+	out := stripANSI(sb.View())
+	if !contains(out, `Ctrl+\ scroll`) {
+		t.Errorf(`expected 'Ctrl+\ scroll' hint when mouse disabled, got: %q`, out)
 	}
 }

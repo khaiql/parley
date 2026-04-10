@@ -16,14 +16,14 @@ func BuildSystemPrompt(config AgentConfig) string {
 	sb.WriteString("You are participating in a group chat room called \"parley\". ")
 	sb.WriteString("You are one of several participants — some human, some AI coding agents — collaborating as peers.\n\n")
 
-	sb.WriteString(fmt.Sprintf("ROOM: %s\n", config.Topic))
+	fmt.Fprintf(&sb, "ROOM: %s\n", config.Topic)
 	sb.WriteString("PARTICIPANTS:\n")
 	for _, p := range config.Participants {
-		sb.WriteString(fmt.Sprintf("- %s (%s), working in %s\n", p.Name, p.Role, p.Directory))
+		fmt.Fprintf(&sb, "- %s (%s), working in %s\n", p.Name, p.Role, p.Directory)
 	}
 	sb.WriteString("\n")
 
-	sb.WriteString(fmt.Sprintf("YOU ARE: %s, %s, working in %s\n\n", config.Name, config.Role, config.Directory))
+	fmt.Fprintf(&sb, "YOU ARE: %s, %s, working in %s\n\n", config.Name, config.Role, config.Directory)
 
 	sb.WriteString(`RESPONSE GUIDELINES:
 - ALWAYS respond when someone @-mentions you by name
