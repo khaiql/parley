@@ -469,6 +469,18 @@ func (a App) handleKeyMsg(m tea.KeyMsg) (App, tea.Cmd, bool) {
 		return a, cmd, true
 	}
 
+	// History navigation: Up/Down in human mode cycle through sent messages.
+	if a.input.mode == InputModeHuman && a.inputFSM.Current() == StateNormal {
+		switch m.Type {
+		case tea.KeyUp:
+			a.navigateHistory(+1)
+			return a, nil, true
+		case tea.KeyDown:
+			a.navigateHistory(-1)
+			return a, nil, true
+		}
+	}
+
 	// Normal input handling (StateNormal, or Enter fell through from StateCompleting).
 	if m.Type == tea.KeyEnter && a.input.mode == InputModeHuman {
 		a.handleEnterKey()
@@ -476,6 +488,38 @@ func (a App) handleKeyMsg(m tea.KeyMsg) (App, tea.Cmd, bool) {
 	}
 
 	return a, nil, false
+}
+
+// navigateHistory moves the history cursor by delta (+1 = back, -1 = forward).
+// Only operates in InputModeHuman + StateNormal. Always consumes the key.
+func (a *App) navigateHistory(delta int) {
+	switch {
+	case delta > 0: // Up — go back in history
+		if len(a.history) == 0 {
+			return
+		}
+		if a.historyIdx == -1 {
+			// Save current draft before entering history.
+			a.historyDraft = a.input.Value()
+			a.historyIdx = 0
+		} else if a.historyIdx < len(a.history)-1 {
+			a.historyIdx++
+		}
+		a.input.SetValue(a.history[a.historyIdx])
+	case delta < 0: // Down — go forward
+		if a.historyIdx == -1 {
+			return // already at draft, no-op
+		}
+		if a.historyIdx > 0 {
+			a.historyIdx--
+			a.input.SetValue(a.history[a.historyIdx])
+		} else {
+			// Return to draft.
+			a.historyIdx = -1
+			a.input.SetValue(a.historyDraft)
+			a.historyDraft = ""
+		}
+	}
 }
 
 // forwardScrollKey forwards PgUp/PgDown/Up/Down to the chat viewport.
