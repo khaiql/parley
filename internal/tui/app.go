@@ -68,6 +68,11 @@ type App struct {
 	agentTypeName string
 	mouseEnabled  bool // true = mouse capture on (scroll wheel works); false = text selection mode
 
+	// Message history for Up/Down navigation (newest-first).
+	history      []string
+	historyIdx   int    // -1 = current draft; ≥0 = browsing history
+	historyDraft string // saved draft before entering history
+
 	width  int
 	height int
 }
@@ -98,6 +103,7 @@ func NewApp(topic string, port int, mode InputMode, _ string, sendFn func(string
 		statusbar:       NewStatusBar(),
 		sendFn:          sendFn,
 		localActivities: make(map[string]room.Activity),
+		historyIdx:      -1,
 	}
 	a.mouseEnabled = true
 	a.input.SetMode(mode)
@@ -386,6 +392,12 @@ func (a *App) handleEnterKey() {
 	if text == "" {
 		return
 	}
+	// Push non-command messages to history (newest-first) before resetting.
+	if !(a.registry != nil && command.IsCommand(text)) {
+		a.history = append([]string{text}, a.history...)
+	}
+	a.historyIdx = -1
+	a.historyDraft = ""
 	a.input.Reset()
 	if a.registry != nil && command.IsCommand(text) {
 		result := a.registry.Execute(a.cmdCtx, text)

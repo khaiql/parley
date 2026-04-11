@@ -567,3 +567,134 @@ func TestApp_AgentStartFailedMsg_ReturnsQuit(t *testing.T) {
 		t.Error("expected tea.Quit command from AgentStartFailedMsg")
 	}
 }
+
+// ---- History navigation -------------------------------------------------------
+
+// sendMessage is a test helper that types text and presses Enter.
+func sendMessage(app App, text string) App {
+	for _, ch := range text {
+		model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		app = model.(App)
+	}
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	return model.(App)
+}
+
+func TestApp_History_PushedOnSend(t *testing.T) {
+	app := makeApp()
+
+	// Type "hello" and press Enter.
+	for _, ch := range "hello" {
+		model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		app = model.(App)
+	}
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+
+	if len(app.history) != 1 {
+		t.Fatalf("expected 1 history entry, got %d", len(app.history))
+	}
+	if app.history[0] != "hello" {
+		t.Errorf("expected history[0]='hello', got %q", app.history[0])
+	}
+	if app.historyIdx != -1 {
+		t.Errorf("expected historyIdx=-1 after send, got %d", app.historyIdx)
+	}
+}
+
+func TestApp_History_UpCyclesBack(t *testing.T) {
+	app := makeApp()
+	app = sendMessage(app, "first")
+	app = sendMessage(app, "second")
+
+	// Press Up once — should show most recent ("second").
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyUp})
+	app = model.(App)
+	if app.input.Value() != "second" {
+		t.Errorf("after 1× Up: expected 'second', got %q", app.input.Value())
+	}
+	if app.historyIdx != 0 {
+		t.Errorf("expected historyIdx=0, got %d", app.historyIdx)
+	}
+
+	// Press Up again — should show "first".
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyUp})
+	app = model.(App)
+	if app.input.Value() != "first" {
+		t.Errorf("after 2× Up: expected 'first', got %q", app.input.Value())
+	}
+	if app.historyIdx != 1 {
+		t.Errorf("expected historyIdx=1, got %d", app.historyIdx)
+	}
+
+	// Press Up at end of history — should stay on "first".
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyUp})
+	app = model.(App)
+	if app.input.Value() != "first" {
+		t.Errorf("Up at end should stay on 'first', got %q", app.input.Value())
+	}
+}
+
+func TestApp_History_DownRestoresDraft(t *testing.T) {
+	app := makeApp()
+	app = sendMessage(app, "hello")
+
+	// Type a draft.
+	for _, ch := range "draft text" {
+		model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		app = model.(App)
+	}
+
+	// Up — goes into history (saves draft).
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyUp})
+	app = model.(App)
+	if app.input.Value() != "hello" {
+		t.Fatalf("expected 'hello' after Up, got %q", app.input.Value())
+	}
+
+	// Down — back to draft.
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyDown})
+	app = model.(App)
+	if app.input.Value() != "draft text" {
+		t.Errorf("expected draft restored after Down, got %q", app.input.Value())
+	}
+	if app.historyIdx != -1 {
+		t.Errorf("expected historyIdx=-1 after returning to draft, got %d", app.historyIdx)
+	}
+}
+
+func TestApp_History_DownOnEmptyHistoryIsNoop(t *testing.T) {
+	app := makeApp()
+
+	// Type some text.
+	for _, ch := range "current" {
+		model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		app = model.(App)
+	}
+
+	// Down with no history — input unchanged.
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyDown})
+	app = model.(App)
+	if app.input.Value() != "current" {
+		t.Errorf("Down with no history should not change input, got %q", app.input.Value())
+	}
+}
+
+func TestApp_History_SlashCommandsNotStored(t *testing.T) {
+	app := makeAppWithRegistry()
+
+	// Send a slash command.
+	for _, ch := range "/info" {
+		model, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		app = model.(App)
+	}
+	// Dismiss autocomplete if triggered.
+	model, _ := app.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	app = model.(App)
+	model, _ = app.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	app = model.(App)
+
+	if len(app.history) != 0 {
+		t.Errorf("expected slash commands not stored in history, got %d entries: %v", len(app.history), app.history)
+	}
+}
