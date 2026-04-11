@@ -88,6 +88,12 @@ func (i *Input) Reset() {
 	i.ta.Reset()
 }
 
+// SetValue sets the textarea content and positions the cursor at the end.
+func (i *Input) SetValue(text string) {
+	i.ta.SetValue(text)
+	i.ta.SetCursor(len([]rune(text)))
+}
+
 // agentLines returns how many lines the current agentText wraps to at the
 // current content width. Returns 1 when there is no text or no width yet.
 func (i Input) agentLines() int {

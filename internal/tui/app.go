@@ -68,6 +68,11 @@ type App struct {
 	agentTypeName string
 	mouseEnabled  bool // true = mouse capture on (scroll wheel works); false = text selection mode
 
+	// Message history for Up/Down navigation (newest-first).
+	history      []string
+	historyIdx   int    // -1 = current draft; ≥0 = browsing history
+	historyDraft string // saved draft before entering history
+
 	width  int
 	height int
 }
@@ -98,6 +103,7 @@ func NewApp(topic string, port int, mode InputMode, _ string, sendFn func(string
 		statusbar:       NewStatusBar(),
 		sendFn:          sendFn,
 		localActivities: make(map[string]room.Activity),
+		historyIdx:      -1,
 	}
 	a.mouseEnabled = true
 	a.input.SetMode(mode)
@@ -386,6 +392,12 @@ func (a *App) handleEnterKey() {
 	if text == "" {
 		return
 	}
+	// Push non-command messages to history (newest-first) before resetting.
+	if !(a.registry != nil && command.IsCommand(text)) {
+		a.history = append([]string{text}, a.history...)
+	}
+	a.historyIdx = -1
+	a.historyDraft = ""
 	a.input.Reset()
 	if a.registry != nil && command.IsCommand(text) {
 		result := a.registry.Execute(a.cmdCtx, text)
@@ -457,6 +469,19 @@ func (a App) handleKeyMsg(m tea.KeyMsg) (App, tea.Cmd, bool) {
 		return a, cmd, true
 	}
 
+	// History navigation: Up/Down in human mode cycle through sent messages.
+	if a.input.mode == InputModeHuman && a.inputFSM.Current() == StateNormal {
+		switch m.Type {
+		case tea.KeyUp:
+			a.navigateHistory(+1)
+			return a, nil, true
+		case tea.KeyDown:
+			a.navigateHistory(-1)
+			return a, nil, true
+		default:
+		}
+	}
+
 	// Normal input handling (StateNormal, or Enter fell through from StateCompleting).
 	if m.Type == tea.KeyEnter && a.input.mode == InputModeHuman {
 		a.handleEnterKey()
@@ -464,6 +489,38 @@ func (a App) handleKeyMsg(m tea.KeyMsg) (App, tea.Cmd, bool) {
 	}
 
 	return a, nil, false
+}
+
+// navigateHistory moves the history cursor by delta (+1 = back, -1 = forward).
+// Only operates in InputModeHuman + StateNormal. Always consumes the key.
+func (a *App) navigateHistory(delta int) {
+	switch {
+	case delta > 0: // Up — go back in history
+		if len(a.history) == 0 {
+			return
+		}
+		if a.historyIdx == -1 {
+			// Save current draft before entering history.
+			a.historyDraft = a.input.Value()
+			a.historyIdx = 0
+		} else if a.historyIdx < len(a.history)-1 {
+			a.historyIdx++
+		}
+		a.input.SetValue(a.history[a.historyIdx])
+	case delta < 0: // Down — go forward
+		if a.historyIdx == -1 {
+			return // already at draft, no-op
+		}
+		if a.historyIdx > 0 {
+			a.historyIdx--
+			a.input.SetValue(a.history[a.historyIdx])
+		} else {
+			// Return to draft.
+			a.historyIdx = -1
+			a.input.SetValue(a.historyDraft)
+			a.historyDraft = ""
+		}
+	}
 }
 
 // forwardScrollKey forwards PgUp/PgDown/Up/Down to the chat viewport.

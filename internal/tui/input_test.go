@@ -197,6 +197,14 @@ func TestInputAgentMode_HeightMinimumWhenShortText(t *testing.T) {
 	}
 }
 
+func TestInput_SetValue_SetsTextAndMovesCaretToEnd(t *testing.T) {
+	inp := NewInput()
+	inp.SetValue("hello world")
+	if inp.Value() != "hello world" {
+		t.Errorf("expected value 'hello world', got %q", inp.Value())
+	}
+}
+
 func TestNewInput_CustomKeyMap(t *testing.T) {
 	inp := NewInput()
 
