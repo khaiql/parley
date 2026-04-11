@@ -478,6 +478,7 @@ func (a App) handleKeyMsg(m tea.KeyMsg) (App, tea.Cmd, bool) {
 		case tea.KeyDown:
 			a.navigateHistory(-1)
 			return a, nil, true
+		default:
 		}
 	}
 
