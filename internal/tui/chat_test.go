@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -594,6 +595,91 @@ func TestRenderMessagesCodeBlock(t *testing.T) {
 		t.Errorf("code block should have more indentation than paragraph text "+
 			"(code indent=%d, para indent=%d):\n%s",
 			codeLineIndent, paraLineIndent, mdPlain)
+	}
+}
+
+// TestChatViewBadgeDoesNotAddExtraLine verifies that the unread badge is
+// rendered INSIDE the viewport (overlaid on the last line) rather than
+// appended as an extra line below. Adding an extra line causes the total
+// layout to overflow the terminal height by 1, pushing the status bar
+// off screen.
+func TestChatViewBadgeDoesNotAddExtraLine(t *testing.T) {
+	const width, height = 80, 10
+	c := NewChat(width, height)
+	ts := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Add enough messages to more than fill the viewport.
+	for i := 0; i < 10; i++ {
+		c.AddMessage(protocol.MessageParams{
+			From: "alice", Source: "human", Role: "human",
+			Content:   []protocol.Content{{Type: "text", Text: fmt.Sprintf("message %d", i)}},
+			Timestamp: ts.Add(time.Duration(i) * time.Minute),
+		})
+	}
+
+	// Scroll up so a new message will be "unread".
+	c.vp.ScrollUp(5)
+	if c.vp.AtBottom() {
+		t.Skip("not enough content to scroll up; test is not meaningful")
+	}
+
+	// Add a new message while scrolled up — should increment unreadCount.
+	c.AddMessage(protocol.MessageParams{
+		From: "alice", Source: "human", Role: "human",
+		Content:   []protocol.Content{{Type: "text", Text: "unread message"}},
+		Timestamp: ts.Add(11 * time.Minute),
+	})
+	if c.unreadCount == 0 {
+		t.Fatal("expected unreadCount > 0 after adding message while scrolled up")
+	}
+
+	view := c.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) != height {
+		t.Errorf("View() must return exactly %d lines (viewport height), got %d — badge must not add an extra line:\n%s",
+			height, len(lines), view)
+	}
+
+	// Badge text should appear somewhere in the view.
+	found := false
+	for _, line := range lines {
+		if strings.Contains(stripANSI(line), "new") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("badge text ('new') should appear somewhere within the viewport view")
+	}
+}
+
+// TestChatSetSizePreservesScrollPosition verifies that resizing the chat
+// viewport does not snap the user back to the bottom when they have scrolled up.
+func TestChatSetSizePreservesScrollPosition(t *testing.T) {
+	c := NewChat(80, 10)
+	ts := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Add enough messages to scroll through.
+	for i := 0; i < 10; i++ {
+		c.AddMessage(protocol.MessageParams{
+			From: "alice", Source: "human", Role: "human",
+			Content:   []protocol.Content{{Type: "text", Text: fmt.Sprintf("message %d is a line with enough text to occupy the viewport", i)}},
+			Timestamp: ts.Add(time.Duration(i) * time.Minute),
+		})
+	}
+
+	// Scroll up.
+	c.vp.ScrollUp(5)
+	if c.vp.AtBottom() {
+		t.Skip("not enough content to scroll up; test is not meaningful")
+	}
+
+	// Resize.
+	c.SetSize(80, 12)
+
+	// Must NOT be snapped to bottom.
+	if c.vp.AtBottom() {
+		t.Error("SetSize should not snap to bottom when the user was scrolled up")
 	}
 }
 

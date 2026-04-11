@@ -316,16 +316,7 @@ func (a App) View() string {
 	a.statusbar.SetSidebarVisible(a.width >= terminalMinForSidebar)
 	a.statusbar.SetMouseEnabled(a.mouseEnabled)
 
-	chatView := a.chat.View()
-	if badge := a.chat.UnreadBadge(); badge != "" {
-		// Append badge as a right-aligned line below the viewport.
-		// lipgloss.Place would blank the viewport content, so we append instead.
-		badgeLine := lipgloss.NewStyle().
-			Width(a.chat.width).
-			Align(lipgloss.Right).
-			Render(badge)
-		chatView = chatView + "\n" + badgeLine
-	}
+	chatView := a.chat.View() // badge is overlaid inside the viewport — no extra line
 	var middle string
 	if a.width >= terminalMinForSidebar {
 		middle = lipgloss.JoinHorizontal(lipgloss.Top, chatView, a.sidebar.View())

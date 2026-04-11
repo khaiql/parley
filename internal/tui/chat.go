@@ -47,15 +47,19 @@ func NewChat(width, height int) Chat {
 	return Chat{vp: vp, width: width, height: height}
 }
 
-// SetSize resizes the chat viewport.
+// SetSize resizes the chat viewport. Scroll position is preserved unless the
+// user was already at the bottom (or the viewport had zero height, meaning it
+// had not been sized yet), in which case we stay at the bottom so new content
+// remains visible. This prevents a resize from snapping the user back to the
+// bottom when they have deliberately scrolled up to read history.
 func (c *Chat) SetSize(width, height int) {
+	wasAtBottom := c.vp.AtBottom() || c.vp.Height == 0
 	c.width = width
 	c.height = height
 	c.vp.Width = width
 	c.vp.Height = height
 	c.rebuildContent()
-	// Scroll to bottom so resumed history shows the latest messages.
-	if len(c.messages) > 0 {
+	if wasAtBottom {
 		c.vp.GotoBottom()
 	}
 }
@@ -99,21 +103,6 @@ func (c *Chat) Update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-// UnreadBadge returns a rendered badge showing pending unread messages,
-// or an empty string when there are none or the view is at the bottom.
-func (c Chat) UnreadBadge() string {
-	if c.unreadCount == 0 || c.vp.AtBottom() {
-		return ""
-	}
-	label := fmt.Sprintf("↓ %d new", c.unreadCount)
-	return lipgloss.NewStyle().
-		Background(colorPrimary).
-		Foreground(colorSidebarBg).
-		Bold(true).
-		Padding(0, 1).
-		Render(label)
-}
-
 // SetLoading shows or hides the loading indicator.
 func (c *Chat) SetLoading(loading bool) {
 	c.loading = loading
@@ -133,9 +122,33 @@ func (c Chat) AtBottom() bool {
 	return c.vp.AtBottom()
 }
 
-// View renders the chat area.
+// View renders the chat area. When there are unread messages (the user is
+// scrolled up), the badge is overlaid on the last line of the viewport so
+// that the total height stays equal to the viewport height. Appending the
+// badge as an extra line would overflow the terminal layout by one row and
+// push the status bar off screen.
 func (c Chat) View() string {
-	return c.vp.View()
+	vpView := c.vp.View()
+	if c.unreadCount == 0 || c.vp.AtBottom() || c.width == 0 {
+		return vpView
+	}
+	lines := strings.Split(vpView, "\n")
+	if len(lines) == 0 {
+		return vpView
+	}
+	label := fmt.Sprintf("↓ %d new", c.unreadCount)
+	badge := lipgloss.NewStyle().
+		Background(colorPrimary).
+		Foreground(colorSidebarBg).
+		Bold(true).
+		Padding(0, 1).
+		Render(label)
+	badgeLine := lipgloss.NewStyle().
+		Width(c.width).
+		Align(lipgloss.Right).
+		Render(badge)
+	lines[len(lines)-1] = badgeLine
+	return strings.Join(lines, "\n")
 }
 
 // isSystemMessage returns true if the message should be rendered as a system message.
