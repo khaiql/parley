@@ -66,6 +66,11 @@ func (s *State) HandleServerMessage(raw *protocol.RawMessage) {
 			s.emit(ErrorOccurred{Error: err})
 			return
 		}
+		// Defense-in-depth: drop [PASS] signals even if they somehow reach
+		// the client. The server should have filtered these already.
+		if len(params.Content) > 0 && protocol.IsPassSignal(params.Content[0].Text) {
+			return
+		}
 		s.messages = append(s.messages, params)
 		s.emit(MessageReceived{Message: params})
 

@@ -183,6 +183,15 @@ func IsUsingTool(status string) bool {
 	return status == "using tool" || len(status) > 7 && status[:7] == "using: "
 }
 
+// IsPassSignal reports whether the agent's accumulated response text is a
+// [PASS] control signal. Agents output exactly "[PASS]" (optionally surrounded
+// by whitespace) when they have nothing meaningful to add and want to skip
+// their turn. This is a pure control signal — it must never be broadcast,
+// stored in message history, or rendered in the UI.
+func IsPassSignal(text string) bool {
+	return strings.TrimSpace(text) == "[PASS]"
+}
+
 // StatusParams is the params payload for a "room.status" notification.
 // Status is a short description of what the participant is doing, e.g.
 // "thinking", "using: Read", or "" to indicate idle.

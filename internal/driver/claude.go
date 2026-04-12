@@ -261,18 +261,6 @@ func parseStreamEvent(raw claudeRawEvent) (AgentEvent, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// IsListeningSignal
-// ---------------------------------------------------------------------------
-
-// IsListeningSignal reports whether the agent's accumulated response text
-// should be treated as a silence signal rather than a chat message.
-// An agent outputs exactly "[LISTENING]" (on its own, possibly surrounded by
-// whitespace) when it decides not to respond to a message.
-func IsListeningSignal(text string) bool {
-	return strings.TrimSpace(text) == "[LISTENING]"
-}
-
-// ---------------------------------------------------------------------------
 // BuildInputMessage
 // ---------------------------------------------------------------------------
 

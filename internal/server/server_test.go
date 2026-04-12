@@ -539,3 +539,82 @@ func TestRoomLeftBroadcast(t *testing.T) {
 		t.Fatal("alice never received room.left notification for bob")
 	}
 }
+
+// TestPassSignalDropped verifies that a [PASS] message is silently dropped by
+// the server — it must not be broadcast to other clients or stored in history.
+func TestPassSignalDropped(t *testing.T) {
+	s := newTestServer(t)
+
+	// Connect alice
+	connAlice := dialServer(t, s.Addr())
+	scAlice := newScanner(connAlice)
+	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
+		Name: "alice",
+		Role: "user",
+	}))
+	readLine(t, scAlice) // consume room.state
+
+	// Connect bob
+	connBob := dialServer(t, s.Addr())
+	sendLine(t, connBob, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
+		Name: "bob",
+		Role: "agent",
+	}))
+
+	// Drain alice's notification backlog (bob joined, system msg).
+	drainConn(t, connAlice, scAlice, 500*time.Millisecond)
+
+	// Bob sends [PASS]
+	sendLine(t, connBob, protocol.NewNotification(protocol.MethodSend, protocol.SendParams{
+		Content: []protocol.Content{{Type: "text", Text: "[PASS]"}},
+	}))
+
+	// Alice should receive nothing (no room.message with [PASS]).
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		connAlice.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		if !scAlice.Scan() {
+			break
+		}
+		connAlice.SetReadDeadline(time.Time{})
+		var raw protocol.RawMessage
+		if err := json.Unmarshal(scAlice.Bytes(), &raw); err != nil {
+			continue
+		}
+		if raw.Method == protocol.MethodMessage {
+			var msg protocol.MessageParams
+			if err := json.Unmarshal(raw.Params, &msg); err != nil {
+				continue
+			}
+			for _, c := range msg.Content {
+				if c.Text == "[PASS]" {
+					t.Error("server broadcast a [PASS] message — it should have been dropped")
+				}
+			}
+		}
+	}
+	connAlice.SetReadDeadline(time.Time{})
+
+	// Also verify [PASS] is not in the server's stored history.
+	snap := s.Snapshot()
+	for _, m := range snap.Messages {
+		for _, c := range m.Content {
+			if c.Text == "[PASS]" {
+				t.Error("server stored a [PASS] message in room history — it should have been dropped")
+			}
+		}
+	}
+}
+
+// drainConn reads and discards all messages from scConn until it times out.
+func drainConn(t *testing.T, conn net.Conn, sc *bufio.Scanner, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		if !sc.Scan() {
+			break
+		}
+	}
+	conn.SetReadDeadline(time.Time{})
+}
