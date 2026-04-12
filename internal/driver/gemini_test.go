@@ -232,12 +232,12 @@ func TestParseGeminiLine_ThoughtTextPrefixFiltered(t *testing.T) {
 	}
 }
 
-func TestParseGeminiLine_ThoughtListeningFiltered(t *testing.T) {
-	// "[Thought: true][LISTENING]" should be filtered as thinking, not leak.
-	line := `{"type":"message","role":"assistant","content":"[Thought: true][LISTENING]","delta":true}`
+func TestParseGeminiLine_ThoughtPassFiltered(t *testing.T) {
+	// "[Thought: true][PASS]" should be filtered as thinking, not leak.
+	line := `{"type":"message","role":"assistant","content":"[Thought: true][PASS]","delta":true}`
 	event, ok := parseGeminiLine([]byte(line))
 	if !ok {
-		t.Fatal("expected thought+listening message to produce an event")
+		t.Fatal("expected thought+pass message to produce an event")
 	}
 	if event.Type != EventThinking {
 		t.Errorf("expected EventThinking, got %v", event.Type)

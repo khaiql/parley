@@ -314,7 +314,7 @@ func startAgentBridge(c *client.TCPClient, d driver.AgentDriver, p *tea.Program)
 				_ = c.SendStatus(joinName, protocol.StatusUsingTool(event.ToolName))
 			case driver.EventDone:
 				text := strings.TrimSpace(accumulated.String())
-				if driver.IsListeningSignal(text) {
+				if protocol.IsPassSignal(text) {
 					_ = c.SendStatus(joinName, protocol.StatusListening)
 				} else if text != "" {
 					mentions := protocol.ParseMentions(text)

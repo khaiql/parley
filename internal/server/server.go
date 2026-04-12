@@ -213,6 +213,11 @@ func (s *TCPServer) handleConn(conn net.Conn) {
 			if len(params.Content) == 0 {
 				continue
 			}
+			// Drop [PASS] signals — they are pure control signals that must
+			// never be stored, broadcast, or shown in any UI.
+			if protocol.IsPassSignal(params.Content[0].Text) {
+				continue
+			}
 
 			s.mu.Lock()
 			msg := s.state.AddMessage(name, source, role, params.Content[0])

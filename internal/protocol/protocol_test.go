@@ -358,3 +358,43 @@ func TestNormalizeAgentType(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestIsPassSignal
+// ---------------------------------------------------------------------------
+
+func TestIsPassSignal_ExactMatch(t *testing.T) {
+	if !protocol.IsPassSignal("[PASS]") {
+		t.Error("expected IsPassSignal to return true for '[PASS]'")
+	}
+}
+
+func TestIsPassSignal_WithWhitespace(t *testing.T) {
+	cases := []string{
+		"  [PASS]  ",
+		"\n[PASS]\n",
+		"\t[PASS]\t",
+		"[PASS]\n",
+	}
+	for _, c := range cases {
+		if !protocol.IsPassSignal(c) {
+			t.Errorf("expected IsPassSignal(%q) to return true", c)
+		}
+	}
+}
+
+func TestIsPassSignal_FalseForOtherText(t *testing.T) {
+	cases := []string{
+		"",
+		"Hello world",
+		"I am [PASS] on this",
+		"[pass]",
+		"PASS",
+		"[LISTENING]",
+	}
+	for _, c := range cases {
+		if protocol.IsPassSignal(c) {
+			t.Errorf("expected IsPassSignal(%q) to return false", c)
+		}
+	}
+}

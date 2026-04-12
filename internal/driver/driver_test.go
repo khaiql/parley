@@ -533,10 +533,10 @@ func TestReadLoop_DefaultBufferFailsOnLargeLine(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestBuildSystemPrompt_ContainsListeningInstruction
+// TestBuildSystemPrompt_ContainsPassInstruction
 // ---------------------------------------------------------------------------
 
-func TestBuildSystemPrompt_ContainsListeningInstruction(t *testing.T) {
+func TestBuildSystemPrompt_ContainsPassInstruction(t *testing.T) {
 	cfg := AgentConfig{
 		Name:      "Alice",
 		Role:      "engineer",
@@ -547,47 +547,8 @@ func TestBuildSystemPrompt_ContainsListeningInstruction(t *testing.T) {
 		},
 	}
 	prompt := BuildSystemPrompt(cfg)
-	if !strings.Contains(prompt, "[LISTENING]") {
-		t.Errorf("expected system prompt to contain '[LISTENING]' instruction, got:\n%s", prompt)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// TestIsListeningSignal
-// ---------------------------------------------------------------------------
-
-func TestIsListeningSignal_ExactMatch(t *testing.T) {
-	if !IsListeningSignal("[LISTENING]") {
-		t.Error("expected IsListeningSignal to return true for '[LISTENING]'")
-	}
-}
-
-func TestIsListeningSignal_WithWhitespace(t *testing.T) {
-	cases := []string{
-		"  [LISTENING]  ",
-		"\n[LISTENING]\n",
-		"\t[LISTENING]\t",
-		"[LISTENING]\n",
-	}
-	for _, c := range cases {
-		if !IsListeningSignal(c) {
-			t.Errorf("expected IsListeningSignal(%q) to return true", c)
-		}
-	}
-}
-
-func TestIsListeningSignal_FalseForOtherText(t *testing.T) {
-	cases := []string{
-		"",
-		"Hello world",
-		"I am [LISTENING] to you",
-		"[listening]",
-		"LISTENING",
-	}
-	for _, c := range cases {
-		if IsListeningSignal(c) {
-			t.Errorf("expected IsListeningSignal(%q) to return false", c)
-		}
+	if !strings.Contains(prompt, "[PASS]") {
+		t.Errorf("expected system prompt to contain '[PASS]' instruction, got:\n%s", prompt)
 	}
 }
 
