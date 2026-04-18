@@ -10,6 +10,7 @@ import (
 type TopBar struct {
 	topic string
 	port  int
+	host  string // remote host label; defaults to "localhost"
 	name  string // agent name (empty for host)
 	role  string // agent role (empty for host)
 	width int
@@ -17,7 +18,13 @@ type TopBar struct {
 
 // NewTopBar creates a TopBar with the given topic and port.
 func NewTopBar(topic string, port int) TopBar {
-	return TopBar{topic: topic, port: port}
+	return TopBar{topic: topic, port: port, host: "localhost"}
+}
+
+// SetHost overrides the host label shown in the topbar (default: "localhost").
+// Call this when joining a remote session so the topbar shows the real address.
+func (t *TopBar) SetHost(h string) {
+	t.host = h
 }
 
 // SetAgent sets the agent name and role displayed on the left of the topbar.
@@ -46,7 +53,7 @@ func (t TopBar) View() string {
 	// Right: port dimmed — technical detail, not primary focus
 	right := ""
 	if t.port > 0 {
-		right = lipgloss.NewStyle().Foreground(colorDimText).Render(fmt.Sprintf("localhost:%d", t.port))
+		right = lipgloss.NewStyle().Foreground(colorDimText).Render(fmt.Sprintf("%s:%d", t.host, t.port))
 	}
 
 	// Center: topic as an accent pill — most important info gets visual weight.
