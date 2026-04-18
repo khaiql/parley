@@ -73,3 +73,14 @@ func TestTopBar_SetHostChangesDisplay(t *testing.T) {
 		t.Errorf("expected topbar NOT to contain %q after SetHost, got:\n%s", "localhost", view)
 	}
 }
+
+func TestApp_SetHostPropagatesToTopBar(t *testing.T) {
+	app := NewApp("topic", 7777, InputModeHuman, "tester", nil)
+	app.SetHost("10.0.0.1")
+	// Access topbar directly (same package) to verify the host was propagated.
+	app.topbar.SetWidth(80)
+	view := app.topbar.View()
+	if !strings.Contains(view, "10.0.0.1:7777") {
+		t.Errorf("expected topbar to contain %q after App.SetHost, got:\n%s", "10.0.0.1:7777", view)
+	}
+}
