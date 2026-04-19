@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -48,5 +49,38 @@ func TestTopBarTopicLabel(t *testing.T) {
 
 	if !contains(output, "my-topic") {
 		t.Errorf("topbar should contain topic text \"my-topic\", got: %q", output)
+	}
+}
+
+func TestTopBar_DefaultHostIsLocalhost(t *testing.T) {
+	tb := NewTopBar("my topic", 8080)
+	tb.SetWidth(80)
+	view := tb.View()
+	if !strings.Contains(view, "localhost:8080") {
+		t.Errorf("expected topbar to contain %q, got:\n%s", "localhost:8080", view)
+	}
+}
+
+func TestTopBar_SetHostChangesDisplay(t *testing.T) {
+	tb := NewTopBar("my topic", 9000)
+	tb.SetHost("192.168.1.50")
+	tb.SetWidth(80)
+	view := tb.View()
+	if !strings.Contains(view, "192.168.1.50:9000") {
+		t.Errorf("expected topbar to contain %q, got:\n%s", "192.168.1.50:9000", view)
+	}
+	if strings.Contains(view, "localhost") {
+		t.Errorf("expected topbar NOT to contain %q after SetHost, got:\n%s", "localhost", view)
+	}
+}
+
+func TestApp_SetHostPropagatesToTopBar(t *testing.T) {
+	app := NewApp("topic", 7777, InputModeHuman, "tester", nil)
+	app.SetHost("10.0.0.1")
+	// Access topbar directly (same package) to verify the host was propagated.
+	app.topbar.SetWidth(80)
+	view := app.topbar.View()
+	if !strings.Contains(view, "10.0.0.1:7777") {
+		t.Errorf("expected topbar to contain %q after App.SetHost, got:\n%s", "10.0.0.1:7777", view)
 	}
 }

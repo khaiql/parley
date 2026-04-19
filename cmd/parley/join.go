@@ -26,6 +26,7 @@ import (
 
 var (
 	joinPort      int
+	joinHost      string
 	joinName      string
 	joinRole      string
 	joinResume    bool
@@ -39,15 +40,19 @@ var joinCmd = &cobra.Command{
 	RunE:  runJoin,
 }
 
-func init() {
+func initJoinFlags() {
 	joinCmd.Flags().IntVar(&joinPort, "port", 0, "Port of the session to join (required)")
+	joinCmd.Flags().StringVarP(&joinHost, "host", "H", "localhost", "Hostname or IP of the session to join")
 	joinCmd.Flags().StringVar(&joinName, "name", "", "Your name in the session (random if not set)")
 	joinCmd.Flags().StringVar(&joinRole, "role", "agent", "Your role in the session")
 	joinCmd.Flags().BoolVar(&joinResume, "resume", false, "Resume prior agent session (looks up session ID from saved agents.json)")
 	joinCmd.Flags().StringVarP(&joinAgentType, "agent-type", "t", protocol.AgentTypeClaude, fmt.Sprintf("Agent type (%s)", strings.Join(protocol.SupportedAgentTypes(), ", ")))
 	joinCmd.Flags().SetInterspersed(false)
 	_ = joinCmd.MarkFlagRequired("port")
+}
 
+func init() {
+	initJoinFlags()
 	rootCmd.AddCommand(joinCmd)
 }
 
@@ -79,7 +84,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	agentType := protocol.NormalizeAgentType(joinAgentType)
 	extraArgs := parseExtraArgs(cmd, args)
 
-	c, err := client.New(fmt.Sprintf("localhost:%d", joinPort))
+	c, err := client.New(fmt.Sprintf("%s:%d", joinHost, joinPort))
 	if err != nil {
 		return fmt.Errorf("join: connect: %w", err)
 	}
@@ -96,6 +101,7 @@ func runJoin(cmd *cobra.Command, args []string) error {
 	rs := room.New(nil, command.Context{})
 	app := tui.NewApp(roomState.Topic, joinPort, tui.InputModeAgent, joinName, nil, roomState.Participants...)
 	app.SetAgent(joinName, joinRole)
+	app.SetHost(joinHost)
 	app.SetYolo(roomState.AutoApprove)
 	app.SetRoomState(rs)
 	app.SetInitializing(true, agentType)

@@ -130,6 +130,12 @@ func (a *App) SetAgent(name, role string) {
 	a.topbar.SetAgent(name, role)
 }
 
+// SetHost sets the remote host label shown in the topbar (default: "localhost").
+// Call this after NewApp when joining a remote session.
+func (a *App) SetHost(h string) {
+	a.topbar.SetHost(h)
+}
+
 // SetCommandRegistry configures the slash command registry and context.
 // This is only used by the host TUI.
 func (a *App) SetCommandRegistry(reg *command.Registry, ctx command.Context) {
