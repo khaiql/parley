@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -143,7 +144,9 @@ func TestServerRollbackJoinPublishesCompensatingLeave(t *testing.T) {
 	if err := cc.writeLocked(resp); err == nil {
 		t.Fatal("join ack write succeeded, want forced failure")
 	}
-	srv.rollbackJoin("alice", cc)
+	if err := srv.rollbackJoin("alice", cc); err != nil {
+		t.Fatalf("rollbackJoin: %v", err)
+	}
 
 	joined := bobConn.readResponse(t)
 	if joined.Event == nil || joined.Event.Type != model.EventParticipantJoined || joined.Event.Actor != "alice" {
@@ -161,6 +164,99 @@ func TestServerRollbackJoinPublishesCompensatingLeave(t *testing.T) {
 	if len(events) != 2 || events[0].Type != model.EventParticipantJoined || events[1].Type != model.EventParticipantLeft {
 		t.Fatalf("events = %#v, want joined then compensating left", events)
 	}
+}
+
+func TestServerRollbackJoinAppendFailurePreservesOnlineState(t *testing.T) {
+	srv, logPath := newInternalTestServerWithLogPath(t)
+	aliceConn := newRecordingConn()
+
+	resp := srv.handleJoin(aliceConn, protocol.JoinRequest{RoomID: "room-1", Name: "alice", Role: "participant"})
+	if !resp.OK || resp.Event == nil {
+		t.Fatalf("handleJoin response = %#v", resp)
+	}
+	cc := srv.connectionForName("alice")
+	if cc == nil {
+		t.Fatal("alice connection was not registered")
+	}
+
+	originalLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if err := os.Remove(logPath); err != nil {
+		t.Fatalf("remove log: %v", err)
+	}
+	if err := os.Mkdir(logPath, 0o700); err != nil {
+		t.Fatalf("mkdir log path: %v", err)
+	}
+
+	if err := srv.rollbackJoin("alice", cc); err == nil {
+		t.Fatal("rollbackJoin succeeded, want compensating leave append failure")
+	}
+
+	srv.mu.Lock()
+	participant := srv.participants["alice"]
+	currentConn := srv.conns["alice"]
+	srv.mu.Unlock()
+	if !participant.Online {
+		t.Fatal("participant was marked offline without durable compensating leave")
+	}
+	if currentConn != cc {
+		t.Fatal("connection was removed without durable compensating leave")
+	}
+
+	if err := os.Remove(logPath); err != nil {
+		t.Fatalf("remove log directory: %v", err)
+	}
+	if err := os.WriteFile(logPath, originalLog, 0o600); err != nil {
+		t.Fatalf("restore log: %v", err)
+	}
+	events, err := srv.log.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != model.EventParticipantJoined {
+		t.Fatalf("events = %#v, want only durable join", events)
+	}
+}
+
+func TestServerPublicationRecipientsAreCapturedAtCommit(t *testing.T) {
+	srv := newInternalTestServerWithoutPublisher(t)
+	aliceConn := newRecordingConn()
+	bobConn := newRecordingConn()
+	carolConn := newRecordingConn()
+	srv.registerOnlineTestClient("alice", aliceConn)
+	srv.registerOnlineTestClient("bob", bobConn)
+
+	sendResp := srv.handleSend("alice", protocol.SendRequest{Text: "queued before carol joins"})
+	if !sendResp.OK || sendResp.Event == nil {
+		t.Fatalf("handleSend response = %#v", sendResp)
+	}
+	pub := srv.takePublication(t)
+
+	joinResp := srv.handleJoin(carolConn, protocol.JoinRequest{RoomID: "room-1", Name: "carol", Role: "participant"})
+	if !joinResp.OK || joinResp.Event == nil {
+		t.Fatalf("handleJoin response = %#v", joinResp)
+	}
+	carolCC := srv.connectionForName("carol")
+	if carolCC == nil {
+		t.Fatal("carol connection was not registered")
+	}
+	if err := carolCC.writeLocked(joinResp); err != nil {
+		t.Fatalf("write carol join response: %v", err)
+	}
+	carolJoinResp := carolConn.readResponse(t)
+	if len(carolJoinResp.Events) != 1 || carolJoinResp.Events[0].Seq != sendResp.Event.Seq {
+		t.Fatalf("carol join snapshot = %#v, want queued message seq %d", carolJoinResp.Events, sendResp.Event.Seq)
+	}
+
+	srv.publishDirect(pub)
+
+	bobPush := bobConn.readResponse(t)
+	if bobPush.Event == nil || bobPush.Event.Seq != sendResp.Event.Seq {
+		t.Fatalf("bob push = %#v, want queued message seq %d", bobPush, sendResp.Event.Seq)
+	}
+	carolConn.assertNoResponse(t)
 }
 
 func TestServerPublishesCommittedEventsInSequenceOrder(t *testing.T) {
@@ -255,15 +351,46 @@ func TestServerRejectsAcceptedConnAfterCloseBegins(t *testing.T) {
 
 func newInternalTestServer(t *testing.T) *Server {
 	t.Helper()
+	srv, _ := newInternalTestServerWithLogPath(t)
+	return srv
+}
+
+func newInternalTestServerWithLogPath(t *testing.T) (*Server, string) {
+	t.Helper()
+	logPath := filepath.Join(t.TempDir(), "events.jsonl")
 	srv, err := New("127.0.0.1:0", Config{
 		RoomID: "room-1",
 		Topic:  "test topic",
-		Log:    eventlog.New(filepath.Join(t.TempDir(), "events.jsonl")),
+		Log:    eventlog.New(logPath),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { _ = srv.Close() })
+	return srv, logPath
+}
+
+func newInternalTestServerWithoutPublisher(t *testing.T) *Server {
+	t.Helper()
+	logPath := filepath.Join(t.TempDir(), "events.jsonl")
+	log := eventlog.New(logPath)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	srv := &Server{
+		listener:      ln,
+		cfg:           Config{RoomID: "room-1", Topic: "test topic", Log: log},
+		log:           log,
+		participants:  make(map[string]model.Participant),
+		conns:         make(map[string]*clientConn),
+		activeConns:   make(map[net.Conn]struct{}),
+		serveStarted:  make(chan struct{}),
+		closed:        make(chan struct{}),
+		publisherDone: make(chan struct{}),
+	}
+	srv.publishCond = sync.NewCond(&srv.publishMu)
+	t.Cleanup(func() { _ = ln.Close() })
 	return srv
 }
 
@@ -272,6 +399,20 @@ func (s *Server) registerOnlineTestClient(name string, conn net.Conn) {
 	defer s.mu.Unlock()
 	s.participants[name] = model.Participant{Name: name, Role: "participant", Online: true}
 	s.conns[name] = &clientConn{name: name, conn: conn}
+}
+
+func (s *Server) takePublication(t *testing.T) publication {
+	t.Helper()
+	s.publishMu.Lock()
+	defer s.publishMu.Unlock()
+	if len(s.publishQueue) == 0 {
+		t.Fatal("publish queue is empty")
+	}
+	pub := s.publishQueue[0]
+	copy(s.publishQueue, s.publishQueue[1:])
+	s.publishQueue[len(s.publishQueue)-1] = publication{}
+	s.publishQueue = s.publishQueue[:len(s.publishQueue)-1]
+	return pub
 }
 
 type recordingConn struct {
@@ -350,6 +491,19 @@ func (c *recordingConn) readResponse(t *testing.T) protocol.Response {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for pushed response")
 		return protocol.Response{}
+	}
+}
+
+func (c *recordingConn) assertNoResponse(t *testing.T) {
+	t.Helper()
+	select {
+	case data := <-c.writes:
+		var resp protocol.Response
+		if err := protocol.DecodeLine(data, &resp); err != nil {
+			t.Fatalf("DecodeLine unexpected response: %v", err)
+		}
+		t.Fatalf("unexpected pushed response = %#v", resp)
+	default:
 	}
 }
 

@@ -57,8 +57,8 @@ type Server struct {
 }
 
 type publication struct {
-	except string
-	event  model.Event
+	event      model.Event
+	recipients []*clientConn
 }
 
 type clientConn struct {
@@ -221,7 +221,12 @@ func (s *Server) handleConn(conn net.Conn) {
 				return
 			}
 			if err := cc.writeLocked(resp); err != nil {
-				s.rollbackJoin(name, cc)
+				if rollbackErr := s.rollbackJoin(name, cc); rollbackErr != nil {
+					// The join is durable and compensation failed, so keep the
+					// registered online state consistent with the event log.
+					cc = nil
+					return
+				}
 				cc = nil
 				return
 			}
@@ -483,29 +488,45 @@ func (s *Server) connectionForName(name string) *clientConn {
 	return s.conns[name]
 }
 
-func (s *Server) rollbackJoin(name string, cc *clientConn) {
+func (s *Server) rollbackJoin(name string, cc *clientConn) error {
 	s.mu.Lock()
 	participant, participantOK := s.participants[name]
-	if current, ok := s.conns[name]; ok && current == cc {
+	current, connOK := s.conns[name]
+	if !participantOK {
+		if connOK && current == cc {
+			delete(s.conns, name)
+		}
+		s.mu.Unlock()
+		cc.close.Do(func() {
+			_ = cc.conn.Close()
+		})
+		return nil
+	}
+	ev, err := s.log.Append(model.Event{
+		Type:    model.EventParticipantLeft,
+		RoomID:  s.cfg.RoomID,
+		Actor:   name,
+		Payload: model.ParticipantPayload{Role: participant.Role, Directory: participant.Directory, Repo: participant.Repo},
+	})
+	if err != nil {
+		// Leave the participant/connection registered so memory still reflects
+		// the durable participant.joined event when compensation cannot be logged.
+		s.mu.Unlock()
+		return err
+	}
+
+	participant.Online = false
+	s.participants[name] = participant
+	if connOK && current == cc {
 		delete(s.conns, name)
 	}
-	if participantOK {
-		participant.Online = false
-		s.participants[name] = participant
-		if ev, err := s.log.Append(model.Event{
-			Type:    model.EventParticipantLeft,
-			RoomID:  s.cfg.RoomID,
-			Actor:   name,
-			Payload: model.ParticipantPayload{Role: participant.Role, Directory: participant.Directory, Repo: participant.Repo},
-		}); err == nil {
-			s.enqueuePublicationLocked(name, ev)
-		}
-	}
+	s.enqueuePublicationLocked(name, ev)
 	s.mu.Unlock()
 
 	cc.close.Do(func() {
 		_ = cc.conn.Close()
 	})
+	return nil
 }
 
 func (s *Server) removeConnection(name string, cc *clientConn) {
@@ -544,14 +565,28 @@ func (s *Server) closeAllConnections() {
 }
 
 func (s *Server) broadcastEventExcept(name string, ev model.Event) {
-	s.publishDirect(publication{except: name, event: ev})
+	s.mu.Lock()
+	pub := s.newPublicationLocked(name, ev)
+	s.mu.Unlock()
+	s.publishDirect(pub)
 }
 
 func (s *Server) enqueuePublicationLocked(name string, ev model.Event) {
+	pub := s.newPublicationLocked(name, ev)
 	s.publishMu.Lock()
-	s.publishQueue = append(s.publishQueue, publication{except: name, event: ev})
+	s.publishQueue = append(s.publishQueue, pub)
 	s.publishCond.Signal()
 	s.publishMu.Unlock()
+}
+
+func (s *Server) newPublicationLocked(name string, ev model.Event) publication {
+	recipients := make([]*clientConn, 0, len(s.conns))
+	for connName, cc := range s.conns {
+		if connName != name {
+			recipients = append(recipients, cc)
+		}
+	}
+	return publication{event: ev, recipients: recipients}
 }
 
 func (s *Server) runPublisher() {
@@ -582,17 +617,8 @@ func (s *Server) publishDirect(pub publication) {
 		return
 	}
 
-	s.mu.Lock()
-	conns := make([]*clientConn, 0, len(s.conns))
-	for connName, cc := range s.conns {
-		if connName != pub.except {
-			conns = append(conns, cc)
-		}
-	}
-	s.mu.Unlock()
-
 	var failed []*clientConn
-	for _, cc := range conns {
+	for _, cc := range pub.recipients {
 		if err := cc.writeData(data); err != nil {
 			failed = append(failed, cc)
 		}
