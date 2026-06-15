@@ -3,40 +3,95 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/khaiql/parley/internal/jsonout"
 )
 
+const (
+	version         = "dev"
+	protocolVersion = "v1"
+)
+
+type cliError struct {
+	code    string
+	message string
+}
+
+func (e cliError) Error() string {
+	return e.message
+}
+
 func main() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	if err := newRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-var rootCmd = &cobra.Command{
-	Use:   "parley",
-	Short: "TUI group chat for coding agents",
+func newRootCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "parley",
+		Short:         "JSON-only Parley room CLI",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+	}
+
+	cmd.AddCommand(
+		startCmd(),
+		joinCmd(),
+		inviteCmd(),
+		infoCmd(),
+		statusCmd(),
+		inboxCmd(),
+		historyCmd(),
+		waitCmd(),
+		sendCmd(),
+		leaveCmd(),
+		stopCmd(),
+		versionCmd(),
+	)
+
+	return cmd
 }
 
-// defaultParleyDir returns the canonical base directory for persisted room data.
-func defaultParleyDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
+func versionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print Parley version",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return writeJSON(cmd, struct {
+				Version         string `json:"version"`
+				ProtocolVersion string `json:"protocol_version"`
+			}{
+				Version:         version,
+				ProtocolVersion: protocolVersion,
+			})
+		},
 	}
-	return filepath.Join(home, ".parley", "rooms")
 }
 
-// detectRepo runs git remote get-url origin and returns the trimmed output,
-// or an empty string if the command fails.
-func detectRepo() string {
-	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+func writeJSON(cmd *cobra.Command, v interface{}) error {
+	out, err := jsonout.Marshal(v)
 	if err != nil {
-		return ""
+		return err
 	}
-	return strings.TrimSpace(string(out))
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), string(out))
+	return err
+}
+
+func writeJSONError(cmd *cobra.Command, code, message string) error {
+	out, marshalErr := jsonout.MarshalError(code, message)
+	if marshalErr != nil {
+		return marshalErr
+	}
+	if _, err := fmt.Fprintln(cmd.OutOrStderr(), string(out)); err != nil {
+		return err
+	}
+	return cliError{code: code, message: message}
+}
+
+func notImplemented(cmd *cobra.Command, name string) error {
+	return writeJSONError(cmd, "not_implemented", fmt.Sprintf("%s runtime is not implemented yet", name))
 }
