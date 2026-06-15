@@ -77,8 +77,8 @@ func Invite(p paths.Paths, roomID string) (InviteResponse, error) {
 		Descriptor:          desc,
 		LocalHost:           meta.LocalHost,
 		LocalPort:           meta.LocalPort,
-		JoinCommandTemplate: fmt.Sprintf("parley join %s --name <participant-name>", desc),
-		AgentInstruction:    fmt.Sprintf("Join this Parley room with `parley join %s --name <your-name>`, then use `parley inbox`, `parley send`, and `parley wait` to participate.", desc),
+		JoinCommandTemplate: fmt.Sprintf("parley join %q --name <participant-name> --role <participant-role>", desc),
+		AgentInstruction:    fmt.Sprintf("Use your Parley skill to join this room: %s", desc),
 	}, nil
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -145,6 +146,15 @@ type participation struct {
 	name  string
 }
 
+type participationError struct {
+	code    string
+	message string
+}
+
+func (e participationError) Error() string {
+	return e.message
+}
+
 func runInfo(cmd *cobra.Command, args []string) error {
 	if err := noArgsJSON(cmd, args); err != nil {
 		return err
@@ -153,8 +163,14 @@ func runInfo(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	room, _ := parleyRuntime.LoadRoomRuntime(part.paths, part.room)
-	meta, _ := loadParticipantMeta(part)
+	room, err := parleyRuntime.LoadRoomRuntime(part.paths, part.room)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return writeJSONError(cmd, "runtime_error", fmt.Sprintf("load room runtime: %v", err))
+	}
+	meta, err := loadParticipantMeta(part)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return writeJSONError(cmd, "runtime_error", fmt.Sprintf("load participant metadata: %v", err))
+	}
 	return writeJSON(cmd, infoResponse(part, room, meta))
 }
 
@@ -166,7 +182,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	meta, _ := loadParticipantMeta(part)
+	meta, err := loadParticipantMeta(part)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return writeJSONError(cmd, "runtime_error", fmt.Sprintf("load participant metadata: %v", err))
+	}
 	return writeJSON(cmd, statusResponse(part, meta))
 }
 
@@ -233,9 +252,13 @@ func runAdapterControl(cmd *cobra.Command, args []string, req adapter.ControlReq
 		if err != nil {
 			return writeJSONError(cmd, "invalid_arguments", err.Error())
 		}
-		if timeout > 0 {
-			req.Timeout = timeout.String()
+		if timeout < 0 {
+			return writeJSONError(cmd, "invalid_arguments", "wait --timeout must be non-negative")
 		}
+		if timeout == 0 {
+			return writeJSONError(cmd, "missing_required_flag", "wait requires --timeout")
+		}
+		req.Timeout = timeout.String()
 	}
 	roomID, _ := cmd.Flags().GetString("room")
 	name, _ := cmd.Flags().GetString("name")
@@ -257,9 +280,17 @@ func callParticipantControl(cmd *cobra.Command, roomID, name string, req adapter
 	}
 	resp, err := adapter.CallControl(socketPath, req)
 	if err != nil {
+		if req.Type == "wait" && isTimeout(err) {
+			return writeJSON(cmd, adapter.ControlResponse{OK: true, Status: "timeout"})
+		}
 		return writeJSONError(cmd, "adapter_not_running", fmt.Sprintf("participant adapter socket is not reachable: %v", err))
 	}
 	return writeJSON(cmd, resp)
+}
+
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func resolveParticipationFromFlags(cmd *cobra.Command) (participation, error) {
@@ -268,12 +299,23 @@ func resolveParticipationFromFlags(cmd *cobra.Command) (participation, error) {
 	p := paths.New(paths.DefaultRoot())
 	part, err := resolveParticipation(p, roomID, name)
 	if err != nil {
-		return participation{}, writeJSONError(cmd, "no_active_participation", err.Error())
+		code := "no_active_participation"
+		var partErr participationError
+		if errors.As(err, &partErr) {
+			code = partErr.code
+		}
+		return participation{}, writeJSONError(cmd, code, err.Error())
 	}
 	return part, nil
 }
 
 func resolveParticipation(p paths.Paths, roomID, name string) (participation, error) {
+	if (roomID == "") != (name == "") {
+		return participation{}, participationError{
+			code:    "ambiguous_participation",
+			message: "pass both --room and --name, or omit both to use the active participation",
+		}
+	}
 	if roomID == "" || name == "" {
 		active, err := parleyRuntime.LoadActive(p)
 		if err != nil {

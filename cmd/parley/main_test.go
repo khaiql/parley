@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,6 +30,21 @@ func executeForTest(args ...string) ([]byte, error) {
 func useParleyHome(t *testing.T) paths.Paths {
 	t.Helper()
 	home := t.TempDir()
+	t.Setenv("HOME", home)
+	return paths.New(filepath.Join(home, ".parley"))
+}
+
+func useShortParleyHome(t *testing.T) paths.Paths {
+	t.Helper()
+	home, err := os.MkdirTemp("/tmp", "parley-cli-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(home); err != nil {
+			t.Logf("RemoveAll %s: %v", home, err)
+		}
+	})
 	t.Setenv("HOME", home)
 	return paths.New(filepath.Join(home, ".parley"))
 }
@@ -160,6 +177,115 @@ func TestSendMissingSocketReturnsAdapterNotRunningJSON(t *testing.T) {
 		t.Fatal("expected send without adapter socket to fail")
 	}
 	assertJSONErrorCode(t, out, "adapter_not_running")
+}
+
+func TestPartialParticipationFlagsDoNotMixWithActive(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-a", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+
+	out, err := executeForTest("status", "--room", "room-b")
+	if err == nil {
+		t.Fatal("expected partial participation flags to fail")
+	}
+	assertJSONErrorCode(t, out, "ambiguous_participation")
+}
+
+func TestWaitRequiresTimeout(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+
+	out, err := executeForTest("wait")
+	if err == nil {
+		t.Fatal("expected wait without timeout to fail")
+	}
+	assertJSONErrorCode(t, out, "missing_required_flag")
+}
+
+func TestWaitSocketTimeoutReturnsTerminalState(t *testing.T) {
+	p := useShortParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	socketPath := parleyRuntime.ParticipantSocketPath(p, "room-1", "codex")
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll socket dir: %v", err)
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+
+	out, err := executeForTest("wait", "--timeout", "25ms")
+	if err != nil {
+		t.Fatalf("wait timeout: %v\n%s", err, out)
+	}
+	select {
+	case conn := <-accepted:
+		_ = conn.Close()
+	default:
+	}
+	var body struct {
+		OK     bool   `json:"ok"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if !body.OK || body.Status != "timeout" {
+		t.Fatalf("body = %#v, want timeout terminal state", body)
+	}
+}
+
+func TestInfoCorruptRuntimeReturnsRuntimeError(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	roomDir, err := p.EnsureRoomDir("room-1")
+	if err != nil {
+		t.Fatalf("EnsureRoomDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(roomDir, "runtime.json"), []byte("{"), 0o600); err != nil {
+		t.Fatalf("write corrupt runtime: %v", err)
+	}
+
+	out, err := executeForTest("info")
+	if err == nil {
+		t.Fatal("expected info with corrupt runtime to fail")
+	}
+	assertJSONErrorCode(t, out, "runtime_error")
+}
+
+func TestStatusCorruptParticipantMetaReturnsRuntimeError(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	metaPath := parleyRuntime.ParticipantMetaPath(p, "room-1", "codex")
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0o700); err != nil {
+		t.Fatalf("MkdirAll meta dir: %v", err)
+	}
+	if err := os.WriteFile(metaPath, []byte("{"), 0o600); err != nil {
+		t.Fatalf("write corrupt meta: %v", err)
+	}
+
+	out, err := executeForTest("status")
+	if err == nil {
+		t.Fatal("expected status with corrupt participant meta to fail")
+	}
+	assertJSONErrorCode(t, out, "runtime_error")
 }
 
 func TestHistoryLimitReturnsBoundedTranscriptEvents(t *testing.T) {
