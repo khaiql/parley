@@ -40,7 +40,7 @@ GOBIN="$HOME/.parley/bin" go install github.com/khaiql/parley/cmd/parley@latest
 The installer and Go commands place the binary at `~/.parley/bin/parley`.
 
 ```bash
-PARLEY="$HOME/.parley/bin/parley"
+PARLEY="$(command -v parley 2>/dev/null || printf '%s\n' "$HOME/.parley/bin/parley")"
 ```
 
 ### Use

@@ -174,6 +174,7 @@ func (s *Store) Inbox(peek bool) ([]model.Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	events = contiguousEvents(events, meta.LastSeenSeq, 0)
 	if peek || len(events) == 0 {
 		return events, nil
 	}
@@ -244,6 +245,24 @@ func (s *Store) MarkSeenThrough(seq int64) error {
 	return s.writeMeta(meta)
 }
 
+func (s *Store) MarkReceivedSeen() error {
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	meta, err := s.loadMeta()
+	if err != nil {
+		return err
+	}
+	if meta.LastReceivedSeq <= meta.LastSeenSeq {
+		return nil
+	}
+	meta.LastSeenSeq = meta.LastReceivedSeq
+	return s.writeMeta(meta)
+}
+
 func (s *Store) TakeUnseenThrough(seq int64) ([]model.Event, error) {
 	unlock, err := s.lock()
 	if err != nil {
@@ -274,6 +293,22 @@ func (s *Store) TakeUnseenThrough(seq int64) ([]model.Event, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func contiguousEvents(events []model.Event, afterSeq, throughSeq int64) []model.Event {
+	out := make([]model.Event, 0, len(events))
+	next := afterSeq + 1
+	for _, ev := range events {
+		if throughSeq > 0 && ev.Seq > throughSeq {
+			break
+		}
+		if ev.Seq != next {
+			break
+		}
+		out = append(out, ev)
+		next++
+	}
+	return out
 }
 
 func (s *Store) advanceLastReceived(meta Meta, seq int64) error {

@@ -64,6 +64,59 @@ func TestInboxAdvancesCursor(t *testing.T) {
 	}
 }
 
+func TestInboxDoesNotAdvanceAcrossSequenceGap(t *testing.T) {
+	store := newTestStore(t)
+	mustAppendLocal(t, store, testEvent(2, model.EventMessage, "alice"))
+
+	events, err := store.Inbox(false)
+	if err != nil {
+		t.Fatalf("Inbox: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want empty while seq 1 is missing", events)
+	}
+	meta, err := store.LoadMeta()
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if meta.LastSeenSeq != 0 {
+		t.Fatalf("LastSeenSeq = %d, want 0", meta.LastSeenSeq)
+	}
+
+	mustAppendLocal(t, store, testEvent(1, model.EventMessage, "bob"))
+	events, err = store.Inbox(false)
+	if err != nil {
+		t.Fatalf("Inbox after gap filled: %v", err)
+	}
+	if len(events) != 2 || events[0].Seq != 1 || events[1].Seq != 2 {
+		t.Fatalf("events = %#v, want seqs 1 and 2 after gap filled", events)
+	}
+}
+
+func TestMarkReceivedSeenMarksSnapshotWithSequenceGap(t *testing.T) {
+	store := newTestStore(t)
+	mustAppendLocal(t, store, testEvent(50, model.EventMessage, "alice"))
+	mustAppendLocal(t, store, testEvent(51, model.EventParticipantJoined, "me"))
+
+	if err := store.MarkReceivedSeen(); err != nil {
+		t.Fatalf("MarkReceivedSeen: %v", err)
+	}
+	meta, err := store.LoadMeta()
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if meta.LastSeenSeq != 51 {
+		t.Fatalf("LastSeenSeq = %d, want 51", meta.LastSeenSeq)
+	}
+	events, err := store.Inbox(true)
+	if err != nil {
+		t.Fatalf("Inbox peek: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want no unseen snapshot events", events)
+	}
+}
+
 func TestWaitBatchReturnsInterveningEventsThroughMessage(t *testing.T) {
 	store := newTestStore(t)
 	mustAppendLocal(t, store, testEvent(1, model.EventParticipantJoined, "bob"))

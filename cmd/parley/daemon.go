@@ -426,8 +426,7 @@ func (rt *participantAdapterRuntime) join() error {
 	if err := rt.appendResponse(resp); err != nil {
 		return err
 	}
-	_, err = rt.store.Inbox(false)
-	return err
+	return rt.store.MarkReceivedSeen()
 }
 
 func (rt *participantAdapterRuntime) readLoop() error {
