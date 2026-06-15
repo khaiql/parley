@@ -40,6 +40,7 @@ type Server struct {
 	participants map[string]model.Participant
 	conns        map[string]*clientConn
 	activeConns  map[net.Conn]struct{}
+	closing      bool
 
 	serveStarted chan struct{}
 	closed       chan struct{}
@@ -108,9 +109,9 @@ func (s *Server) Serve() {
 		if err != nil {
 			return
 		}
-		s.addActiveConn(conn)
-
-		s.wg.Add(1)
+		if !s.trackAcceptedConn(conn) {
+			return
+		}
 		go func() {
 			defer s.wg.Done()
 			s.handleConn(conn)
@@ -120,8 +121,8 @@ func (s *Server) Serve() {
 
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
+		s.beginClose()
 		s.closeErr = s.listener.Close()
-		s.closeAllConnections()
 
 		select {
 		case <-s.serveStarted:
@@ -129,6 +130,7 @@ func (s *Server) Close() error {
 		default:
 		}
 
+		s.closeAllConnections()
 		s.wg.Wait()
 		if errors.Is(s.closeErr, net.ErrClosed) {
 			s.closeErr = nil
@@ -439,10 +441,22 @@ func (s *Server) hasOnlineParticipantLocked(name string) bool {
 	return false
 }
 
-func (s *Server) addActiveConn(conn net.Conn) {
+func (s *Server) beginClose() {
 	s.mu.Lock()
-	s.activeConns[conn] = struct{}{}
+	s.closing = true
 	s.mu.Unlock()
+}
+
+func (s *Server) trackAcceptedConn(conn net.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing {
+		_ = conn.Close()
+		return false
+	}
+	s.activeConns[conn] = struct{}{}
+	s.wg.Add(1)
+	return true
 }
 
 func (s *Server) removeActiveConn(conn net.Conn) {

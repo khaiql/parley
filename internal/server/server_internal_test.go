@@ -83,6 +83,19 @@ func TestServerBroadcastRemovesClientOnWriteError(t *testing.T) {
 	}
 }
 
+func TestServerRejectsAcceptedConnAfterCloseBegins(t *testing.T) {
+	srv := newInternalTestServer(t)
+	conn := &recordingConn{}
+
+	srv.beginClose()
+	if srv.trackAcceptedConn(conn) {
+		t.Fatal("accepted connection was tracked after close began")
+	}
+	if !conn.closed {
+		t.Fatal("accepted connection after close began was not closed")
+	}
+}
+
 func newInternalTestServer(t *testing.T) *Server {
 	t.Helper()
 	srv, err := New("127.0.0.1:0", Config{
