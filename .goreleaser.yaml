@@ -15,7 +15,8 @@ builds:
       - arm64
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_
@@ -27,8 +28,28 @@ archives:
 checksum:
   name_template: 'checksums.txt'
 
+homebrew_casks:
+  - name: parley
+    binaries:
+      - parley
+    repository:
+      owner: khaiql
+      name: homebrew-parley
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    url:
+      verified: github.com/khaiql/parley/
+    homepage: https://github.com/khaiql/parley
+    description: Headless JSON-first room server for coordinating coding agents
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/parley"]
+          end
+
 snapshot:
-  version_template: "{{ incpatch .Version }}-next"
+  version_template: "0.0.0-next"
 
 changelog:
   sort: asc

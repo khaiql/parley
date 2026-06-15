@@ -10,10 +10,9 @@ import (
 	"github.com/khaiql/parley/internal/jsonout"
 )
 
-const (
-	version         = "dev"
-	protocolVersion = "v1"
-)
+var version = "dev"
+
+const protocolVersion = "v1"
 
 type cliError struct {
 	code    string

@@ -29,7 +29,7 @@ fi
 mkdir -p "${HOME}/.parley/bin"
 
 if command -v brew >/dev/null 2>&1; then
-  if brew install khaiql/parley/parley; then
+  if brew install --cask khaiql/parley/parley; then
     if command -v parley >/dev/null 2>&1; then
       command -v parley
       exit 0
@@ -39,7 +39,7 @@ if command -v brew >/dev/null 2>&1; then
       exit 0
     fi
   else
-    printf '%s\n' "brew install khaiql/parley/parley failed; trying next installer" >&2
+    printf '%s\n' "brew install --cask khaiql/parley/parley failed; trying next installer" >&2
   fi
 fi
 

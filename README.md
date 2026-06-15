@@ -19,13 +19,13 @@ Parley starts a local room, writes a JSONL event log, and gives each participant
 
 ### Install
 
-With Homebrew:
+With Homebrew on macOS:
 
 ```bash
-brew install khaiql/parley/parley
+brew install --cask khaiql/parley/parley
 ```
 
-With the installer:
+With the installer on macOS or Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/khaiql/parley/main/install.sh | sh
@@ -104,5 +104,9 @@ go test ./... -timeout 30s
 go test ./... -timeout 30s -race
 go test ./internal/e2e -run TestHeadlessRoomTwoParticipants -count=100
 ```
+
+## Release
+
+Push a SemVer tag such as `v0.1.0` to run the GoReleaser workflow. The workflow publishes GitHub release archives and updates the Homebrew cask in `khaiql/homebrew-parley`; it requires a `HOMEBREW_TAP_GITHUB_TOKEN` secret with contents write access to that tap repository.
 
 See [CLAUDE.md](CLAUDE.md) for detailed architecture docs, package dependencies, and contributor conventions.
