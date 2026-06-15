@@ -174,11 +174,12 @@ func (s *Server) handleConn(conn net.Conn) {
 	)
 
 	defer func() {
+		if joined && cc != nil {
+			_ = s.cleanupConnectionLeave(name, cc)
+			return
+		}
 		if cc != nil {
 			s.removeConnection(name, cc)
-		}
-		if joined {
-			_ = s.handleLeave(name)
 		}
 	}()
 
@@ -582,9 +583,14 @@ func (s *Server) enqueuePublicationLocked(name string, ev model.Event) {
 func (s *Server) newPublicationLocked(name string, ev model.Event) publication {
 	recipients := make([]*clientConn, 0, len(s.conns))
 	for connName, cc := range s.conns {
-		if connName != name {
-			recipients = append(recipients, cc)
+		if connName == name {
+			continue
 		}
+		participant, ok := s.participants[connName]
+		if !ok || !participant.Online {
+			continue
+		}
+		recipients = append(recipients, cc)
 	}
 	return publication{event: ev, recipients: recipients}
 }
@@ -629,17 +635,30 @@ func (s *Server) publishDirect(pub publication) {
 }
 
 func (s *Server) dropConnection(cc *clientConn) {
-	s.removeConnection(cc.name, cc)
-	_ = s.handleDroppedConnectionLeave(cc.name)
+	_ = s.cleanupConnectionLeave(cc.name, cc)
 }
 
-func (s *Server) handleDroppedConnectionLeave(name string) protocol.Response {
+func (s *Server) cleanupConnectionLeave(name string, cc *clientConn) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	participant, ok := s.participants[name]
+	current, connOK := s.conns[name]
+	if connOK && current != cc {
+		s.mu.Unlock()
+		cc.close.Do(func() {
+			_ = cc.conn.Close()
+		})
+		return nil
+	}
 	if !ok || !participant.Online {
-		return protocol.Response{OK: true}
+		if connOK {
+			delete(s.conns, name)
+		}
+		s.mu.Unlock()
+		cc.close.Do(func() {
+			_ = cc.conn.Close()
+		})
+		return nil
 	}
 
 	ev, err := s.log.Append(model.Event{
@@ -649,18 +668,24 @@ func (s *Server) handleDroppedConnectionLeave(name string) protocol.Response {
 		Payload: model.ParticipantPayload{Role: participant.Role, Directory: participant.Directory, Repo: participant.Repo},
 	})
 	if err != nil {
-		return errorResponse("log_append_failed", err.Error())
+		// Keep the current connection/name registered so memory does not claim
+		// a durable leave that the event log failed to record.
+		s.mu.Unlock()
+		return err
 	}
 
 	participant.Online = false
 	s.participants[name] = participant
-	s.enqueuePublicationLocked(name, ev)
-
-	return protocol.Response{
-		OK:        true,
-		Event:     &ev,
-		LatestSeq: ev.Seq,
+	if connOK {
+		delete(s.conns, name)
 	}
+	s.enqueuePublicationLocked(name, ev)
+	s.mu.Unlock()
+
+	cc.close.Do(func() {
+		_ = cc.conn.Close()
+	})
+	return nil
 }
 
 func (s *Server) historyLocked(req protocol.HistoryRequest, excludeSeq int64) ([]model.Event, int64, error) {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"errors"
 	"net"
 	"os"
@@ -259,6 +260,120 @@ func TestServerPublicationRecipientsAreCapturedAtCommit(t *testing.T) {
 	carolConn.assertNoResponse(t)
 }
 
+func TestServerPublicationSkipsOfflineConnectionEntries(t *testing.T) {
+	srv := newInternalTestServerWithoutPublisher(t)
+	aliceConn := newRecordingConn()
+	bobConn := newRecordingConn()
+	srv.registerOnlineTestClient("alice", aliceConn)
+	srv.registerOnlineTestClient("bob", bobConn)
+
+	leaveResp := srv.handleLeave("alice")
+	if !leaveResp.OK || leaveResp.Event == nil {
+		t.Fatalf("alice leave response = %#v", leaveResp)
+	}
+	_ = srv.takePublication(t)
+
+	srv.mu.Lock()
+	aliceParticipant := srv.participants["alice"]
+	_, aliceStillRegistered := srv.conns["alice"]
+	srv.mu.Unlock()
+	if aliceParticipant.Online {
+		t.Fatal("alice is still online after committed leave")
+	}
+	if !aliceStillRegistered {
+		t.Fatal("alice connection entry was removed before leave ack")
+	}
+
+	sendResp := srv.handleSend("bob", protocol.SendRequest{Text: "after alice left"})
+	if !sendResp.OK || sendResp.Event == nil {
+		t.Fatalf("bob send response = %#v", sendResp)
+	}
+	srv.publishDirect(srv.takePublication(t))
+
+	aliceConn.assertNoResponse(t)
+}
+
+func TestServerDisconnectLeaveAppendFailureKeepsConnectionRegistered(t *testing.T) {
+	srv, logPath := newInternalTestServerWithLogPath(t)
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	if !srv.trackAcceptedConn(serverConn) {
+		t.Fatal("trackAcceptedConn returned false")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer srv.wg.Done()
+		srv.handleConn(serverConn)
+		close(done)
+	}()
+
+	reader := bufio.NewReader(clientConn)
+	writeConnRequest(t, clientConn, protocol.Request{
+		Type: protocol.RequestJoin,
+		Join: &protocol.JoinRequest{RoomID: "room-1", Name: "alice", Role: "participant"},
+	})
+	resp := readConnResponse(t, clientConn, reader)
+	if !resp.OK || resp.Event == nil {
+		t.Fatalf("join response = %#v", resp)
+	}
+	cc := srv.connectionForName("alice")
+	if cc == nil {
+		t.Fatal("alice connection was not registered")
+	}
+
+	restoreLog := forceLogAppendFailure(t, logPath)
+	defer restoreLog()
+	if err := clientConn.Close(); err != nil {
+		t.Fatalf("close client conn: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handler to exit")
+	}
+
+	srv.mu.Lock()
+	participant := srv.participants["alice"]
+	currentConn := srv.conns["alice"]
+	srv.mu.Unlock()
+	if !participant.Online {
+		t.Fatal("participant was marked offline without durable disconnect leave")
+	}
+	if currentConn != cc {
+		t.Fatal("connection was removed without durable disconnect leave")
+	}
+}
+
+func TestServerBroadcastDropLeaveAppendFailureKeepsConnectionRegistered(t *testing.T) {
+	srv, logPath := newInternalTestServerWithLogPath(t)
+	srv.registerOnlineTestClient("alice", &recordingConn{})
+	bobConn := &recordingConn{writeErr: errors.New("broadcast write failed")}
+	srv.registerOnlineTestClient("bob", bobConn)
+	cc := srv.connectionForName("bob")
+	if cc == nil {
+		t.Fatal("bob connection was not registered")
+	}
+
+	restoreLog := forceLogAppendFailure(t, logPath)
+	defer restoreLog()
+	srv.broadcastEventExcept("alice", model.Event{Seq: 100, Type: model.EventMessage, RoomID: "room-1", Actor: "alice"})
+
+	srv.mu.Lock()
+	participant := srv.participants["bob"]
+	currentConn := srv.conns["bob"]
+	srv.mu.Unlock()
+	if !participant.Online {
+		t.Fatal("participant was marked offline without durable drop leave")
+	}
+	if currentConn != cc {
+		t.Fatal("connection was removed without durable drop leave")
+	}
+	if bobConn.closed {
+		t.Fatal("connection was closed without durable drop leave")
+	}
+}
+
 func TestServerPublishesCommittedEventsInSequenceOrder(t *testing.T) {
 	srv := newInternalTestServer(t)
 	bobConn := newRecordingConn()
@@ -413,6 +528,62 @@ func (s *Server) takePublication(t *testing.T) publication {
 	s.publishQueue[len(s.publishQueue)-1] = publication{}
 	s.publishQueue = s.publishQueue[:len(s.publishQueue)-1]
 	return pub
+}
+
+func forceLogAppendFailure(t *testing.T, logPath string) func() {
+	t.Helper()
+	originalLog, err := os.ReadFile(logPath)
+	originalExists := true
+	if os.IsNotExist(err) {
+		originalExists = false
+	} else if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove log: %v", err)
+	}
+	if err := os.Mkdir(logPath, 0o700); err != nil {
+		t.Fatalf("mkdir log path: %v", err)
+	}
+	return func() {
+		t.Helper()
+		if err := os.Remove(logPath); err != nil {
+			t.Fatalf("remove log directory: %v", err)
+		}
+		if !originalExists {
+			return
+		}
+		if err := os.WriteFile(logPath, originalLog, 0o600); err != nil {
+			t.Fatalf("restore log: %v", err)
+		}
+	}
+}
+
+func writeConnRequest(t *testing.T, conn net.Conn, req protocol.Request) {
+	t.Helper()
+	data, err := protocol.EncodeLine(req)
+	if err != nil {
+		t.Fatalf("EncodeLine: %v", err)
+	}
+	if _, err := conn.Write(data); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+}
+
+func readConnResponse(t *testing.T, conn net.Conn, reader *bufio.Reader) protocol.Response {
+	t.Helper()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	var resp protocol.Response
+	if err := protocol.DecodeLine(line, &resp); err != nil {
+		t.Fatalf("DecodeLine: %v", err)
+	}
+	return resp
 }
 
 type recordingConn struct {
