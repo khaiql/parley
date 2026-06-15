@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,6 +84,162 @@ func TestServerBroadcastRemovesClientOnWriteError(t *testing.T) {
 	}
 }
 
+func TestServerHandleSendPublishesCommittedEventWhenSenderAckFails(t *testing.T) {
+	srv := newInternalTestServer(t)
+	aliceConn := &recordingConn{writeErr: errors.New("sender write failed")}
+	bobConn := newRecordingConn()
+	srv.registerOnlineTestClient("alice", aliceConn)
+	srv.registerOnlineTestClient("bob", bobConn)
+
+	resp := srv.handleSend("alice", protocol.SendRequest{Text: "committed"})
+	if !resp.OK || resp.Event == nil {
+		t.Fatalf("handleSend response = %#v", resp)
+	}
+	if err := srv.conns["alice"].write(resp); err == nil {
+		t.Fatal("sender ack write succeeded, want forced failure")
+	}
+
+	pushed := bobConn.readResponse(t)
+	if !pushed.OK || pushed.Event == nil || pushed.Event.Seq != resp.Event.Seq || pushed.Event.Type != model.EventMessage {
+		t.Fatalf("bob pushed response = %#v, want committed message seq %d", pushed, resp.Event.Seq)
+	}
+}
+
+func TestServerHandleLeavePublishesCommittedEventWhenAckFails(t *testing.T) {
+	srv := newInternalTestServer(t)
+	aliceConn := &recordingConn{writeErr: errors.New("leave ack failed")}
+	bobConn := newRecordingConn()
+	srv.registerOnlineTestClient("alice", aliceConn)
+	srv.registerOnlineTestClient("bob", bobConn)
+
+	resp := srv.handleLeave("alice")
+	if !resp.OK || resp.Event == nil {
+		t.Fatalf("handleLeave response = %#v", resp)
+	}
+	if err := srv.conns["alice"].write(resp); err == nil {
+		t.Fatal("leave ack write succeeded, want forced failure")
+	}
+
+	pushed := bobConn.readResponse(t)
+	if !pushed.OK || pushed.Event == nil || pushed.Event.Seq != resp.Event.Seq || pushed.Event.Type != model.EventParticipantLeft {
+		t.Fatalf("bob pushed response = %#v, want participant.left seq %d", pushed, resp.Event.Seq)
+	}
+}
+
+func TestServerRollbackJoinPublishesCompensatingLeave(t *testing.T) {
+	srv := newInternalTestServer(t)
+	bobConn := newRecordingConn()
+	srv.registerOnlineTestClient("bob", bobConn)
+	aliceConn := &recordingConn{writeErr: errors.New("join ack failed")}
+
+	resp := srv.handleJoin(aliceConn, protocol.JoinRequest{RoomID: "room-1", Name: "alice", Role: "participant"})
+	if !resp.OK || resp.Event == nil {
+		t.Fatalf("handleJoin response = %#v", resp)
+	}
+	cc := srv.connectionForName("alice")
+	if cc == nil {
+		t.Fatal("alice connection was not registered")
+	}
+	if err := cc.writeLocked(resp); err == nil {
+		t.Fatal("join ack write succeeded, want forced failure")
+	}
+	srv.rollbackJoin("alice", cc)
+
+	joined := bobConn.readResponse(t)
+	if joined.Event == nil || joined.Event.Type != model.EventParticipantJoined || joined.Event.Actor != "alice" {
+		t.Fatalf("first pushed response = %#v, want alice joined", joined)
+	}
+	left := bobConn.readResponse(t)
+	if left.Event == nil || left.Event.Type != model.EventParticipantLeft || left.Event.Actor != "alice" {
+		t.Fatalf("second pushed response = %#v, want alice left", left)
+	}
+
+	events, err := srv.log.ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(events) != 2 || events[0].Type != model.EventParticipantJoined || events[1].Type != model.EventParticipantLeft {
+		t.Fatalf("events = %#v, want joined then compensating left", events)
+	}
+}
+
+func TestServerPublishesCommittedEventsInSequenceOrder(t *testing.T) {
+	srv := newInternalTestServer(t)
+	bobConn := newRecordingConn()
+	srv.registerOnlineTestClient("alice", &recordingConn{})
+	srv.registerOnlineTestClient("carol", &recordingConn{})
+	srv.registerOnlineTestClient("bob", bobConn)
+
+	first := srv.handleSend("alice", protocol.SendRequest{Text: "first"})
+	if !first.OK || first.Event == nil {
+		t.Fatalf("first send = %#v", first)
+	}
+	second := srv.handleSend("carol", protocol.SendRequest{Text: "second"})
+	if !second.OK || second.Event == nil {
+		t.Fatalf("second send = %#v", second)
+	}
+
+	firstPush := bobConn.readResponse(t)
+	secondPush := bobConn.readResponse(t)
+	if firstPush.Event == nil || secondPush.Event == nil {
+		t.Fatalf("pushes = %#v %#v, want events", firstPush, secondPush)
+	}
+	if firstPush.Event.Seq != first.Event.Seq || secondPush.Event.Seq != second.Event.Seq {
+		t.Fatalf("push seqs = %d, %d; want %d, %d", firstPush.Event.Seq, secondPush.Event.Seq, first.Event.Seq, second.Event.Seq)
+	}
+	if firstPush.Event.Seq >= secondPush.Event.Seq {
+		t.Fatalf("pushes out of order: %d then %d", firstPush.Event.Seq, secondPush.Event.Seq)
+	}
+}
+
+func TestServerPublishesDropLeaveAfterAlreadyQueuedEvents(t *testing.T) {
+	srv := newInternalTestServer(t)
+	blockWrite := make(chan struct{})
+	writeStarted := make(chan struct{})
+	bobConn := newRecordingConn()
+	failingConn := &recordingConn{
+		writeErr:     errors.New("peer write failed"),
+		writeBlock:   blockWrite,
+		writeStarted: writeStarted,
+	}
+	srv.registerOnlineTestClient("alice", &recordingConn{})
+	srv.registerOnlineTestClient("carol", &recordingConn{})
+	srv.registerOnlineTestClient("bob", bobConn)
+	srv.registerOnlineTestClient("dana", failingConn)
+
+	first := srv.handleSend("alice", protocol.SendRequest{Text: "first"})
+	if !first.OK || first.Event == nil {
+		t.Fatalf("first send = %#v", first)
+	}
+	select {
+	case <-writeStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for failing peer write to start")
+	}
+
+	second := srv.handleSend("carol", protocol.SendRequest{Text: "second"})
+	if !second.OK || second.Event == nil {
+		t.Fatalf("second send = %#v", second)
+	}
+	close(blockWrite)
+
+	firstPush := bobConn.readResponse(t)
+	secondPush := bobConn.readResponse(t)
+	leavePush := bobConn.readResponse(t)
+	if firstPush.Event == nil || firstPush.Event.Seq != first.Event.Seq {
+		t.Fatalf("first pushed response = %#v, want seq %d", firstPush, first.Event.Seq)
+	}
+	if secondPush.Event == nil || secondPush.Event.Seq != second.Event.Seq {
+		t.Fatalf("second pushed response = %#v, want seq %d", secondPush, second.Event.Seq)
+	}
+	if leavePush.Event == nil || leavePush.Event.Type != model.EventParticipantLeft || leavePush.Event.Actor != "dana" {
+		t.Fatalf("third pushed response = %#v, want dana participant.left", leavePush)
+	}
+	if !(firstPush.Event.Seq < secondPush.Event.Seq && secondPush.Event.Seq < leavePush.Event.Seq) {
+		t.Fatalf("pushes out of order: %d, %d, %d", firstPush.Event.Seq, secondPush.Event.Seq, leavePush.Event.Seq)
+	}
+}
+
 func TestServerRejectsAcceptedConnAfterCloseBegins(t *testing.T) {
 	srv := newInternalTestServer(t)
 	conn := &recordingConn{}
@@ -110,10 +267,21 @@ func newInternalTestServer(t *testing.T) *Server {
 	return srv
 }
 
+func (s *Server) registerOnlineTestClient(name string, conn net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.participants[name] = model.Participant{Name: name, Role: "participant", Online: true}
+	s.conns[name] = &clientConn{name: name, conn: conn}
+}
+
 type recordingConn struct {
 	writeErr       error
 	writeDeadlines []time.Time
 	closed         bool
+	writes         chan []byte
+	writeBlock     <-chan struct{}
+	writeStarted   chan struct{}
+	writeStartOnce sync.Once
 }
 
 func (c *recordingConn) Read([]byte) (int, error) {
@@ -121,8 +289,21 @@ func (c *recordingConn) Read([]byte) (int, error) {
 }
 
 func (c *recordingConn) Write(p []byte) (int, error) {
+	if c.writeStarted != nil {
+		c.writeStartOnce.Do(func() {
+			close(c.writeStarted)
+		})
+	}
+	if c.writeBlock != nil {
+		<-c.writeBlock
+	}
 	if c.writeErr != nil {
 		return 0, c.writeErr
+	}
+	if c.writes != nil {
+		data := make([]byte, len(p))
+		copy(data, p)
+		c.writes <- data
 	}
 	return len(p), nil
 }
@@ -151,6 +332,25 @@ func (c *recordingConn) SetReadDeadline(time.Time) error {
 func (c *recordingConn) SetWriteDeadline(t time.Time) error {
 	c.writeDeadlines = append(c.writeDeadlines, t)
 	return nil
+}
+
+func newRecordingConn() *recordingConn {
+	return &recordingConn{writes: make(chan []byte, 16)}
+}
+
+func (c *recordingConn) readResponse(t *testing.T) protocol.Response {
+	t.Helper()
+	select {
+	case data := <-c.writes:
+		var resp protocol.Response
+		if err := protocol.DecodeLine(data, &resp); err != nil {
+			t.Fatalf("DecodeLine: %v", err)
+		}
+		return resp
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pushed response")
+		return protocol.Response{}
+	}
 }
 
 type dummyAddr string

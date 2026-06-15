@@ -42,13 +42,23 @@ type Server struct {
 	activeConns  map[net.Conn]struct{}
 	closing      bool
 
-	serveStarted chan struct{}
-	closed       chan struct{}
-	wg           sync.WaitGroup
+	serveStarted   chan struct{}
+	closed         chan struct{}
+	wg             sync.WaitGroup
+	publishMu      sync.Mutex
+	publishCond    *sync.Cond
+	publishQueue   []publication
+	publishClosing bool
+	publisherDone  chan struct{}
 
 	closeOnce sync.Once
 	closeErr  error
 	startOnce sync.Once
+}
+
+type publication struct {
+	except string
+	event  model.Event
 }
 
 type clientConn struct {
@@ -69,16 +79,20 @@ func New(addr string, cfg Config) (*Server, error) {
 		return nil, err
 	}
 
-	return &Server{
-		listener:     ln,
-		cfg:          cfg,
-		log:          cfg.Log,
-		participants: make(map[string]model.Participant),
-		conns:        make(map[string]*clientConn),
-		activeConns:  make(map[net.Conn]struct{}),
-		serveStarted: make(chan struct{}),
-		closed:       make(chan struct{}),
-	}, nil
+	srv := &Server{
+		listener:      ln,
+		cfg:           cfg,
+		log:           cfg.Log,
+		participants:  make(map[string]model.Participant),
+		conns:         make(map[string]*clientConn),
+		activeConns:   make(map[net.Conn]struct{}),
+		serveStarted:  make(chan struct{}),
+		closed:        make(chan struct{}),
+		publisherDone: make(chan struct{}),
+	}
+	srv.publishCond = sync.NewCond(&srv.publishMu)
+	go srv.runPublisher()
+	return srv, nil
 }
 
 func (s *Server) Addr() string {
@@ -132,6 +146,11 @@ func (s *Server) Close() error {
 
 		s.closeAllConnections()
 		s.wg.Wait()
+		s.publishMu.Lock()
+		s.publishClosing = true
+		s.publishCond.Signal()
+		s.publishMu.Unlock()
+		<-s.publisherDone
 		if errors.Is(s.closeErr, net.ErrClosed) {
 			s.closeErr = nil
 		}
@@ -159,10 +178,7 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.removeConnection(name, cc)
 		}
 		if joined {
-			resp := s.handleLeave(name)
-			if resp.OK && resp.Event != nil {
-				s.broadcastEventExcept(name, *resp.Event)
-			}
+			_ = s.handleLeave(name)
 		}
 	}()
 
@@ -210,9 +226,6 @@ func (s *Server) handleConn(conn net.Conn) {
 				return
 			}
 			joined = true
-			if resp.Event != nil {
-				s.broadcastEventExcept(name, *resp.Event)
-			}
 
 		case protocol.RequestSend:
 			if req.Send == nil {
@@ -231,9 +244,6 @@ func (s *Server) handleConn(conn net.Conn) {
 			resp := s.handleSend(name, *req.Send)
 			if err := cc.write(resp); err != nil {
 				return
-			}
-			if resp.OK && resp.Event != nil {
-				s.broadcastEventExcept(name, *resp.Event)
 			}
 
 		case protocol.RequestHistory:
@@ -264,17 +274,16 @@ func (s *Server) handleConn(conn net.Conn) {
 			}
 
 			resp := s.handleLeave(name)
+			if resp.OK {
+				joined = false
+			}
 			if err := cc.write(resp); err != nil {
 				return
 			}
 			if !resp.OK {
 				continue
 			}
-			joined = false
 			s.removeConnection(name, cc)
-			if resp.OK && resp.Event != nil {
-				s.broadcastEventExcept(name, *resp.Event)
-			}
 			return
 
 		default:
@@ -347,6 +356,7 @@ func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Re
 		Online:    true,
 	}
 	s.conns[name] = cc
+	s.enqueuePublicationLocked(name, ev)
 
 	return protocol.Response{
 		OK:           true,
@@ -379,6 +389,7 @@ func (s *Server) handleSend(name string, req protocol.SendRequest) protocol.Resp
 	if err != nil {
 		return errorResponse("log_append_failed", err.Error())
 	}
+	s.enqueuePublicationLocked(name, ev)
 
 	return protocol.Response{
 		OK:        true,
@@ -424,6 +435,7 @@ func (s *Server) handleLeave(name string) protocol.Response {
 
 	participant.Online = false
 	s.participants[name] = participant
+	s.enqueuePublicationLocked(name, ev)
 
 	return protocol.Response{
 		OK:        true,
@@ -473,12 +485,21 @@ func (s *Server) connectionForName(name string) *clientConn {
 
 func (s *Server) rollbackJoin(name string, cc *clientConn) {
 	s.mu.Lock()
+	participant, participantOK := s.participants[name]
 	if current, ok := s.conns[name]; ok && current == cc {
 		delete(s.conns, name)
 	}
-	if participant, ok := s.participants[name]; ok {
+	if participantOK {
 		participant.Online = false
 		s.participants[name] = participant
+		if ev, err := s.log.Append(model.Event{
+			Type:    model.EventParticipantLeft,
+			RoomID:  s.cfg.RoomID,
+			Actor:   name,
+			Payload: model.ParticipantPayload{Role: participant.Role, Directory: participant.Directory, Repo: participant.Repo},
+		}); err == nil {
+			s.enqueuePublicationLocked(name, ev)
+		}
 	}
 	s.mu.Unlock()
 
@@ -523,7 +544,39 @@ func (s *Server) closeAllConnections() {
 }
 
 func (s *Server) broadcastEventExcept(name string, ev model.Event) {
-	resp := protocol.Response{OK: true, Event: &ev, LatestSeq: ev.Seq}
+	s.publishDirect(publication{except: name, event: ev})
+}
+
+func (s *Server) enqueuePublicationLocked(name string, ev model.Event) {
+	s.publishMu.Lock()
+	s.publishQueue = append(s.publishQueue, publication{except: name, event: ev})
+	s.publishCond.Signal()
+	s.publishMu.Unlock()
+}
+
+func (s *Server) runPublisher() {
+	defer close(s.publisherDone)
+	for {
+		s.publishMu.Lock()
+		for len(s.publishQueue) == 0 && !s.publishClosing {
+			s.publishCond.Wait()
+		}
+		if len(s.publishQueue) == 0 && s.publishClosing {
+			s.publishMu.Unlock()
+			return
+		}
+		pub := s.publishQueue[0]
+		copy(s.publishQueue, s.publishQueue[1:])
+		s.publishQueue[len(s.publishQueue)-1] = publication{}
+		s.publishQueue = s.publishQueue[:len(s.publishQueue)-1]
+		s.publishMu.Unlock()
+
+		s.publishDirect(pub)
+	}
+}
+
+func (s *Server) publishDirect(pub publication) {
+	resp := protocol.Response{OK: true, Event: &pub.event, LatestSeq: pub.event.Seq}
 	data, err := protocol.EncodeLine(resp)
 	if err != nil {
 		return
@@ -532,7 +585,7 @@ func (s *Server) broadcastEventExcept(name string, ev model.Event) {
 	s.mu.Lock()
 	conns := make([]*clientConn, 0, len(s.conns))
 	for connName, cc := range s.conns {
-		if connName != name {
+		if connName != pub.except {
 			conns = append(conns, cc)
 		}
 	}
@@ -551,9 +604,36 @@ func (s *Server) broadcastEventExcept(name string, ev model.Event) {
 
 func (s *Server) dropConnection(cc *clientConn) {
 	s.removeConnection(cc.name, cc)
-	resp := s.handleLeave(cc.name)
-	if resp.OK && resp.Event != nil {
-		s.broadcastEventExcept(cc.name, *resp.Event)
+	_ = s.handleDroppedConnectionLeave(cc.name)
+}
+
+func (s *Server) handleDroppedConnectionLeave(name string) protocol.Response {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	participant, ok := s.participants[name]
+	if !ok || !participant.Online {
+		return protocol.Response{OK: true}
+	}
+
+	ev, err := s.log.Append(model.Event{
+		Type:    model.EventParticipantLeft,
+		RoomID:  s.cfg.RoomID,
+		Actor:   name,
+		Payload: model.ParticipantPayload{Role: participant.Role, Directory: participant.Directory, Repo: participant.Repo},
+	})
+	if err != nil {
+		return errorResponse("log_append_failed", err.Error())
+	}
+
+	participant.Online = false
+	s.participants[name] = participant
+	s.enqueuePublicationLocked(name, ev)
+
+	return protocol.Response{
+		OK:        true,
+		Event:     &ev,
+		LatestSeq: ev.Seq,
 	}
 }
 
