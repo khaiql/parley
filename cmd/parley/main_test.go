@@ -3,8 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/khaiql/parley/internal/adapter"
+	"github.com/khaiql/parley/internal/eventlog"
+	"github.com/khaiql/parley/internal/model"
+	"github.com/khaiql/parley/internal/paths"
+	parleyRuntime "github.com/khaiql/parley/internal/runtime"
 )
 
 func executeForTest(args ...string) ([]byte, error) {
@@ -15,6 +23,13 @@ func executeForTest(args ...string) ([]byte, error) {
 	cmd.SetArgs(args)
 	err := execute(cmd)
 	return buf.Bytes(), err
+}
+
+func useParleyHome(t *testing.T) paths.Paths {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	return paths.New(filepath.Join(home, ".parley"))
 }
 
 func TestVersionJSON(t *testing.T) {
@@ -49,12 +64,139 @@ func TestJoinRequiresName(t *testing.T) {
 	}
 }
 
-func TestRuntimeCommandReturnsNotImplementedJSON(t *testing.T) {
+func TestStatusWithoutActiveParticipationReturnsJSON(t *testing.T) {
+	useParleyHome(t)
 	out, err := executeForTest("status")
 	if err == nil {
-		t.Fatal("expected status to return not_implemented")
+		t.Fatal("expected status without active participation to fail")
 	}
-	assertJSONErrorCode(t, out, "not_implemented")
+	assertJSONErrorCode(t, out, "no_active_participation")
+}
+
+func TestInviteUsesActiveRoomMetadata(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveRoomRuntime(p, parleyRuntime.RoomRuntime{
+		RoomID:    "room-1",
+		Topic:     "debug parser",
+		LocalHost: "127.0.0.1",
+		LocalPort: 49231,
+	}); err != nil {
+		t.Fatalf("SaveRoomRuntime: %v", err)
+	}
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+
+	out, err := executeForTest("invite")
+	if err != nil {
+		t.Fatalf("invite: %v\n%s", err, out)
+	}
+
+	var body parleyRuntime.InviteResponse
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if body.Descriptor != "parley://127.0.0.1:49231/room-1" {
+		t.Fatalf("descriptor = %q", body.Descriptor)
+	}
+}
+
+func TestInboxPeekReadsParticipantMirrorWithoutAdvancingCursor(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	store := adapter.NewStore(
+		parleyRuntime.ParticipantMetaPath(p, "room-1", "codex"),
+		parleyRuntime.ParticipantEventsPath(p, "room-1", "codex"),
+	)
+	if err := store.SaveMeta(adapter.Meta{RoomID: "room-1", Name: "codex", LastSeenSeq: 0}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	if err := store.AppendLocal(model.Event{
+		Seq:       1,
+		Type:      model.EventMessage,
+		Timestamp: time.Now().UTC(),
+		RoomID:    "room-1",
+		Actor:     "alice",
+		Payload:   model.MessagePayload{Text: "hello"},
+	}); err != nil {
+		t.Fatalf("AppendLocal: %v", err)
+	}
+
+	out, err := executeForTest("inbox", "--peek")
+	if err != nil {
+		t.Fatalf("inbox --peek: %v\n%s", err, out)
+	}
+
+	var body struct {
+		OK     bool          `json:"ok"`
+		Status string        `json:"status"`
+		Events []model.Event `json:"events"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if !body.OK || body.Status != "ok" || len(body.Events) != 1 || body.Events[0].Seq != 1 {
+		t.Fatalf("inbox body = %#v", body)
+	}
+	meta, err := store.LoadMeta()
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if meta.LastSeenSeq != 0 {
+		t.Fatalf("LastSeenSeq = %d, want 0 after peek", meta.LastSeenSeq)
+	}
+}
+
+func TestSendMissingSocketReturnsAdapterNotRunningJSON(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+
+	out, err := executeForTest("send", "hello")
+	if err == nil {
+		t.Fatal("expected send without adapter socket to fail")
+	}
+	assertJSONErrorCode(t, out, "adapter_not_running")
+}
+
+func TestHistoryLimitReturnsBoundedTranscriptEvents(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	log := eventlog.New(parleyRuntime.RoomEventsPath(p, "room-1"))
+	events := []model.Event{
+		{Type: model.EventMessage, RoomID: "room-1", Actor: "alice", Payload: model.MessagePayload{Text: "one"}},
+		{Type: model.EventType("internal.debug"), RoomID: "room-1", Actor: "system"},
+		{Type: model.EventParticipantJoined, RoomID: "room-1", Actor: "bob"},
+		{Type: model.EventMessage, RoomID: "room-1", Actor: "carol", Payload: model.MessagePayload{Text: "two"}},
+	}
+	for _, ev := range events {
+		if _, err := log.Append(ev); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	out, err := executeForTest("history", "--limit", "2")
+	if err != nil {
+		t.Fatalf("history: %v\n%s", err, out)
+	}
+
+	var body struct {
+		Events []model.Event `json:"events"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if len(body.Events) != 2 {
+		t.Fatalf("events = %#v, want 2", body.Events)
+	}
+	if body.Events[0].Type != model.EventParticipantJoined || body.Events[1].Type != model.EventMessage {
+		t.Fatalf("events = %#v, want last two transcript events", body.Events)
+	}
 }
 
 func TestStartDocumentedFlagsReturnNotImplementedJSON(t *testing.T) {
@@ -131,32 +273,35 @@ func TestJoinMetadataFlagsReturnNotImplementedJSON(t *testing.T) {
 	assertJSONErrorCode(t, out, "not_implemented")
 }
 
-func TestInviteRoomFlagReturnsNotImplementedJSON(t *testing.T) {
+func TestInviteMissingRuntimeReturnsJSON(t *testing.T) {
+	useParleyHome(t)
 	out, err := executeForTest("invite", "--room", "room-1")
 	if err == nil {
-		t.Fatal("expected invite runtime stub to return not_implemented")
+		t.Fatal("expected invite without runtime metadata to fail")
 	}
-	assertJSONErrorCode(t, out, "not_implemented")
+	assertJSONErrorCode(t, out, "room_runtime_not_found")
 }
 
-func TestInboxPeekFlagReturnsNotImplementedJSON(t *testing.T) {
+func TestInboxWithoutActiveParticipationReturnsJSON(t *testing.T) {
+	useParleyHome(t)
 	out, err := executeForTest("inbox", "--peek")
 	if err == nil {
-		t.Fatal("expected inbox runtime stub to return not_implemented")
+		t.Fatal("expected inbox without active participation to fail")
 	}
-	assertJSONErrorCode(t, out, "not_implemented")
+	assertJSONErrorCode(t, out, "no_active_participation")
 }
 
-func TestHistoryFlagsReturnNotImplementedJSON(t *testing.T) {
+func TestHistoryFlagsWithoutActiveParticipationReturnJSON(t *testing.T) {
+	useParleyHome(t)
 	for _, args := range [][]string{
 		{"history", "--limit", "10"},
 		{"history", "--all"},
 	} {
 		out, err := executeForTest(args...)
 		if err == nil {
-			t.Fatalf("expected %v runtime stub to return not_implemented", args)
+			t.Fatalf("expected %v without active participation to fail", args)
 		}
-		assertJSONErrorCode(t, out, "not_implemented")
+		assertJSONErrorCode(t, out, "no_active_participation")
 	}
 }
 
