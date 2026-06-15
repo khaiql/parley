@@ -192,6 +192,19 @@ func TestPartialParticipationFlagsDoNotMixWithActive(t *testing.T) {
 	assertJSONErrorCode(t, out, "ambiguous_participation")
 }
 
+func TestSocketCommandPartialParticipationFlagsReturnAmbiguous(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-a", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+
+	out, err := executeForTest("send", "--room", "room-b", "hello")
+	if err == nil {
+		t.Fatal("expected partial socket command flags to fail")
+	}
+	assertJSONErrorCode(t, out, "ambiguous_participation")
+}
+
 func TestWaitRequiresTimeout(t *testing.T) {
 	p := useParleyHome(t)
 	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {

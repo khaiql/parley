@@ -269,7 +269,7 @@ func callParticipantControl(cmd *cobra.Command, roomID, name string, req adapter
 	p := paths.New(paths.DefaultRoot())
 	part, err := resolveParticipation(p, roomID, name)
 	if err != nil {
-		return writeJSONError(cmd, "no_active_participation", err.Error())
+		return writeJSONError(cmd, participationErrorCode(err), err.Error())
 	}
 	socketPath := parleyRuntime.ParticipantSocketPath(part.paths, part.room, part.name)
 	if _, err := os.Stat(socketPath); err != nil {
@@ -299,14 +299,17 @@ func resolveParticipationFromFlags(cmd *cobra.Command) (participation, error) {
 	p := paths.New(paths.DefaultRoot())
 	part, err := resolveParticipation(p, roomID, name)
 	if err != nil {
-		code := "no_active_participation"
-		var partErr participationError
-		if errors.As(err, &partErr) {
-			code = partErr.code
-		}
-		return participation{}, writeJSONError(cmd, code, err.Error())
+		return participation{}, writeJSONError(cmd, participationErrorCode(err), err.Error())
 	}
 	return part, nil
+}
+
+func participationErrorCode(err error) string {
+	var partErr participationError
+	if errors.As(err, &partErr) {
+		return partErr.code
+	}
+	return "no_active_participation"
 }
 
 func resolveParticipation(p paths.Paths, roomID, name string) (participation, error) {
