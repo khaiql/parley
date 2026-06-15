@@ -338,12 +338,63 @@ func TestHistoryLimitReturnsBoundedTranscriptEvents(t *testing.T) {
 	}
 }
 
-func TestStartDocumentedFlagsReturnNotImplementedJSON(t *testing.T) {
-	out, err := executeForTest("start", "--topic", "debug parser", "--name", "codex", "--role", "host")
-	if err == nil {
-		t.Fatal("expected start runtime stub to return not_implemented")
+func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
+	p := useParleyHome(t)
+	original := launchRoomDaemon
+	t.Cleanup(func() { launchRoomDaemon = original })
+	launchRoomDaemon = func(cfg roomDaemonConfig) (int, error) {
+		if cfg.Topic != "debug parser" || cfg.Name != "codex" || cfg.Role != "host" {
+			t.Fatalf("room daemon config = %#v", cfg)
+		}
+		if cfg.RoomID == "" {
+			t.Fatal("room daemon config missing room id")
+		}
+		if err := parleyRuntime.SaveRoomRuntime(p, parleyRuntime.RoomRuntime{
+			RoomID:    cfg.RoomID,
+			Topic:     cfg.Topic,
+			LocalHost: "127.0.0.1",
+			LocalPort: 49231,
+			ServerPID: 12345,
+		}); err != nil {
+			t.Fatalf("SaveRoomRuntime: %v", err)
+		}
+		return 12345, nil
 	}
-	assertJSONErrorCode(t, out, "not_implemented")
+
+	out, err := executeForTest("start", "--topic", "debug parser", "--name", "codex", "--role", "host")
+	if err != nil {
+		t.Fatalf("start: %v\n%s", err, out)
+	}
+
+	var body struct {
+		OK                  bool   `json:"ok"`
+		Status              string `json:"status"`
+		RoomID              string `json:"room_id"`
+		Descriptor          string `json:"descriptor"`
+		LocalPort           int    `json:"local_port"`
+		ServerPID           int    `json:"server_pid"`
+		JoinCommandTemplate string `json:"join_command_template"`
+		AgentInstruction    string `json:"agent_instruction"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if !body.OK || body.Status != "started" || body.LocalPort != 49231 || body.ServerPID != 12345 {
+		t.Fatalf("start response = %#v", body)
+	}
+	if body.Descriptor != "parley://127.0.0.1:49231/"+body.RoomID {
+		t.Fatalf("descriptor = %q, room id %q", body.Descriptor, body.RoomID)
+	}
+	if !strings.Contains(body.JoinCommandTemplate, body.Descriptor) || !strings.Contains(body.AgentInstruction, body.Descriptor) {
+		t.Fatalf("invite fields missing descriptor: %#v", body)
+	}
+	active, err := parleyRuntime.LoadActive(p)
+	if err != nil {
+		t.Fatalf("LoadActive: %v", err)
+	}
+	if active.RoomID != body.RoomID || active.Name != "codex" {
+		t.Fatalf("active = %#v, want room %q codex", active, body.RoomID)
+	}
 }
 
 func TestStartRequiresName(t *testing.T) {
@@ -397,7 +448,34 @@ func TestUnknownFlagReturnsJSON(t *testing.T) {
 	assertJSONErrorCode(t, out, "invalid_arguments")
 }
 
-func TestJoinMetadataFlagsReturnNotImplementedJSON(t *testing.T) {
+func TestJoinLaunchesParticipantDaemon(t *testing.T) {
+	p := useParleyHome(t)
+	original := launchParticipantDaemon
+	t.Cleanup(func() { launchParticipantDaemon = original })
+	launchParticipantDaemon = func(cfg participantDaemonConfig) (int, error) {
+		if cfg.Descriptor.String() != "parley://127.0.0.1:1234/room-1" ||
+			cfg.Name != "alice" ||
+			cfg.Role != "reviewer" ||
+			cfg.Directory != "/tmp/project" ||
+			cfg.Repo != "https://github.com/example/repo" {
+			t.Fatalf("participant daemon config = %#v", cfg)
+		}
+		store, err := parleyRuntime.ParticipantStore(p, cfg.Descriptor.RoomID, cfg.Name)
+		if err != nil {
+			t.Fatalf("ParticipantStore: %v", err)
+		}
+		if err := store.SaveMeta(adapter.Meta{
+			RoomID:     cfg.Descriptor.RoomID,
+			Name:       cfg.Name,
+			Role:       cfg.Role,
+			Descriptor: cfg.Descriptor.String(),
+			Status:     "online",
+		}); err != nil {
+			t.Fatalf("SaveMeta: %v", err)
+		}
+		return 23456, nil
+	}
+
 	out, err := executeForTest(
 		"join",
 		"parley://127.0.0.1:1234/room-1",
@@ -406,10 +484,34 @@ func TestJoinMetadataFlagsReturnNotImplementedJSON(t *testing.T) {
 		"--dir", "/tmp/project",
 		"--repo", "https://github.com/example/repo",
 	)
-	if err == nil {
-		t.Fatal("expected join runtime stub to return not_implemented")
+	if err != nil {
+		t.Fatalf("join: %v\n%s", err, out)
 	}
-	assertJSONErrorCode(t, out, "not_implemented")
+	var body struct {
+		OK          bool         `json:"ok"`
+		Status      string       `json:"status"`
+		RoomID      string       `json:"room_id"`
+		Name        string       `json:"name"`
+		Descriptor  string       `json:"descriptor"`
+		PID         int          `json:"pid"`
+		Participant adapter.Meta `json:"participant"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if !body.OK || body.Status != "joined" || body.RoomID != "room-1" || body.Name != "alice" || body.PID != 23456 {
+		t.Fatalf("join response = %#v", body)
+	}
+	if body.Participant.Role != "reviewer" || body.Participant.Status != "online" {
+		t.Fatalf("participant = %#v", body.Participant)
+	}
+	active, err := parleyRuntime.LoadActive(p)
+	if err != nil {
+		t.Fatalf("LoadActive: %v", err)
+	}
+	if active.RoomID != "room-1" || active.Name != "alice" {
+		t.Fatalf("active = %#v, want alice in room-1", active)
+	}
 }
 
 func TestInviteMissingRuntimeReturnsJSON(t *testing.T) {

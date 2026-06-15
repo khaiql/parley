@@ -107,6 +107,31 @@ func TestWaitReadyBatchReturnsEmptyWithoutOtherMessage(t *testing.T) {
 	}
 }
 
+func TestMarkSeenThroughLeavesLaterEventsUnread(t *testing.T) {
+	store := newTestStore(t)
+	mustAppendLocal(t, store, testEvent(1, model.EventParticipantJoined, "alice"))
+	mustAppendLocal(t, store, testEvent(2, model.EventMessage, "bob"))
+	mustAppendLocal(t, store, testEvent(3, model.EventMessage, "carol"))
+
+	if err := store.MarkSeenThrough(2); err != nil {
+		t.Fatalf("MarkSeenThrough: %v", err)
+	}
+	meta, err := store.LoadMeta()
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if meta.LastSeenSeq != 2 {
+		t.Fatalf("LastSeenSeq = %d, want 2", meta.LastSeenSeq)
+	}
+	events, err := store.Inbox(true)
+	if err != nil {
+		t.Fatalf("Inbox peek: %v", err)
+	}
+	if len(events) != 1 || events[0].Seq != 3 {
+		t.Fatalf("events = %#v, want only seq 3 unread", events)
+	}
+}
+
 func TestWaitTimeoutShape(t *testing.T) {
 	data, err := json.Marshal(ControlResponse{OK: true, Status: "timeout"})
 	if err != nil {

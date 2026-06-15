@@ -1,10 +1,18 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+
+	"github.com/khaiql/parley/internal/paths"
+	parleyRuntime "github.com/khaiql/parley/internal/runtime"
+)
 
 func startCmd() *cobra.Command {
 	var name string
 	var topic string
+	var role string
 
 	cmd := &cobra.Command{
 		Use:   "start",
@@ -20,11 +28,59 @@ func startCmd() *cobra.Command {
 			if name == "" {
 				return writeJSONError(cmd, "missing_required_flag", "start requires --name")
 			}
-			return notImplemented(cmd, "start")
+			roomID, err := newRoomID()
+			if err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("create room id: %v", err))
+			}
+			pid, err := launchRoomDaemon(roomDaemonConfig{
+				RoomID: roomID,
+				Topic:  topic,
+				Name:   name,
+				Role:   role,
+			})
+			if err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("start room daemon: %v", err))
+			}
+
+			p := paths.New(paths.DefaultRoot())
+			if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: roomID, Name: name}); err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("save active participation: %v", err))
+			}
+			room, err := parleyRuntime.LoadRoomRuntime(p, roomID)
+			if err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("load room runtime: %v", err))
+			}
+			invite, err := parleyRuntime.Invite(p, roomID)
+			if err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("build invite: %v", err))
+			}
+			return writeJSON(cmd, struct {
+				OK                  bool   `json:"ok"`
+				Status              string `json:"status"`
+				RoomID              string `json:"room_id"`
+				Topic               string `json:"topic"`
+				Descriptor          string `json:"descriptor"`
+				LocalHost           string `json:"local_host"`
+				LocalPort           int    `json:"local_port"`
+				ServerPID           int    `json:"server_pid"`
+				JoinCommandTemplate string `json:"join_command_template"`
+				AgentInstruction    string `json:"agent_instruction"`
+			}{
+				OK:                  true,
+				Status:              "started",
+				RoomID:              roomID,
+				Topic:               topic,
+				Descriptor:          invite.Descriptor,
+				LocalHost:           room.LocalHost,
+				LocalPort:           room.LocalPort,
+				ServerPID:           pid,
+				JoinCommandTemplate: invite.JoinCommandTemplate,
+				AgentInstruction:    invite.AgentInstruction,
+			})
 		},
 	}
 	cmd.Flags().StringVar(&topic, "topic", "", "Room topic")
 	cmd.Flags().StringVar(&name, "name", "", "Host participant name")
-	cmd.Flags().String("role", "host", "Host participant role")
+	cmd.Flags().StringVar(&role, "role", "host", "Host participant role")
 	return cmd
 }

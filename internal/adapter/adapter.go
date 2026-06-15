@@ -208,6 +208,24 @@ func (s *Store) WaitReadyBatch(self string) ([]model.Event, error) {
 	return []model.Event{}, nil
 }
 
+func (s *Store) MarkSeenThrough(seq int64) error {
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	meta, err := s.loadMeta()
+	if err != nil {
+		return err
+	}
+	if seq <= meta.LastSeenSeq {
+		return nil
+	}
+	meta.LastSeenSeq = seq
+	return s.writeMeta(meta)
+}
+
 func (s *Store) advanceLastReceived(meta Meta, seq int64) error {
 	if seq <= meta.LastReceivedSeq {
 		return nil

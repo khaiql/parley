@@ -66,6 +66,8 @@ func newRootCmd() *cobra.Command {
 		leaveCmd(),
 		stopCmd(),
 		versionCmd(),
+		roomDaemonCmd(),
+		participantDaemonCmd(),
 	)
 
 	return cmd

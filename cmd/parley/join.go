@@ -5,12 +5,17 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/khaiql/parley/internal/adapter"
 	"github.com/khaiql/parley/internal/descriptor"
+	"github.com/khaiql/parley/internal/paths"
+	parleyRuntime "github.com/khaiql/parley/internal/runtime"
 )
 
 func joinCmd() *cobra.Command {
 	var name string
 	var role string
+	var dir string
+	var repo string
 
 	cmd := &cobra.Command{
 		Use:   "join <descriptor>",
@@ -23,17 +28,56 @@ func joinCmd() *cobra.Command {
 			if len(args) != 1 {
 				return writeJSONError(cmd, "invalid_arguments", "join requires exactly one descriptor")
 			}
-			if _, err := descriptor.Parse(args[0]); err != nil {
+			desc, err := descriptor.Parse(args[0])
+			if err != nil {
 				return writeJSONError(cmd, "invalid_descriptor", fmt.Sprintf("invalid descriptor: %v", err))
 			}
-			return notImplemented(cmd, "join")
+			pid, err := launchParticipantDaemon(participantDaemonConfig{
+				Descriptor: desc,
+				Name:       name,
+				Role:       role,
+				Directory:  dir,
+				Repo:       repo,
+			})
+			if err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("start participant daemon: %v", err))
+			}
+			p := paths.New(paths.DefaultRoot())
+			if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: desc.RoomID, Name: name}); err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("save active participation: %v", err))
+			}
+			store, err := parleyRuntime.ParticipantStore(p, desc.RoomID, name)
+			if err != nil {
+				return writeJSONError(cmd, "runtime_error", err.Error())
+			}
+			meta, err := store.LoadMeta()
+			if err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("load participant metadata: %v", err))
+			}
+			return writeJSON(cmd, struct {
+				OK          bool         `json:"ok"`
+				Status      string       `json:"status"`
+				RoomID      string       `json:"room_id"`
+				Name        string       `json:"name"`
+				Descriptor  string       `json:"descriptor"`
+				PID         int          `json:"pid"`
+				Participant adapter.Meta `json:"participant"`
+			}{
+				OK:          true,
+				Status:      "joined",
+				RoomID:      desc.RoomID,
+				Name:        name,
+				Descriptor:  desc.String(),
+				PID:         pid,
+				Participant: meta,
+			})
 		},
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Participant name")
 	cmd.Flags().StringVar(&role, "role", "participant", "Participant role")
-	cmd.Flags().String("dir", "", "Participant working directory")
-	cmd.Flags().String("repo", "", "Participant repository URL")
+	cmd.Flags().StringVar(&dir, "dir", "", "Participant working directory")
+	cmd.Flags().StringVar(&repo, "repo", "", "Participant repository URL")
 
 	return cmd
 }
