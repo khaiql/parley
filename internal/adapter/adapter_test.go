@@ -118,6 +118,27 @@ func TestWaitTimeoutShape(t *testing.T) {
 	_ = time.Second
 }
 
+func TestSaveMetaPreservesMaxCursorValues(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.SaveMeta(Meta{Name: "fresh", LastReceivedSeq: 10, LastSeenSeq: 7}); err != nil {
+		t.Fatalf("SaveMeta fresh: %v", err)
+	}
+	if err := store.SaveMeta(Meta{Name: "stale", LastReceivedSeq: 4, LastSeenSeq: 3}); err != nil {
+		t.Fatalf("SaveMeta stale: %v", err)
+	}
+
+	meta, err := store.LoadMeta()
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if meta.Name != "stale" {
+		t.Fatalf("Name = %q, want latest non-cursor field", meta.Name)
+	}
+	if meta.LastReceivedSeq != 10 || meta.LastSeenSeq != 7 {
+		t.Fatalf("cursors = received %d seen %d, want max 10 and 7", meta.LastReceivedSeq, meta.LastSeenSeq)
+	}
+}
+
 func TestAppendLocalPreservesSequenceAndUpdatesLastReceivedSeq(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.SaveMeta(Meta{LastReceivedSeq: 5}); err != nil {

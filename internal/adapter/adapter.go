@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
@@ -32,6 +33,15 @@ func NewStore(metaPath, eventsPath string) *Store {
 }
 
 func (s *Store) LoadMeta() (Meta, error) {
+	unlock, err := s.lock()
+	if err != nil {
+		return Meta{}, err
+	}
+	defer unlock()
+	return s.loadMeta()
+}
+
+func (s *Store) loadMeta() (Meta, error) {
 	data, err := os.ReadFile(s.MetaPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return Meta{}, nil
@@ -47,6 +57,29 @@ func (s *Store) LoadMeta() (Meta, error) {
 }
 
 func (s *Store) SaveMeta(meta Meta) error {
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.saveMetaMerged(meta)
+}
+
+func (s *Store) saveMetaMerged(meta Meta) error {
+	current, err := s.loadMeta()
+	if err != nil {
+		return err
+	}
+	if current.LastReceivedSeq > meta.LastReceivedSeq {
+		meta.LastReceivedSeq = current.LastReceivedSeq
+	}
+	if current.LastSeenSeq > meta.LastSeenSeq {
+		meta.LastSeenSeq = current.LastSeenSeq
+	}
+	return s.writeMeta(meta)
+}
+
+func (s *Store) writeMeta(meta Meta) error {
 	dir := filepath.Dir(s.MetaPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -81,7 +114,14 @@ func (s *Store) AppendLocal(ev model.Event) error {
 	if ev.Seq <= 0 {
 		return fmt.Errorf("event seq must be positive")
 	}
-	meta, err := s.LoadMeta()
+
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	meta, err := s.loadMeta()
 	if err != nil {
 		return err
 	}
@@ -115,7 +155,13 @@ func (s *Store) AppendLocal(ev model.Event) error {
 }
 
 func (s *Store) Inbox(peek bool) ([]model.Event, error) {
-	meta, err := s.LoadMeta()
+	unlock, err := s.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	meta, err := s.loadMeta()
 	if err != nil {
 		return nil, err
 	}
@@ -131,14 +177,20 @@ func (s *Store) Inbox(peek bool) ([]model.Event, error) {
 			meta.LastSeenSeq = ev.Seq
 		}
 	}
-	if err := s.SaveMeta(meta); err != nil {
+	if err := s.writeMeta(meta); err != nil {
 		return nil, err
 	}
 	return events, nil
 }
 
 func (s *Store) WaitReadyBatch(self string) ([]model.Event, error) {
-	meta, err := s.LoadMeta()
+	unlock, err := s.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	meta, err := s.loadMeta()
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +213,7 @@ func (s *Store) advanceLastReceived(meta Meta, seq int64) error {
 		return nil
 	}
 	meta.LastReceivedSeq = seq
-	return s.SaveMeta(meta)
+	return s.writeMeta(meta)
 }
 
 func sameEvent(a, b model.Event) bool {
@@ -171,4 +223,23 @@ func sameEvent(a, b model.Event) bool {
 		return false
 	}
 	return bytes.Equal(aData, bData)
+}
+
+func (s *Store) lock() (func(), error) {
+	dir := filepath.Dir(s.MetaPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(s.MetaPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }
