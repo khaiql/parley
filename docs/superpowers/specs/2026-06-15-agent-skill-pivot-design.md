@@ -12,7 +12,7 @@ This is a product pivot, not a backwards-compatible extension. The old TUI, agen
 
 - Let an agent start a headless room as an agent-owned background host.
 - Attach the starting agent as the first participant so other agents can message it.
-- Let remote or local agents join using a descriptor that contains host, port, room id, and join token.
+- Let remote or local agents join using a descriptor that contains host, port, and room id.
 - Keep agents non-blocked during normal work while allowing them to check messages, wait for replies, and send responses.
 - Make the CLI an agent API: JSON output by default and no human text mode in v1.
 - Ship an installable Parley skill in this repo with bootstrap scripts that ensure the `parley` binary exists before the skill runs other commands.
@@ -34,7 +34,7 @@ This is a product pivot, not a backwards-compatible extension. The old TUI, agen
 
 Parley has three runtime concepts:
 
-- **Room server**: the authoritative host process for one room. It owns the event log, assigns sequence numbers, validates joins, broadcasts events, and handles history queries.
+- **Room server**: the authoritative host process for one room. It owns the event log, assigns sequence numbers, validates room identity on joins, broadcasts events, and handles history queries.
 - **Participant adapter**: a per-participant background process that maintains one TCP connection to a room server, stores local events, exposes a local control socket, and lets short commands interact with the room.
 - **Agent skill**: the agent-facing workflow layer. It installs or locates `parley`, starts and joins rooms, periodically checks inboxes, waits for messages when useful, and sends responses.
 
@@ -46,7 +46,7 @@ The v1 command surface is short and skill-oriented:
 
 ```bash
 parley start --topic "debug parser" --name codex --role host
-parley join "parley://127.0.0.1:49231/01j...?token=p_..." --name alice --role reviewer
+parley join "parley://127.0.0.1:49231/01j..." --name alice --role reviewer
 parley info
 parley status
 parley inbox
@@ -75,11 +75,11 @@ parley start --topic "debug parser" --name codex --role host
 
 The command:
 
-1. Creates a room id, join token, and admin token.
+1. Creates a room id.
 2. Starts the headless room server in the background.
 3. Starts the host participant adapter in the background.
 4. Joins the host participant to its own room.
-5. Persists runtime metadata and secrets in the room directory.
+5. Persists runtime metadata in the room directory.
 6. Marks the host participation as active.
 7. Returns JSON including the local join descriptor and local port.
 
@@ -89,7 +89,7 @@ Example response:
 {
   "room_id": "01j...",
   "status": "running",
-  "descriptor": "parley://127.0.0.1:49231/01j...?token=p_...",
+  "descriptor": "parley://127.0.0.1:49231/01j...",
   "local_host": "127.0.0.1",
   "local_port": 49231,
   "host_participant": "codex"
@@ -106,7 +106,9 @@ Parley does not manage tunnels. It must expose enough information for a user or 
 parley join "$DESCRIPTOR" --name alice --role reviewer
 ```
 
-The descriptor contains host, port, room id, and join token. The join handshake must include both `room_id` and `join_token`; the server rejects mismatches. The join token authorizes participant actions only. It does not authorize admin actions such as stopping the room.
+The descriptor contains host, port, and room id. The join handshake must include `room_id`; the server rejects joins whose room id does not match the room it is hosting.
+
+V1 deliberately has no join token, shared secret, or remote authentication. Anyone who can reach the room port and knows the room id can attempt to join. This keeps the first skill-oriented version focused on local and manually tunneled collaboration. Authentication can be added later if Parley needs to support less trusted networks.
 
 `start` and `join` auto-detect:
 
@@ -179,7 +181,7 @@ Messages are plain text only. Agents may write Markdown in message text, but Par
 
 The transport remains TCP with line-delimited JSON. The protocol should be simplified around the v1 event model:
 
-- join request with `room_id`, `join_token`, `name`, `role`, `directory`, and `repo`
+- join request with `room_id`, `name`, `role`, `directory`, and `repo`
 - send message request with plain text
 - history request by sequence and limit
 - server-pushed event notifications
@@ -204,7 +206,6 @@ Host machine:
 ~/.parley/rooms/<room-id>/
   events.jsonl
   runtime.json
-  secrets.json
   participants/
     <name>.json
     <name>.events.jsonl
@@ -223,7 +224,7 @@ Remote participant machine:
     <name>.sock
 ```
 
-`secrets.json` exists only on the host machine and stores local secrets such as `join_token` and `admin_token`. It must be written with restrictive permissions. The join token may be printed and shared; the admin token must remain local.
+There is no `secrets.json` in v1. Room access is controlled only by network reachability and room id matching.
 
 Participant seen state is local-only. The room server does not track read receipts.
 
@@ -233,7 +234,7 @@ An active participation pointer should identify the default `room_id` and partic
 
 Short commands communicate with background processes through Unix domain sockets plus durable state files.
 
-- The room server exposes an admin control socket for local admin commands such as `stop`.
+- The room server exposes a local control socket for commands such as `stop`.
 - Each participant adapter exposes a participant control socket for commands such as `send`, `wait`, `leave`, and `status`.
 - Durable metadata, cursors, and event mirrors are stored in files so `status`, `inbox`, and `history` can report useful information even if the adapter is not running.
 
@@ -246,7 +247,7 @@ V1 targets macOS and Linux only. Windows support is out of scope because Unix do
 
 ## Lifecycle
 
-`parley stop` sends a shutdown request to the server admin socket using local admin credentials. The server appends a `room.stopped` event, broadcasts it, flushes the event log, closes client connections, and exits.
+`parley stop` sends a shutdown request to the server's local control socket. The server appends a `room.stopped` event, broadcasts it, flushes the event log, closes client connections, and exits.
 
 Participant adapters that receive `room.stopped` store the event, write status `room_closed`, and exit.
 
@@ -326,7 +327,7 @@ The remaining code should be reorganized around protocol, server, client, event-
 
 V1 should be tested at four levels:
 
-- Protocol and event-log unit tests for join auth, sequence assignment, event append/read, mention parsing, and history filtering.
+- Protocol and event-log unit tests for room id validation on join, sequence assignment, event append/read, mention parsing, and history filtering.
 - Server/client integration tests for start, join, send, history query, leave, and stop.
 - Adapter control tests for local socket commands, cursor updates, `inbox --peek`, `wait`, and socket-missing errors.
 - CLI smoke tests using JSON outputs for `start`, `join`, `send`, `wait`, `inbox`, `history`, `status`, `leave`, and `stop`.
