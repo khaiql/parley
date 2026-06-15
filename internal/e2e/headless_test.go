@@ -26,15 +26,11 @@ func TestHeadlessRoomTwoParticipants(t *testing.T) {
 
 	host.Send(t, "@agent please respond")
 	got := agent.Wait(t, 2*time.Second)
-	if len(got.Events) == 0 {
-		t.Fatal("agent did not receive message")
-	}
+	assertMessage(t, got, "host", "@agent please respond")
 
 	agent.Send(t, "I am here")
 	got = host.Wait(t, 2*time.Second)
-	if len(got.Events) == 0 || got.Events[0].Actor != "agent" {
-		t.Fatalf("host wait = %#v", got)
-	}
+	assertMessage(t, got, "agent", "I am here")
 }
 
 type ServerHandle struct {
@@ -86,10 +82,10 @@ func StartServerForTest(t testing.TB, root, topic, name, role string) ServerHand
 
 	desc := descriptor.Descriptor{Host: "127.0.0.1", Port: srv.Port(), RoomID: roomID}.String()
 	host := JoinForTest(t, root, desc, name, role)
-	return ServerHandle{AdapterHandle: &host, Descriptor: desc}
+	return ServerHandle{AdapterHandle: host, Descriptor: desc}
 }
 
-func JoinForTest(t testing.TB, root, rawDescriptor, name, role string) AdapterHandle {
+func JoinForTest(t testing.TB, root, rawDescriptor, name, role string) *AdapterHandle {
 	t.Helper()
 
 	desc, err := descriptor.Parse(rawDescriptor)
@@ -117,7 +113,7 @@ func JoinForTest(t testing.TB, root, rawDescriptor, name, role string) AdapterHa
 		t.Fatalf("store.SaveMeta: %v", err)
 	}
 
-	h := AdapterHandle{
+	h := &AdapterHandle{
 		name:    name,
 		role:    role,
 		roomID:  desc.RoomID,
@@ -151,6 +147,20 @@ func JoinForTest(t testing.TB, root, rawDescriptor, name, role string) AdapterHa
 
 	go h.readLoop()
 	return h
+}
+
+func assertMessage(t testing.TB, resp adapter.ControlResponse, actor, text string) {
+	t.Helper()
+	if !resp.OK || resp.Status != "ok" {
+		t.Fatalf("response = %#v, want ok message response", resp)
+	}
+	if len(resp.Events) == 0 {
+		t.Fatal("response contained no events")
+	}
+	ev := resp.Events[len(resp.Events)-1]
+	if ev.Type != model.EventMessage || ev.Actor != actor || eventText(ev) != text {
+		t.Fatalf("last event = %#v, want message from %s with text %q", ev, actor, text)
+	}
 }
 
 func (h *AdapterHandle) Send(t testing.TB, text string) {
