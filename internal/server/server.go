@@ -2,60 +2,105 @@ package server
 
 import (
 	"bufio"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"regexp"
+	"sort"
+	"strings"
 	"sync"
-	"time"
 
+	"github.com/khaiql/parley/internal/eventlog"
+	"github.com/khaiql/parley/internal/model"
 	"github.com/khaiql/parley/internal/protocol"
-	"github.com/khaiql/parley/internal/room"
 )
 
 const scanBufSize = 1024 * 1024 // 1 MB
 
-// TCPServer accepts TCP connections and routes messages through room.State.
-type TCPServer struct {
-	listener net.Listener
-	state    *room.State
-	conns    *ConnectionManager
-	mu       sync.Mutex
-	wg       sync.WaitGroup
-	done     chan struct{} // closed when Serve's accept loop exits
+var mentionRE = regexp.MustCompile(`@([A-Za-z0-9_][A-Za-z0-9_-]*)`)
+
+type Config struct {
+	RoomID string
+	Topic  string
+	Log    *eventlog.Log
 }
 
-// New creates a new Server listening on addr using the given room.State.
-func New(addr string, state *room.State) (*TCPServer, error) {
+type Server struct {
+	listener net.Listener
+	cfg      Config
+	log      *eventlog.Log
+
+	mu           sync.Mutex
+	participants map[string]model.Participant
+	conns        map[string]*clientConn
+
+	serveStarted chan struct{}
+	closed       chan struct{}
+	wg           sync.WaitGroup
+
+	closeOnce sync.Once
+	closeErr  error
+	startOnce sync.Once
+}
+
+type clientConn struct {
+	name string
+	conn net.Conn
+
+	writeMu sync.Mutex
+	close   sync.Once
+}
+
+func New(addr string, cfg Config) (*Server, error) {
+	if cfg.Log == nil {
+		return nil, errors.New("server: config Log is nil")
+	}
+
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
 	}
-	return &TCPServer{
-		listener: ln,
-		state:    state,
-		conns:    NewConnectionManager(),
-		done:     make(chan struct{}),
+
+	return &Server{
+		listener:     ln,
+		cfg:          cfg,
+		log:          cfg.Log,
+		participants: make(map[string]model.Participant),
+		conns:        make(map[string]*clientConn),
+		serveStarted: make(chan struct{}),
+		closed:       make(chan struct{}),
 	}, nil
 }
 
-// Addr returns the server's listening address as host:port.
-func (s *TCPServer) Addr() string {
+func (s *Server) Addr() string {
 	return s.listener.Addr().String()
 }
 
-// Port returns the server's listening port.
-func (s *TCPServer) Port() int {
-	return s.listener.Addr().(*net.TCPAddr).Port
+func (s *Server) Port() int {
+	addr, ok := s.listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return 0
+	}
+	return addr.Port
 }
 
-// Serve runs the accept loop. It blocks until the listener is closed.
-func (s *TCPServer) Serve() {
-	defer close(s.done)
+func (s *Server) Serve() {
+	started := false
+	s.startOnce.Do(func() {
+		close(s.serveStarted)
+		started = true
+	})
+	if !started {
+		return
+	}
+
+	defer close(s.closed)
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			return
 		}
+
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -64,209 +109,464 @@ func (s *TCPServer) Serve() {
 	}
 }
 
-// Snapshot returns a consistent room state snapshot, safe for concurrent use.
-// It acquires the server mutex to ensure no handleConn goroutine is mutating
-// state mid-read.
-func (s *TCPServer) Snapshot() protocol.RoomSnapshot {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return protocol.RoomSnapshot{
-		RoomID:       s.state.GetID(),
-		Topic:        s.state.GetTopic(),
-		AutoApprove:  s.state.AutoApprove(),
-		Participants: s.state.GetParticipants(),
-		Messages:     s.state.Messages(),
-	}
+func (s *Server) Close() error {
+	s.closeOnce.Do(func() {
+		s.closeErr = s.listener.Close()
+		s.closeAllConnections()
+
+		select {
+		case <-s.serveStarted:
+			<-s.closed
+		default:
+		}
+
+		s.wg.Wait()
+		if errors.Is(s.closeErr, net.ErrClosed) {
+			s.closeErr = nil
+		}
+	})
+	return s.closeErr
 }
 
-// Close shuts down the server listener and waits for all active connection
-// handlers to finish.
-func (s *TCPServer) Close() error {
-	err := s.listener.Close()
-	<-s.done    // wait for accept loop to exit — no more wg.Add() calls after this
-	s.wg.Wait() // safe: all Add() calls have completed
-	return err
-}
-
-// handleConn manages the lifecycle of a single client connection.
-func (s *TCPServer) handleConn(conn net.Conn) {
+func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 
 	sc := bufio.NewScanner(conn)
 	sc.Buffer(make([]byte, scanBufSize), scanBufSize)
 
-	var cc *ClientConn
-	var name, source, role string
+	var (
+		cc     *clientConn
+		name   string
+		joined bool
+	)
+
+	defer func() {
+		if cc != nil {
+			s.removeConnection(name, cc)
+		}
+		if joined {
+			resp := s.handleLeave(name)
+			if resp.OK && resp.Event != nil {
+				s.broadcastEventExcept(name, *resp.Event)
+			}
+		}
+	}()
 
 	for sc.Scan() {
-		line := sc.Bytes()
-
-		raw, err := protocol.DecodeLine(line)
-		if err != nil {
+		var req protocol.Request
+		if err := protocol.DecodeLine(sc.Bytes(), &req); err != nil {
+			if writeErr := writeResponse(conn, errorResponse("bad_request", "invalid request")); writeErr != nil {
+				return
+			}
 			continue
 		}
 
-		switch raw.Method {
-		case protocol.MethodJoin:
-			var params protocol.JoinParams
-			if err := json.Unmarshal(raw.Params, &params); err != nil {
+		switch req.Type {
+		case protocol.RequestJoin:
+			if req.Join == nil {
+				if writeErr := writeResponse(conn, errorResponse("bad_request", "join payload is required")); writeErr != nil {
+					return
+				}
+				continue
+			}
+			if joined {
+				if writeErr := cc.write(errorResponse("already_joined", "connection has already joined")); writeErr != nil {
+					return
+				}
 				continue
 			}
 
-			joinSource := "human"
-			if params.AgentType != "" {
-				joinSource = "agent"
+			resp := s.handleJoin(conn, *req.Join)
+			if resp.OK {
+				name = req.Join.Name
+			}
+			if err := writeResponse(conn, resp); err != nil {
+				if resp.OK {
+					_ = s.handleLeave(name)
+				}
+				return
+			}
+			if !resp.OK {
+				return
 			}
 
-			s.mu.Lock()
-			stateParams, joinErr := s.state.Join(params.Name, params.Role, params.Directory, params.Repo, params.AgentType, joinSource)
-			s.mu.Unlock()
+			cc = s.registerConnection(name, conn)
+			joined = true
+			if resp.Event != nil {
+				s.broadcastEventExcept(name, *resp.Event)
+			}
 
-			if joinErr != nil {
-				resp := protocol.Response{
-					JSONRPC: "2.0",
-					ID:      0,
-					Error:   &protocol.RPCError{Code: -1, Message: joinErr.Error()},
+		case protocol.RequestSend:
+			if req.Send == nil {
+				if writeErr := s.writeToJoined(cc, errorResponse("bad_request", "send payload is required")); writeErr != nil {
+					return
 				}
-				if data, err := protocol.EncodeLine(resp); err == nil {
-					_, _ = conn.Write(data)
+				continue
+			}
+			if !joined {
+				if writeErr := writeResponse(conn, errorResponse("not_joined", "join before sending messages")); writeErr != nil {
+					return
+				}
+				continue
+			}
+
+			resp := s.handleSend(name, *req.Send)
+			if err := cc.write(resp); err != nil {
+				return
+			}
+			if resp.OK && resp.Event != nil {
+				s.broadcastEventExcept(name, *resp.Event)
+			}
+
+		case protocol.RequestHistory:
+			if req.History == nil {
+				if writeErr := s.writeToJoined(cc, errorResponse("bad_request", "history payload is required")); writeErr != nil {
+					return
+				}
+				continue
+			}
+
+			resp := s.handleHistory(*req.History)
+			if joined {
+				if err := cc.write(resp); err != nil {
+					return
+				}
+			} else if err := writeResponse(conn, resp); err != nil {
+				return
+			}
+
+		case protocol.RequestLeave:
+			if !joined {
+				if writeErr := writeResponse(conn, errorResponse("not_joined", "join before leaving")); writeErr != nil {
+					return
 				}
 				return
 			}
 
-			// Capture the effective role and assigned colour from the state
-			// (may differ on reconnection).
-			effectiveRole := params.Role
-			var assignedColor string
-			for _, p := range stateParams.Participants {
-				if p.Name == params.Name {
-					effectiveRole = p.Role
-					assignedColor = p.Color
-					break
+			resp := s.handleLeave(name)
+			joined = false
+			if err := cc.write(resp); err != nil {
+				return
+			}
+			s.removeConnection(name, cc)
+			if resp.OK && resp.Event != nil {
+				s.broadcastEventExcept(name, *resp.Event)
+			}
+			return
+
+		default:
+			target := conn
+			if joined {
+				if err := cc.write(errorResponse("bad_request", fmt.Sprintf("unknown request type %q", req.Type))); err != nil {
+					return
 				}
-			}
-
-			name = params.Name
-			source = joinSource
-			role = effectiveRole
-
-			cc = &ClientConn{
-				Name: params.Name,
-				Send: make(chan []byte, 64),
-				Done: make(chan struct{}),
-			}
-
-			// Register connection for broadcasting.
-			s.conns.Add(params.Name, cc)
-
-			// Send room.state back to the joining client.
-			notif := protocol.NewNotification(protocol.MethodState, stateParams)
-			if data, err := protocol.EncodeLine(notif); err == nil {
-				_, _ = conn.Write(data)
-			}
-
-			// Notify other participants.
-			jp := protocol.JoinedParams{
-				Name:      params.Name,
-				Role:      effectiveRole,
-				Color:     assignedColor,
-				Directory: params.Directory,
-				Repo:      params.Repo,
-				AgentType: params.AgentType,
-				JoinedAt:  time.Now().UTC(),
-			}
-			joinedNotif := protocol.NewNotification(protocol.MethodJoined, jp)
-			if data, err := protocol.EncodeLine(joinedNotif); err == nil {
-				s.conns.BroadcastExcept(params.Name, data)
-			}
-
-			// Broadcast system message.
-			s.mu.Lock()
-			sysMsg := s.state.AddSystemMessage(fmt.Sprintf("%s joined", params.Name))
-			s.mu.Unlock()
-			sysNotif := protocol.NewNotification(protocol.MethodMessage, sysMsg)
-			if data, err := protocol.EncodeLine(sysNotif); err == nil {
-				s.conns.Broadcast(data)
-			}
-
-			// Start writer goroutine for this connection.
-			go func(c net.Conn, client *ClientConn) {
-				for {
-					select {
-					case data := <-client.Send:
-						_, _ = c.Write(data)
-					case <-client.Done:
-						return
-					}
-				}
-			}(conn, cc)
-
-		case protocol.MethodSend:
-			if cc == nil {
 				continue
 			}
-			var params protocol.SendParams
-			if err := json.Unmarshal(raw.Params, &params); err != nil {
-				continue
-			}
-			// Use first content item; if none, skip.
-			if len(params.Content) == 0 {
-				continue
-			}
-			// Drop [PASS] signals — they are pure control signals that must
-			// never be stored, broadcast, or shown in any UI.
-			if protocol.IsPassSignal(params.Content[0].Text) {
-				continue
-			}
-
-			s.mu.Lock()
-			msg := s.state.AddMessage(name, source, role, params.Content[0])
-			s.mu.Unlock()
-
-			msgNotif := protocol.NewNotification(protocol.MethodMessage, msg)
-			if data, err := protocol.EncodeLine(msgNotif); err == nil {
-				s.conns.Broadcast(data)
-			}
-
-		case protocol.MethodStatus:
-			if cc == nil {
-				continue
-			}
-			var params protocol.StatusParams
-			if err := json.Unmarshal(raw.Params, &params); err != nil {
-				continue
-			}
-			// Override name with the authenticated connection name for safety.
-			params.Name = name
-
-			s.mu.Lock()
-			s.state.UpdateStatus(params.Name, params.Status)
-			s.mu.Unlock()
-
-			statusNotif := protocol.NewNotification(protocol.MethodStatus, params)
-			if data, err := protocol.EncodeLine(statusNotif); err == nil {
-				s.conns.Broadcast(data)
+			if err := writeResponse(target, errorResponse("bad_request", fmt.Sprintf("unknown request type %q", req.Type))); err != nil {
+				return
 			}
 		}
 	}
+}
 
-	// Client disconnected.
-	if cc != nil {
-		s.mu.Lock()
-		s.state.Leave(name)
-		sysMsg := s.state.AddSystemMessage(fmt.Sprintf("%s left", name))
-		s.mu.Unlock()
+func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Response {
+	_ = conn
+	if req.RoomID != s.cfg.RoomID {
+		return errorResponse("room_mismatch", "room id does not match this server")
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		return errorResponse("bad_request", "name is required")
+	}
+	if req.Role == "" {
+		req.Role = "participant"
+	}
 
-		s.conns.Remove(name)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-		leftNotif := protocol.NewNotification(protocol.MethodLeft, protocol.LeftParams{Name: name})
-		if data, err := protocol.EncodeLine(leftNotif); err == nil {
-			s.conns.Broadcast(data)
-		}
+	if participant, ok := s.participants[req.Name]; ok && participant.Online {
+		return errorResponse("name_taken", "name is already online")
+	}
 
-		sysNotif := protocol.NewNotification(protocol.MethodMessage, sysMsg)
-		if data, err := protocol.EncodeLine(sysNotif); err == nil {
-			s.conns.Broadcast(data)
+	ev, err := s.log.Append(model.Event{
+		Type:   model.EventParticipantJoined,
+		RoomID: s.cfg.RoomID,
+		Actor:  req.Name,
+		Payload: model.ParticipantPayload{
+			Role:      req.Role,
+			Directory: req.Directory,
+			Repo:      req.Repo,
+		},
+	})
+	if err != nil {
+		return errorResponse("log_append_failed", err.Error())
+	}
+
+	s.participants[req.Name] = model.Participant{
+		Name:      req.Name,
+		Role:      req.Role,
+		Directory: req.Directory,
+		Repo:      req.Repo,
+		Online:    true,
+	}
+
+	events, latestSeq, err := s.historyLocked(protocol.HistoryRequest{All: true})
+	if err != nil {
+		return errorResponse("history_failed", err.Error())
+	}
+
+	return protocol.Response{
+		OK:           true,
+		Room:         s.roomMetadata(),
+		Participants: s.participantSnapshotLocked(),
+		Events:       events,
+		Event:        &ev,
+		LatestSeq:    latestSeq,
+	}
+}
+
+func (s *Server) handleSend(name string, req protocol.SendRequest) protocol.Response {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	participant, ok := s.participants[name]
+	if !ok || !participant.Online {
+		return errorResponse("not_joined", "join before sending messages")
+	}
+
+	ev, err := s.log.Append(model.Event{
+		Type:   model.EventMessage,
+		RoomID: s.cfg.RoomID,
+		Actor:  name,
+		Payload: model.MessagePayload{
+			Text:     req.Text,
+			Mentions: parseMentions(req.Text, s.participants),
+		},
+	})
+	if err != nil {
+		return errorResponse("log_append_failed", err.Error())
+	}
+
+	return protocol.Response{
+		OK:        true,
+		Event:     &ev,
+		LatestSeq: ev.Seq,
+	}
+}
+
+func (s *Server) handleHistory(req protocol.HistoryRequest) protocol.Response {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	events, latestSeq, err := s.historyLocked(req)
+	if err != nil {
+		return errorResponse("history_failed", err.Error())
+	}
+
+	return protocol.Response{
+		OK:        true,
+		Events:    events,
+		LatestSeq: latestSeq,
+	}
+}
+
+func (s *Server) handleLeave(name string) protocol.Response {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	participant, ok := s.participants[name]
+	if !ok || !participant.Online {
+		return protocol.Response{OK: true}
+	}
+	participant.Online = false
+	s.participants[name] = participant
+
+	ev, err := s.log.Append(model.Event{
+		Type:    model.EventParticipantLeft,
+		RoomID:  s.cfg.RoomID,
+		Actor:   name,
+		Payload: model.ParticipantPayload{Role: participant.Role, Directory: participant.Directory, Repo: participant.Repo},
+	})
+	if err != nil {
+		return errorResponse("log_append_failed", err.Error())
+	}
+
+	return protocol.Response{
+		OK:        true,
+		Event:     &ev,
+		LatestSeq: ev.Seq,
+	}
+}
+
+func (s *Server) registerConnection(name string, conn net.Conn) *clientConn {
+	cc := &clientConn{name: name, conn: conn}
+
+	s.mu.Lock()
+	s.conns[name] = cc
+	s.mu.Unlock()
+
+	return cc
+}
+
+func (s *Server) removeConnection(name string, cc *clientConn) {
+	s.mu.Lock()
+	if current, ok := s.conns[name]; ok && current == cc {
+		delete(s.conns, name)
+	}
+	s.mu.Unlock()
+	cc.close.Do(func() {
+		_ = cc.conn.Close()
+	})
+}
+
+func (s *Server) closeAllConnections() {
+	s.mu.Lock()
+	conns := make([]*clientConn, 0, len(s.conns))
+	for name, cc := range s.conns {
+		delete(s.conns, name)
+		conns = append(conns, cc)
+	}
+	s.mu.Unlock()
+
+	for _, cc := range conns {
+		cc.close.Do(func() {
+			_ = cc.conn.Close()
+		})
+	}
+}
+
+func (s *Server) broadcastEventExcept(name string, ev model.Event) {
+	resp := protocol.Response{OK: true, Event: &ev, LatestSeq: ev.Seq}
+	data, err := protocol.EncodeLine(resp)
+	if err != nil {
+		return
+	}
+
+	s.mu.Lock()
+	conns := make([]*clientConn, 0, len(s.conns))
+	for connName, cc := range s.conns {
+		if connName != name {
+			conns = append(conns, cc)
 		}
 	}
+	s.mu.Unlock()
+
+	for _, cc := range conns {
+		_ = cc.writeData(data)
+	}
+}
+
+func (s *Server) writeToJoined(cc *clientConn, resp protocol.Response) error {
+	if cc == nil {
+		return nil
+	}
+	return cc.write(resp)
+}
+
+func (s *Server) historyLocked(req protocol.HistoryRequest) ([]model.Event, int64, error) {
+	all, err := s.log.ReadAll()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var latestSeq int64
+	if len(all) > 0 {
+		latestSeq = all[len(all)-1].Seq
+	}
+
+	events := make([]model.Event, 0, len(all))
+	for _, ev := range all {
+		if !ev.Type.IsTranscript() {
+			continue
+		}
+		if !req.All && ev.Seq <= req.AfterSeq {
+			continue
+		}
+		events = append(events, ev)
+		if req.Limit > 0 && len(events) >= req.Limit {
+			break
+		}
+	}
+	return events, latestSeq, nil
+}
+
+func (s *Server) participantSnapshotLocked() []model.Participant {
+	participants := make([]model.Participant, 0, len(s.participants))
+	for _, participant := range s.participants {
+		participants = append(participants, participant)
+	}
+	sort.Slice(participants, func(i, j int) bool {
+		return participants[i].Name < participants[j].Name
+	})
+	return participants
+}
+
+func (s *Server) roomMetadata() *model.RoomMetadata {
+	meta := &model.RoomMetadata{
+		RoomID: s.cfg.RoomID,
+		Topic:  s.cfg.Topic,
+	}
+	if tcpAddr, ok := s.listener.Addr().(*net.TCPAddr); ok {
+		meta.LocalHost = tcpAddr.IP.String()
+		meta.LocalPort = tcpAddr.Port
+	}
+	return meta
+}
+
+func (cc *clientConn) write(resp protocol.Response) error {
+	data, err := protocol.EncodeLine(resp)
+	if err != nil {
+		return err
+	}
+	return cc.writeData(data)
+}
+
+func (cc *clientConn) writeData(data []byte) error {
+	cc.writeMu.Lock()
+	defer cc.writeMu.Unlock()
+	_, err := cc.conn.Write(data)
+	return err
+}
+
+func writeResponse(conn net.Conn, resp protocol.Response) error {
+	data, err := protocol.EncodeLine(resp)
+	if err != nil {
+		return err
+	}
+	_, err = conn.Write(data)
+	return err
+}
+
+func errorResponse(code, message string) protocol.Response {
+	return protocol.Response{
+		OK:    false,
+		Error: &protocol.Error{Code: code, Message: message},
+	}
+}
+
+func parseMentions(text string, participants map[string]model.Participant) []string {
+	names := make(map[string]string, len(participants))
+	for name, participant := range participants {
+		if participant.Online {
+			names[strings.ToLower(name)] = name
+		}
+	}
+
+	var mentions []string
+	seen := make(map[string]struct{})
+	for _, match := range mentionRE.FindAllStringSubmatch(text, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		name, ok := names[strings.ToLower(match[1])]
+		if !ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		mentions = append(mentions, name)
+	}
+	return mentions
 }
