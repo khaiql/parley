@@ -70,5 +70,5 @@ func EncodeLine(v interface{}) ([]byte, error) {
 }
 
 func DecodeLine(data []byte, v interface{}) error {
-	return json.NewDecoder(bytes.NewReader(bytes.TrimSpace(data))).Decode(v)
+	return json.Unmarshal(bytes.TrimSpace(data), v)
 }
