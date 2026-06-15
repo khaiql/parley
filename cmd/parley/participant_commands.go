@@ -11,11 +11,16 @@ func statusCmd() *cobra.Command {
 }
 
 func inboxCmd() *cobra.Command {
-	return participantCommand("inbox", "Print unseen room events")
+	cmd := participantCommand("inbox", "Print unseen room events")
+	cmd.Flags().Bool("peek", false, "Do not advance the seen cursor")
+	return cmd
 }
 
 func historyCmd() *cobra.Command {
-	return participantCommand("history", "Print room history")
+	cmd := participantCommand("history", "Print room history")
+	cmd.Flags().Int("limit", 0, "Maximum number of history events")
+	cmd.Flags().Bool("all", false, "Return all retained history")
+	return cmd
 }
 
 func waitCmd() *cobra.Command {
@@ -25,14 +30,19 @@ func waitCmd() *cobra.Command {
 }
 
 func sendCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "send <message>",
 		Short: "Send a message to the room",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return writeJSONError(cmd, "invalid_arguments", "send requires exactly one message argument")
+			}
 			return notImplemented(cmd, "send")
 		},
 	}
+	addParticipationFlags(cmd)
+	return cmd
 }
 
 func leaveCmd() *cobra.Command {
@@ -44,12 +54,19 @@ func stopCmd() *cobra.Command {
 }
 
 func participantCommand(name, short string) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   name,
 		Short: short,
-		Args:  cobra.NoArgs,
+		Args:  noArgsJSON,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return notImplemented(cmd, name)
 		},
 	}
+	addParticipationFlags(cmd)
+	return cmd
+}
+
+func addParticipationFlags(cmd *cobra.Command) {
+	cmd.Flags().String("room", "", "Room ID")
+	cmd.Flags().String("name", "", "Participant name")
 }

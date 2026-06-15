@@ -32,6 +32,8 @@ func joinCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&name, "name", "", "Participant name")
 	cmd.Flags().StringVar(&role, "role", "participant", "Participant role")
+	cmd.Flags().String("dir", "", "Participant working directory")
+	cmd.Flags().String("repo", "", "Participant repository URL")
 
 	return cmd
 }

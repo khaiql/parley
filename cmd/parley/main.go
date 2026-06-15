@@ -36,6 +36,9 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
+	cmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		return writeJSONError(cmd, "invalid_arguments", err.Error())
+	})
 
 	cmd.AddCommand(
 		startCmd(),
@@ -55,11 +58,18 @@ func newRootCmd() *cobra.Command {
 	return cmd
 }
 
+func noArgsJSON(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return writeJSONError(cmd, "invalid_arguments", fmt.Sprintf("%s accepts no arguments", cmd.CommandPath()))
+}
+
 func versionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print Parley version",
-		Args:  cobra.NoArgs,
+		Args:  noArgsJSON,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return writeJSON(cmd, struct {
 				Version         string `json:"version"`
