@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,6 +142,65 @@ func TestAppendLocalPreservesSequenceAndUpdatesLastReceivedSeq(t *testing.T) {
 	}
 }
 
+func TestAppendLocalIsIdempotentForExistingSequence(t *testing.T) {
+	store := newTestStore(t)
+	ev := testEvent(1, model.EventMessage, "alice")
+
+	mustAppendLocal(t, store, ev)
+	mustAppendLocal(t, store, ev)
+
+	events, err := eventlog.New(store.EventsPath).ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(events) != 1 || events[0].Seq != 1 {
+		t.Fatalf("events = %#v, want one persisted seq 1", events)
+	}
+	meta, err := store.LoadMeta()
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if meta.LastReceivedSeq != 1 {
+		t.Fatalf("LastReceivedSeq = %d, want 1", meta.LastReceivedSeq)
+	}
+}
+
+func TestAppendLocalRejectsConflictingDuplicateSequence(t *testing.T) {
+	store := newTestStore(t)
+	mustAppendLocal(t, store, testEvent(1, model.EventMessage, "alice"))
+
+	err := store.AppendLocal(testEvent(1, model.EventMessage, "bob"))
+	if err == nil {
+		t.Fatal("AppendLocal conflicting seq succeeded, want error")
+	}
+
+	events, readErr := eventlog.New(store.EventsPath).ReadAll()
+	if readErr != nil {
+		t.Fatalf("ReadAll: %v", readErr)
+	}
+	if len(events) != 1 || events[0].Actor != "alice" {
+		t.Fatalf("events = %#v, want original alice event only", events)
+	}
+}
+
+func TestAppendLocalRejectsOutOfOrderSequence(t *testing.T) {
+	store := newTestStore(t)
+	mustAppendLocal(t, store, testEvent(2, model.EventMessage, "alice"))
+
+	err := store.AppendLocal(testEvent(1, model.EventMessage, "bob"))
+	if err == nil {
+		t.Fatal("AppendLocal out-of-order seq succeeded, want error")
+	}
+
+	events, readErr := eventlog.New(store.EventsPath).ReadAll()
+	if readErr != nil {
+		t.Fatalf("ReadAll: %v", readErr)
+	}
+	if len(events) != 1 || events[0].Seq != 2 {
+		t.Fatalf("events = %#v, want original seq 2 only", events)
+	}
+}
+
 func TestControlSocketRoundTrip(t *testing.T) {
 	socketPath := filepath.Join(shortSocketDir(t), "control.sock")
 	serveControlForTest(t, socketPath, func(req ControlRequest) ControlResponse {
@@ -180,6 +240,83 @@ func TestControlHandlerErrorResponse(t *testing.T) {
 	}
 	if resp.OK || !strings.Contains(resp.Error, "unsupported: nope") {
 		t.Fatalf("response = %#v, want handler error", resp)
+	}
+}
+
+func TestServeControlRejectsLiveSocketPath(t *testing.T) {
+	socketPath := filepath.Join(shortSocketDir(t), "control.sock")
+	serveControlForTest(t, socketPath, func(req ControlRequest) ControlResponse {
+		return ControlResponse{OK: true, Status: "primary"}
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- ServeControl(socketPath, func(req ControlRequest) ControlResponse {
+			return ControlResponse{OK: true, Status: "secondary"}
+		})
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("second ServeControl returned nil, want live socket error")
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("second ServeControl did not reject live socket path")
+	}
+
+	resp, err := CallControl(socketPath, ControlRequest{Type: "status"})
+	if err != nil {
+		t.Fatalf("CallControl primary after rejected second serve: %v", err)
+	}
+	if resp.Status != "primary" {
+		t.Fatalf("status = %q, want primary", resp.Status)
+	}
+}
+
+func TestCallControlWaitUsesRequestTimeout(t *testing.T) {
+	socketPath := filepath.Join(shortSocketDir(t), "control.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, err := CallControl(socketPath, ControlRequest{Type: "wait", Timeout: "25ms"})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("CallControl returned nil, want timeout/read error")
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Fatalf("CallControl took %s, want bounded by request timeout", elapsed)
+		}
+	case conn := <-accepted:
+		defer conn.Close()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("CallControl returned nil, want timeout/read error")
+			}
+		case <-time.After(300 * time.Millisecond):
+			t.Fatal("CallControl did not time out waiting for response")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("listener did not accept CallControl connection")
 	}
 }
 

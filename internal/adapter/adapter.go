@@ -1,8 +1,10 @@
 package adapter
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -45,32 +47,71 @@ func (s *Store) LoadMeta() (Meta, error) {
 }
 
 func (s *Store) SaveMeta(meta Meta) error {
-	if err := os.MkdirAll(filepath.Dir(s.MetaPath), 0o700); err != nil {
+	dir := filepath.Dir(s.MetaPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(s.MetaPath, append(data, '\n'), 0o600); err != nil {
+
+	tmp, err := os.CreateTemp(dir, ".participant-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Chmod(s.MetaPath, 0o600)
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, s.MetaPath)
 }
 
 func (s *Store) AppendLocal(ev model.Event) error {
-	if err := eventlog.New(s.EventsPath).AppendAssigned(ev); err != nil {
-		return err
+	if ev.Seq <= 0 {
+		return fmt.Errorf("event seq must be positive")
 	}
 	meta, err := s.LoadMeta()
 	if err != nil {
 		return err
 	}
-	if ev.Seq > meta.LastReceivedSeq {
-		meta.LastReceivedSeq = ev.Seq
-		return s.SaveMeta(meta)
+	log := eventlog.New(s.EventsPath)
+	events, err := log.ReadAll()
+	if err != nil {
+		return err
 	}
-	return nil
+
+	var maxSeq int64
+	for _, existing := range events {
+		if existing.Seq > maxSeq {
+			maxSeq = existing.Seq
+		}
+		if existing.Seq != ev.Seq {
+			continue
+		}
+		if !sameEvent(existing, ev) {
+			return fmt.Errorf("event seq %d already exists with different content", ev.Seq)
+		}
+		return s.advanceLastReceived(meta, ev.Seq)
+	}
+	if ev.Seq < maxSeq {
+		return fmt.Errorf("event seq %d is older than last local seq %d", ev.Seq, maxSeq)
+	}
+
+	if err := log.AppendAssigned(ev); err != nil {
+		return err
+	}
+	return s.advanceLastReceived(meta, ev.Seq)
 }
 
 func (s *Store) Inbox(peek bool) ([]model.Event, error) {
@@ -113,4 +154,21 @@ func (s *Store) WaitReadyBatch(self string) ([]model.Event, error) {
 		}
 	}
 	return []model.Event{}, nil
+}
+
+func (s *Store) advanceLastReceived(meta Meta, seq int64) error {
+	if seq <= meta.LastReceivedSeq {
+		return nil
+	}
+	meta.LastReceivedSeq = seq
+	return s.SaveMeta(meta)
+}
+
+func sameEvent(a, b model.Event) bool {
+	aData, aErr := json.Marshal(a)
+	bData, bErr := json.Marshal(b)
+	if aErr != nil || bErr != nil {
+		return false
+	}
+	return bytes.Equal(aData, bData)
 }
