@@ -553,6 +553,39 @@ func TestServerRejectsAcceptedConnAfterCloseBegins(t *testing.T) {
 	}
 }
 
+func TestServerCloseClosesListenerWhenStateMutexBusy(t *testing.T) {
+	srv := newInternalTestServer(t)
+	addr := srv.Addr()
+
+	srv.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.Close()
+	}()
+	defer func() {
+		srv.mu.Unlock()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Close did not finish after state mutex was released")
+		}
+	}()
+
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 10*time.Millisecond)
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("listener kept accepting connections while Close was blocked on state mutex")
+}
+
 func newInternalTestServer(t *testing.T) *Server {
 	t.Helper()
 	srv, _ := newInternalTestServerWithLogPath(t)

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/khaiql/parley/internal/eventlog"
@@ -40,7 +41,7 @@ type Server struct {
 	participants map[string]model.Participant
 	conns        map[string]*clientConn
 	activeConns  map[net.Conn]struct{}
-	closing      bool
+	closing      atomic.Bool
 
 	serveStarted   chan struct{}
 	closed         chan struct{}
@@ -329,7 +330,7 @@ func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Re
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.closing {
+	if s.isClosing() {
 		return errorResponse("server_closing", "server is closing")
 	}
 	if s.hasOnlineParticipantLocked(name) {
@@ -463,15 +464,22 @@ func (s *Server) hasOnlineParticipantLocked(name string) bool {
 }
 
 func (s *Server) beginClose() {
-	s.mu.Lock()
-	s.closing = true
-	s.mu.Unlock()
+	s.closing.Store(true)
+}
+
+func (s *Server) isClosing() bool {
+	return s.closing.Load()
 }
 
 func (s *Server) trackAcceptedConn(conn net.Conn) bool {
+	if s.isClosing() {
+		_ = conn.Close()
+		return false
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closing {
+	if s.isClosing() {
 		_ = conn.Close()
 		return false
 	}
