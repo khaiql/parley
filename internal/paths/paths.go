@@ -31,6 +31,19 @@ func ValidateRoomID(roomID string) error {
 	if roomID == "" {
 		return fmt.Errorf("room id is required")
 	}
+	if err := validateRoomIDSegment(roomID); err != nil {
+		return err
+	}
+	decoded := decodePercentEscapes(roomID)
+	if decoded != roomID {
+		if err := validateRoomIDSegment(decoded); err != nil {
+			return fmt.Errorf("room id contains encoded unsafe path segment: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateRoomIDSegment(roomID string) error {
 	if roomID == "." || roomID == ".." {
 		return fmt.Errorf("room id must be a safe path segment")
 	}
@@ -41,6 +54,41 @@ func ValidateRoomID(roomID string) error {
 		return fmt.Errorf("room id must be a clean path segment")
 	}
 	return nil
+}
+
+func decodePercentEscapes(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+
+	var decoded strings.Builder
+	decoded.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) {
+			hi, okHi := fromHex(s[i+1])
+			lo, okLo := fromHex(s[i+2])
+			if okHi && okLo {
+				decoded.WriteByte(hi<<4 | lo)
+				i += 2
+				continue
+			}
+		}
+		decoded.WriteByte(s[i])
+	}
+	return decoded.String()
+}
+
+func fromHex(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	default:
+		return 0, false
+	}
 }
 
 func (p Paths) RoomDir(roomID string) (string, error) {

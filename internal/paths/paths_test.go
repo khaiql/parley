@@ -37,6 +37,36 @@ func TestRoomDirRejectsUnsafeRoomIDs(t *testing.T) {
 	}
 }
 
+func TestRoomDirRejectsEncodedUnsafeRoomIDs(t *testing.T) {
+	root := t.TempDir()
+	p := New(root)
+	tests := []string{"%2e%2e", "%2f", "%5c", "a%2Fb"}
+
+	for _, roomID := range tests {
+		if err := ValidateRoomID(roomID); err == nil {
+			t.Errorf("ValidateRoomID(%q) error = nil, want error", roomID)
+		}
+		if _, err := p.RoomDir(roomID); err == nil {
+			t.Errorf("RoomDir(%q) error = nil, want error", roomID)
+		}
+	}
+}
+
+func TestRoomDirAllowsSafeSingleSegmentRoomIDs(t *testing.T) {
+	root := t.TempDir()
+	p := New(root)
+	tests := []string{"room-1", "room_1", "room.1", "100%done"}
+
+	for _, roomID := range tests {
+		if err := ValidateRoomID(roomID); err != nil {
+			t.Errorf("ValidateRoomID(%q) error = %v, want nil", roomID, err)
+		}
+		if _, err := p.RoomDir(roomID); err != nil {
+			t.Errorf("RoomDir(%q) error = %v, want nil", roomID, err)
+		}
+	}
+}
+
 func TestEnsureRoomDirRejectsUnsafeRoomIDs(t *testing.T) {
 	root := t.TempDir()
 	p := New(root)
