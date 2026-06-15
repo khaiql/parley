@@ -15,9 +15,13 @@ import (
 	"github.com/khaiql/parley/internal/protocol"
 )
 
-const scanBufSize = 1024 * 1024 // 1 MB
+const (
+	scanBufSize     = 1024 * 1024 // 1 MB
+	joinHistorySize = 50
+)
 
 var mentionRE = regexp.MustCompile(`@([A-Za-z0-9_][A-Za-z0-9_-]*)`)
+var nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]*$`)
 
 type Config struct {
 	RoomID string
@@ -164,7 +168,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		switch req.Type {
 		case protocol.RequestJoin:
 			if req.Join == nil {
-				if writeErr := writeResponse(conn, errorResponse("bad_request", "join payload is required")); writeErr != nil {
+				if writeErr := writeCurrentResponse(conn, cc, joined, errorResponse("bad_request", "join payload is required")); writeErr != nil {
 					return
 				}
 				continue
@@ -178,7 +182,7 @@ func (s *Server) handleConn(conn net.Conn) {
 
 			resp := s.handleJoin(conn, *req.Join)
 			if resp.OK {
-				name = req.Join.Name
+				name = resp.Event.Actor
 			}
 			if err := writeResponse(conn, resp); err != nil {
 				if resp.OK {
@@ -198,7 +202,7 @@ func (s *Server) handleConn(conn net.Conn) {
 
 		case protocol.RequestSend:
 			if req.Send == nil {
-				if writeErr := s.writeToJoined(cc, errorResponse("bad_request", "send payload is required")); writeErr != nil {
+				if writeErr := writeCurrentResponse(conn, cc, joined, errorResponse("bad_request", "send payload is required")); writeErr != nil {
 					return
 				}
 				continue
@@ -220,18 +224,20 @@ func (s *Server) handleConn(conn net.Conn) {
 
 		case protocol.RequestHistory:
 			if req.History == nil {
-				if writeErr := s.writeToJoined(cc, errorResponse("bad_request", "history payload is required")); writeErr != nil {
+				if writeErr := writeCurrentResponse(conn, cc, joined, errorResponse("bad_request", "history payload is required")); writeErr != nil {
+					return
+				}
+				continue
+			}
+			if !joined {
+				if writeErr := writeResponse(conn, errorResponse("not_joined", "join before reading history")); writeErr != nil {
 					return
 				}
 				continue
 			}
 
 			resp := s.handleHistory(*req.History)
-			if joined {
-				if err := cc.write(resp); err != nil {
-					return
-				}
-			} else if err := writeResponse(conn, resp); err != nil {
+			if err := cc.write(resp); err != nil {
 				return
 			}
 
@@ -244,10 +250,13 @@ func (s *Server) handleConn(conn net.Conn) {
 			}
 
 			resp := s.handleLeave(name)
-			joined = false
 			if err := cc.write(resp); err != nil {
 				return
 			}
+			if !resp.OK {
+				continue
+			}
+			joined = false
 			s.removeConnection(name, cc)
 			if resp.OK && resp.Event != nil {
 				s.broadcastEventExcept(name, *resp.Event)
@@ -271,11 +280,15 @@ func (s *Server) handleConn(conn net.Conn) {
 
 func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Response {
 	_ = conn
+	name := strings.TrimSpace(req.Name)
 	if req.RoomID != s.cfg.RoomID {
 		return errorResponse("room_mismatch", "room id does not match this server")
 	}
-	if strings.TrimSpace(req.Name) == "" {
+	if name == "" {
 		return errorResponse("bad_request", "name is required")
+	}
+	if !nameRE.MatchString(name) {
+		return errorResponse("bad_request", "name must match mention syntax")
 	}
 	if req.Role == "" {
 		req.Role = "participant"
@@ -284,14 +297,14 @@ func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Re
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if participant, ok := s.participants[req.Name]; ok && participant.Online {
+	if participant, ok := s.participants[name]; ok && participant.Online {
 		return errorResponse("name_taken", "name is already online")
 	}
 
 	ev, err := s.log.Append(model.Event{
 		Type:   model.EventParticipantJoined,
 		RoomID: s.cfg.RoomID,
-		Actor:  req.Name,
+		Actor:  name,
 		Payload: model.ParticipantPayload{
 			Role:      req.Role,
 			Directory: req.Directory,
@@ -302,15 +315,15 @@ func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Re
 		return errorResponse("log_append_failed", err.Error())
 	}
 
-	s.participants[req.Name] = model.Participant{
-		Name:      req.Name,
+	s.participants[name] = model.Participant{
+		Name:      name,
 		Role:      req.Role,
 		Directory: req.Directory,
 		Repo:      req.Repo,
 		Online:    true,
 	}
 
-	events, latestSeq, err := s.historyLocked(protocol.HistoryRequest{All: true})
+	events, latestSeq, err := s.historyLocked(protocol.HistoryRequest{Limit: joinHistorySize}, ev.Seq)
 	if err != nil {
 		return errorResponse("history_failed", err.Error())
 	}
@@ -358,7 +371,7 @@ func (s *Server) handleHistory(req protocol.HistoryRequest) protocol.Response {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	events, latestSeq, err := s.historyLocked(req)
+	events, latestSeq, err := s.historyLocked(req, 0)
 	if err != nil {
 		return errorResponse("history_failed", err.Error())
 	}
@@ -378,8 +391,6 @@ func (s *Server) handleLeave(name string) protocol.Response {
 	if !ok || !participant.Online {
 		return protocol.Response{OK: true}
 	}
-	participant.Online = false
-	s.participants[name] = participant
 
 	ev, err := s.log.Append(model.Event{
 		Type:    model.EventParticipantLeft,
@@ -390,6 +401,9 @@ func (s *Server) handleLeave(name string) protocol.Response {
 	if err != nil {
 		return errorResponse("log_append_failed", err.Error())
 	}
+
+	participant.Online = false
+	s.participants[name] = participant
 
 	return protocol.Response{
 		OK:        true,
@@ -456,14 +470,7 @@ func (s *Server) broadcastEventExcept(name string, ev model.Event) {
 	}
 }
 
-func (s *Server) writeToJoined(cc *clientConn, resp protocol.Response) error {
-	if cc == nil {
-		return nil
-	}
-	return cc.write(resp)
-}
-
-func (s *Server) historyLocked(req protocol.HistoryRequest) ([]model.Event, int64, error) {
+func (s *Server) historyLocked(req protocol.HistoryRequest, excludeSeq int64) ([]model.Event, int64, error) {
 	all, err := s.log.ReadAll()
 	if err != nil {
 		return nil, 0, err
@@ -479,13 +486,16 @@ func (s *Server) historyLocked(req protocol.HistoryRequest) ([]model.Event, int6
 		if !ev.Type.IsTranscript() {
 			continue
 		}
+		if excludeSeq > 0 && ev.Seq == excludeSeq {
+			continue
+		}
 		if !req.All && ev.Seq <= req.AfterSeq {
 			continue
 		}
 		events = append(events, ev)
-		if req.Limit > 0 && len(events) >= req.Limit {
-			break
-		}
+	}
+	if req.Limit > 0 && len(events) > req.Limit {
+		events = events[len(events)-req.Limit:]
 	}
 	return events, latestSeq, nil
 }
@@ -535,6 +545,13 @@ func writeResponse(conn net.Conn, resp protocol.Response) error {
 	}
 	_, err = conn.Write(data)
 	return err
+}
+
+func writeCurrentResponse(conn net.Conn, cc *clientConn, joined bool, resp protocol.Response) error {
+	if joined {
+		return cc.write(resp)
+	}
+	return writeResponse(conn, resp)
 }
 
 func errorResponse(code, message string) protocol.Response {
