@@ -329,8 +329,16 @@ func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Re
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.closing {
+		return errorResponse("server_closing", "server is closing")
+	}
 	if s.hasOnlineParticipantLocked(name) {
 		return errorResponse("name_taken", "name is already online")
+	}
+
+	events, _, err := s.historyLocked(protocol.HistoryRequest{Limit: joinHistorySize}, 0)
+	if err != nil {
+		return errorResponse("history_failed", err.Error())
 	}
 
 	ev, err := s.log.Append(model.Event{
@@ -345,11 +353,6 @@ func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Re
 	})
 	if err != nil {
 		return errorResponse("log_append_failed", err.Error())
-	}
-
-	events, latestSeq, err := s.historyLocked(protocol.HistoryRequest{Limit: joinHistorySize}, ev.Seq)
-	if err != nil {
-		return errorResponse("history_failed", err.Error())
 	}
 
 	cc := &clientConn{name: name, conn: conn}
@@ -370,7 +373,7 @@ func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Re
 		Participants: s.participantSnapshotLocked(),
 		Events:       events,
 		Event:        &ev,
-		LatestSeq:    latestSeq,
+		LatestSeq:    ev.Seq,
 	}
 }
 
@@ -562,13 +565,6 @@ func (s *Server) closeAllConnections() {
 	for _, conn := range activeConns {
 		_ = conn.Close()
 	}
-}
-
-func (s *Server) broadcastEventExcept(name string, ev model.Event) {
-	s.mu.Lock()
-	pub := s.newPublicationLocked(name, ev)
-	s.mu.Unlock()
-	s.publishDirect(pub)
 }
 
 func (s *Server) enqueuePublicationLocked(name string, ev model.Event) {

@@ -68,7 +68,7 @@ func TestServerBroadcastRemovesClientOnWriteError(t *testing.T) {
 	srv.conns["bob"] = cc
 	srv.mu.Unlock()
 
-	srv.broadcastEventExcept("alice", model.Event{Seq: 1, Type: model.EventMessage, RoomID: "room-1", Actor: "alice"})
+	srv.publishTestEventExcept("alice", model.Event{Seq: 1, Type: model.EventMessage, RoomID: "room-1", Actor: "alice"})
 
 	srv.mu.Lock()
 	_, stillConnected := srv.conns["bob"]
@@ -260,6 +260,50 @@ func TestServerPublicationRecipientsAreCapturedAtCommit(t *testing.T) {
 	carolConn.assertNoResponse(t)
 }
 
+func TestServerJoinResponseLatestSeqIncludesCommittedJoin(t *testing.T) {
+	srv := newInternalTestServerWithoutPublisher(t)
+	srv.registerOnlineTestClient("alice", newRecordingConn())
+	messageResp := srv.handleSend("alice", protocol.SendRequest{Text: "before bob joins"})
+	if !messageResp.OK || messageResp.Event == nil {
+		t.Fatalf("message response = %#v", messageResp)
+	}
+	_ = srv.takePublication(t)
+
+	bobConn := newRecordingConn()
+	joinResp := srv.handleJoin(bobConn, protocol.JoinRequest{RoomID: "room-1", Name: "bob", Role: "participant"})
+	if !joinResp.OK || joinResp.Event == nil {
+		t.Fatalf("join response = %#v", joinResp)
+	}
+	if joinResp.LatestSeq != joinResp.Event.Seq {
+		t.Fatalf("LatestSeq = %d, want committed join seq %d", joinResp.LatestSeq, joinResp.Event.Seq)
+	}
+	if len(joinResp.Events) != 1 || joinResp.Events[0].Seq != messageResp.Event.Seq {
+		t.Fatalf("join snapshot = %#v, want message seq %d only", joinResp.Events, messageResp.Event.Seq)
+	}
+	for _, ev := range joinResp.Events {
+		if ev.Seq == joinResp.Event.Seq {
+			t.Fatalf("join snapshot duplicated committed join event seq %d", ev.Seq)
+		}
+	}
+}
+
+func TestServerRejectsJoinAfterCloseBegins(t *testing.T) {
+	srv, logPath := newInternalTestServerWithLogPath(t)
+	srv.beginClose()
+
+	resp := srv.handleJoin(newRecordingConn(), protocol.JoinRequest{RoomID: "room-1", Name: "alice", Role: "participant"})
+	if resp.OK || resp.Error == nil || resp.Error.Code != "server_closing" {
+		t.Fatalf("join response = %#v, want server_closing error", resp)
+	}
+	events, err := eventlog.New(logPath).ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want no committed join", events)
+	}
+}
+
 func TestServerPublicationSkipsOfflineConnectionEntries(t *testing.T) {
 	srv := newInternalTestServerWithoutPublisher(t)
 	aliceConn := newRecordingConn()
@@ -357,7 +401,7 @@ func TestServerBroadcastDropLeaveAppendFailureKeepsConnectionRegistered(t *testi
 
 	restoreLog := forceLogAppendFailure(t, logPath)
 	defer restoreLog()
-	srv.broadcastEventExcept("alice", model.Event{Seq: 100, Type: model.EventMessage, RoomID: "room-1", Actor: "alice"})
+	srv.publishTestEventExcept("alice", model.Event{Seq: 100, Type: model.EventMessage, RoomID: "room-1", Actor: "alice"})
 
 	srv.mu.Lock()
 	participant := srv.participants["bob"]
@@ -573,6 +617,13 @@ func (s *Server) takePublication(t *testing.T) publication {
 	s.publishQueue[len(s.publishQueue)-1] = publication{}
 	s.publishQueue = s.publishQueue[:len(s.publishQueue)-1]
 	return pub
+}
+
+func (s *Server) publishTestEventExcept(name string, ev model.Event) {
+	s.mu.Lock()
+	pub := s.newPublicationLocked(name, ev)
+	s.mu.Unlock()
+	s.publishDirect(pub)
 }
 
 func forceLogAppendFailure(t *testing.T, logPath string) func() {
