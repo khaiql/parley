@@ -69,171 +69,130 @@ go test ./... -timeout 30s -race                                                
 
 All three must pass. The CI workflow (`.github/workflows/ci.yml`) runs these exact steps.
 
-### VHS Visual Testing
-
-```bash
-vhs <tape-file>.tape               # Record TUI to GIF
-```
-
-VHS tapes live in the project root. Use them to visually verify TUI changes.
-
 ### End-to-End Testing
 
-Use `/e2e-test` to run a full smoke test of the TUI using `agent-tui`. It builds the binary, hosts a room, joins an agent, and verifies message exchange. See `.claude/skills/e2e-test/SKILL.md` for details.
+```bash
+go test ./internal/e2e -run TestHeadlessRoomTwoParticipants
+go test ./internal/e2e -run TestHeadlessRoomTwoParticipants -count=100
+```
+
+The e2e package exercises the headless room flow: start a server, join a second participant, exchange messages through adapters, and verify wait/send behavior.
 
 ## Architecture Overview
 
-**Parley** is a TUI group chat where a human and coding agents (Claude Code, Gemini CLI, etc.) collaborate as peers.
+**Parley** is a headless, JSON-first coordination room for coding agents. The server owns room sequencing and broadcast, participant adapters keep local mirrors, and short CLI commands talk to adapters through local control sockets.
 
 ### Package Map
 
 ```
-cmd/parley/              CLI entrypoint — wires everything together
-  main.go                Cobra root command, shared helpers (detectRepo, defaultParleyDir)
-  host.go                Host command: creates server + TUI, persistence auto-save
-  join.go                Join command: connects agent to room, dispatcher, driver bridge
-  export.go              Export command: HTML transcript
+cmd/parley/              Cobra CLI entrypoint and JSON command surface
+  main.go                Root command, shared flags, version command
+  start.go               Start room server and host participant adapter
+  join.go                Join a descriptor as a participant adapter
+  invite.go              Emit descriptor JSON for active room
+  participant_commands.go info, status, inbox, history, wait, send, leave, stop
 
-internal/protocol/       Wire format — shared by all packages
-  protocol.go            JSON-RPC 2.0 types, NDJSON encoding, Method*/Status* constants
-                         Participant, MessageParams, Content, RoomSnapshot, MatchMentions
+internal/model/          Event envelope, event types, participant and room metadata
+  event.go               Transcript classification and payload structs
 
-internal/server/         TCP server — transport layer only
-  server.go              TCPServer: accept loop, handleConn routes messages via room.State
-  interfaces.go          Server interface (Addr, Port, Serve, Close)
-  connmanager.go         ConnectionManager: client connections + broadcast primitives
+internal/descriptor/     parley:// descriptor parser and formatter
+  descriptor.go          Host, port, room-id grammar with IPv6 support
 
-internal/client/         TCP client — send/receive messages
-  client.go              TCPClient: Connect, Join, Send, SendStatus, Incoming() channel
-  interfaces.go          Client interface
+internal/paths/          Per-user path layout and permissions
+  paths.go               ~/.parley room dirs, active pointer, socket paths
 
-internal/room/           Business logic — single source of truth, zero TUI dependencies
-  events.go              Event types (ParticipantsChanged, MessageReceived, etc.)
-                         Activity enum, channel-based pub/sub (Subscribe/emit/Close)
-  state.go               Room state: Join, Leave, AddMessage, Restore, RecentMessages
-                         Query methods (Participants, GetID, GetTopic, etc.)
-  dispatch.go            HandleServerMessage — client-side: translates protocol → events
-  commands.go            ExecuteCommand, SendMessage
+internal/jsonout/        JSON response helpers
+  jsonout.go             Success and error envelopes for CLI commands
 
-internal/dispatcher/     Message delivery policies for agent drivers
-  dispatcher.go          Dispatcher interface + Debounce implementation
-                         Subscribes to room events, debounces non-mentioned messages
+internal/eventlog/       Append-only JSONL event store
+  log.go                 Sequence assignment, read, and transcript filtering
 
-internal/persistence/    Room state storage
-  persistence.go         Store interface (Save, Load, SaveAgentSession, FindAgentSession)
-  json_store.go          JSONStore: saves to ~/.parley/rooms/<id>/ as JSON files
+internal/protocol/       V1 NDJSON wire protocol
+  protocol.go            Request, response, event, and codec types
 
-internal/driver/         Agent subprocess management
-  driver.go              AgentDriver interface, AgentConfig, AgentEvent types
-  claude.go              Claude Code driver (stream-json protocol)
-  gemini.go              Gemini CLI driver
-  prompt.go              System prompt builder
+internal/server/         Headless room server
+  server.go              TCP accept loop, room state, event log, broadcast
+  interfaces.go          Server interfaces for tests and CLI wiring
 
-internal/tui/            Bubble Tea TUI shell — renders from room events
-  app.go                 Root model, three-layer key routing, event-sourced state
-  inputfsm.go            Input FSM (Normal ↔ Completing) via qmuntal/stateless
-  chat.go                Chat viewport with markdown rendering
-  sidebar.go             Participant list with activity status + spinner
-  suggestions.go         Autocomplete dropdown for / commands and @ mentions
-  modal.go               Dismissable overlay for command output
-  input.go               Text input (human interactive / agent read-only)
-  topbar.go, statusbar.go, styles.go
+internal/adapter/        Participant runtime adapter
+  adapter.go             TCP connection, local event mirror, wait semantics
+  control.go             Unix socket control API for short CLI commands
 
-internal/web/            Web export
-  export.go              HTML transcript export from saved room data
+internal/runtime/        Runtime metadata for active rooms and participants
+  runtime.go             Room runtime, active participation, invite response
+
+internal/e2e/            Headless integration coverage
+  headless_test.go       Two-participant room workflow tests
 ```
 
 ### How It Works
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                      cmd/parley                           │
-│                                                           │
-│  host command:                                            │
-│    serverState = room.New()                               │
-│    srv = server.New(addr, serverState)                    │
-│    tuiState = room.New()   ◄── client-side event emitter  │
-│         │           │               │                     │
-│         │      c.Incoming()    Subscribe()                │
-│         ▼           │               │                     │
-│    Serve (TCP)      ▼               ▼                     │
-│    (mutates    HandleServerMsg  program.Send()            │
-│     serverState                     │                     │
-│     under s.mu)                ┌────▼─────┐               │
-│         │                      │   TUI    │               │
-│         │                      │  (app)   │               │
-│         │                      └──────────┘               │
-│         │                                                 │
-│    persistence.JSONStore ◄── srv.Snapshot()               │
-│                                                           │
-│  join command:                                            │
-│    tuiState = room.New()  ──► dispatcher.Start()          │
-│         │          │               │                      │
-│    c.Incoming()  Subscribe()   driver.Send()              │
-│         │          │               │                      │
-│         ▼          ▼               ▼                      │
-│    HandleServerMsg  program.Send()  agent stdin/out       │
-│                         │                                 │
-│                    ┌────▼─────┐                            │
-│                    │   TUI    │                            │
-│                    │  (app)   │                            │
-│                    └──────────┘                            │
-└──────────────────────────────────────────────────────────┘
+parley start
+    |
+    |-- room server listens on TCP, assigns event seq, appends JSONL
+    |
+    `-- host adapter connects to the room and exposes a Unix control socket
+
+parley invite
+    |
+    `-- reads runtime metadata and prints parley://host:port/room-id JSON
+
+parley join <descriptor>
+    |
+    `-- participant adapter connects to the room and mirrors events locally
+
+parley wait/send/inbox/history
+    |
+    `-- short-lived CLI commands use the active participant control socket
 ```
 
 ### Package Dependencies
 
 ```
-protocol     ◄── server, client, room, dispatcher, persistence, driver, tui, cmd
-command      ◄── room, tui, cmd
-room         ◄── dispatcher, tui, cmd     (depends on: protocol, command)
-server       ◄── cmd                      (depends on: protocol, room)
-client       ◄── cmd                      (depends on: protocol)
-dispatcher   ◄── cmd                      (depends on: protocol, room)
-persistence  ◄── cmd                      (depends on: protocol)
-driver       ◄── cmd                      (depends on: protocol)
-tui          ◄── cmd                      (depends on: protocol, command, room)
+model        <- eventlog, protocol, server, adapter, runtime, cmd
+descriptor   <- runtime, cmd
+paths        <- runtime, cmd
+jsonout      <- cmd
+eventlog     <- server, adapter, cmd
+protocol     <- server, adapter
+server       <- cmd, e2e                 (depends on: model, eventlog, protocol)
+adapter      <- cmd, e2e                 (depends on: model, protocol, runtime)
+runtime      <- cmd, e2e                 (depends on: descriptor, paths)
+e2e          <- server, adapter, runtime
 ```
 
-`protocol` is the foundation — all packages depend on it. `room` is the business logic layer (single source of truth). The server borrows `room.State` for mutations; the TUI and dispatcher subscribe to its events.
+`model` defines the shared event vocabulary. `protocol` is only the on-the-wire shape. `server` is authoritative for event sequencing and broadcast, while `adapter` owns each participant's local mirror and control socket.
 
 ### Message Flow
 
-1. **Server-side**: `handleConn` receives JSON-RPC over TCP, calls `room.State.AddMessage()` / `Join()` / `Leave()` under `s.mu`, then `ConnectionManager.Broadcast()` fans out the notification
-2. **Client-side**: `room.State.HandleServerMessage()` processes incoming notifications, updates internal state, emits typed events (`MessageReceived`, `ParticipantsChanged`, etc.)
-3. **Bridge**: A goroutine drains the event channel and calls `tea.Program.Send()` to inject events into the Bubble Tea loop
-4. **TUI**: `App.Update()` handles events, builds TUI-local state, and returns commands. `View()` renders from local state — never reads from `room.State`
+1. `parley send` connects to the active participant control socket.
+2. The adapter forwards a `send` request to the TCP room server.
+3. The server assigns the next sequence, appends the event log, and broadcasts the event to connected adapters.
+4. Each adapter appends the event to its local mirror.
+5. `parley wait` returns unseen events from the local mirror and advances that participant's cursor.
 
 ### Concurrency Model
 
-- `room.State` is **single-threaded** — no internal mutex
-- **Server-side**: The server's `s.mu sync.Mutex` serializes all `room.State` mutations from multiple `handleConn` goroutines
-- **Client-side** (host TUI, join TUI): One goroutine calls `HandleServerMessage` from the network loop
-- **Host process**: Two `room.State` instances — `serverState` (authoritative, server-owned) and `tuiState` (client-side, fed by network). Persistence reads via `srv.Snapshot()` which acquires `s.mu`
-- **ConnectionManager**: Has its own `sync.RWMutex` for connection map access
+- **Room server**: serializes room mutation, sequence assignment, log append, and broadcast.
+- **Adapter**: one TCP read loop mirrors server events; control socket handlers inspect mirror state or forward requests.
+- **CLI commands**: short-lived processes, always JSON output, no long-lived UI state.
+- **Storage**: room directories are private to the local OS user; JSONL logs are append-only.
 
 ### Key Design Decisions
 
-- Server is embedded in the `host` process (no separate daemon)
-- **Single source of truth**: `room.State` owns all business logic (Join, Leave, AddMessage, etc.). The server is pure transport.
-- **Core/Shell split**: Room business logic (`internal/room/`) has zero TUI dependencies — reusable by web UI (#51)
-- **Event-sourced TUI**: The TUI builds its own state from room events, no shared mutable pointers
-- **Dispatcher pattern**: Message delivery to agents is a pluggable policy (`internal/dispatcher/`). Currently debounce-based; extensible to priority, batching, etc.
-- **Persistence interface**: `persistence.Store` decouples storage from file format. `JSONStore` is the default implementation.
-- **Input FSM**: Explicit state machine for input modes (Normal ↔ Completing) via `qmuntal/stateless`
-- **Three-layer key routing**: Overlay → Permission → Input FSM, with consumed-bool early returns
-- **Reactive spinner**: Self-terminating tick pattern, no `spinnerActive` flag
-- Agent drivers abstract different agent communication patterns (stdio)
-- Agents self-regulate responses via system prompt (no server-side turn-taking)
+- **JSON-only user surface**: every command prints either a success envelope or an error envelope.
+- **Event-log-first state**: the server's event log is the durable room transcript.
+- **Participant-local cursors**: wait/inbox behavior is tracked per adapter, not globally.
+- **Descriptor handoff**: joining uses explicit `parley://host:port/room-id` descriptors.
+- **Local trust boundary**: runtime files and Unix sockets live under protected per-user directories.
+- **No agent process management**: Parley coordinates participants; agent skills decide when to call Parley commands.
 
 ## Conventions & Patterns
 
 - **Go module**: `github.com/khaiql/parley` (remote: github.com/khaiql/parley)
-- **TUI framework**: Bubble Tea (Elm architecture) + Lipgloss + Glamour
 - **Strict TDD**: Write failing test first, implement, verify green
 - **One commit per logical change**: descriptive message, Co-Authored-By trailer
-- **Visual regression tests**: Golden file snapshots in `internal/tui/testdata/`
-- **VHS tapes**: For visual testing of TUI rendering
 
 ### Specs & Plans
 
