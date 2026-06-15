@@ -544,8 +544,7 @@ func (s *Server) removeConnection(name string, cc *clientConn) {
 func (s *Server) closeAllConnections() {
 	s.mu.Lock()
 	conns := make([]*clientConn, 0, len(s.conns))
-	for name, cc := range s.conns {
-		delete(s.conns, name)
+	for _, cc := range s.conns {
 		conns = append(conns, cc)
 	}
 	activeConns := make([]net.Conn, 0, len(s.activeConns))

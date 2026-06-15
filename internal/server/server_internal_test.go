@@ -374,6 +374,51 @@ func TestServerBroadcastDropLeaveAppendFailureKeepsConnectionRegistered(t *testi
 	}
 }
 
+func TestServerCloseLeaveAppendFailureKeepsConnectionRegistered(t *testing.T) {
+	srv, logPath := newInternalTestServerWithLogPath(t)
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	if !srv.trackAcceptedConn(serverConn) {
+		t.Fatal("trackAcceptedConn returned false")
+	}
+
+	go func() {
+		defer srv.wg.Done()
+		srv.handleConn(serverConn)
+	}()
+
+	reader := bufio.NewReader(clientConn)
+	writeConnRequest(t, clientConn, protocol.Request{
+		Type: protocol.RequestJoin,
+		Join: &protocol.JoinRequest{RoomID: "room-1", Name: "alice", Role: "participant"},
+	})
+	resp := readConnResponse(t, clientConn, reader)
+	if !resp.OK || resp.Event == nil {
+		t.Fatalf("join response = %#v", resp)
+	}
+	cc := srv.connectionForName("alice")
+	if cc == nil {
+		t.Fatal("alice connection was not registered")
+	}
+
+	restoreLog := forceLogAppendFailure(t, logPath)
+	defer restoreLog()
+	if err := srv.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	srv.mu.Lock()
+	participant := srv.participants["alice"]
+	currentConn := srv.conns["alice"]
+	srv.mu.Unlock()
+	if !participant.Online {
+		t.Fatal("participant was marked offline without durable close leave")
+	}
+	if currentConn != cc {
+		t.Fatal("connection was removed before durable close leave")
+	}
+}
+
 func TestServerPublishesCommittedEventsInSequenceOrder(t *testing.T) {
 	srv := newInternalTestServer(t)
 	bobConn := newRecordingConn()
