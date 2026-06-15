@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
@@ -18,6 +19,7 @@ import (
 const (
 	scanBufSize     = 1024 * 1024 // 1 MB
 	joinHistorySize = 50
+	writeTimeout    = 2 * time.Second
 )
 
 var mentionRE = regexp.MustCompile(`@([A-Za-z0-9_][A-Za-z0-9_-]*)`)
@@ -37,6 +39,7 @@ type Server struct {
 	mu           sync.Mutex
 	participants map[string]model.Participant
 	conns        map[string]*clientConn
+	activeConns  map[net.Conn]struct{}
 
 	serveStarted chan struct{}
 	closed       chan struct{}
@@ -71,6 +74,7 @@ func New(addr string, cfg Config) (*Server, error) {
 		log:          cfg.Log,
 		participants: make(map[string]model.Participant),
 		conns:        make(map[string]*clientConn),
+		activeConns:  make(map[net.Conn]struct{}),
 		serveStarted: make(chan struct{}),
 		closed:       make(chan struct{}),
 	}, nil
@@ -104,6 +108,7 @@ func (s *Server) Serve() {
 		if err != nil {
 			return
 		}
+		s.addActiveConn(conn)
 
 		s.wg.Add(1)
 		go func() {
@@ -133,7 +138,10 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) handleConn(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		s.removeActiveConn(conn)
+		_ = conn.Close()
+	}()
 
 	sc := bufio.NewScanner(conn)
 	sc.Buffer(make([]byte, scanBufSize), scanBufSize)
@@ -184,17 +192,21 @@ func (s *Server) handleConn(conn net.Conn) {
 			if resp.OK {
 				name = resp.Event.Actor
 			}
-			if err := writeResponse(conn, resp); err != nil {
-				if resp.OK {
-					_ = s.handleLeave(name)
-				}
-				return
-			}
 			if !resp.OK {
+				_ = writeResponse(conn, resp)
 				return
 			}
 
-			cc = s.registerConnection(name, conn)
+			cc = s.connectionForName(name)
+			if cc == nil {
+				_ = writeResponse(conn, errorResponse("internal_error", "join connection was not registered"))
+				return
+			}
+			if err := cc.writeLocked(resp); err != nil {
+				s.rollbackJoin(name, cc)
+				cc = nil
+				return
+			}
 			joined = true
 			if resp.Event != nil {
 				s.broadcastEventExcept(name, *resp.Event)
@@ -276,10 +288,13 @@ func (s *Server) handleConn(conn net.Conn) {
 			}
 		}
 	}
+
+	if err := sc.Err(); err != nil {
+		_ = writeCurrentResponse(conn, cc, joined, errorResponse("bad_request", "invalid request"))
+	}
 }
 
 func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Response {
-	_ = conn
 	name := strings.TrimSpace(req.Name)
 	if req.RoomID != s.cfg.RoomID {
 		return errorResponse("room_mismatch", "room id does not match this server")
@@ -297,7 +312,7 @@ func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Re
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if participant, ok := s.participants[name]; ok && participant.Online {
+	if s.hasOnlineParticipantLocked(name) {
 		return errorResponse("name_taken", "name is already online")
 	}
 
@@ -315,6 +330,13 @@ func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Re
 		return errorResponse("log_append_failed", err.Error())
 	}
 
+	events, latestSeq, err := s.historyLocked(protocol.HistoryRequest{Limit: joinHistorySize}, ev.Seq)
+	if err != nil {
+		return errorResponse("history_failed", err.Error())
+	}
+
+	cc := &clientConn{name: name, conn: conn}
+	cc.writeMu.Lock()
 	s.participants[name] = model.Participant{
 		Name:      name,
 		Role:      req.Role,
@@ -322,11 +344,7 @@ func (s *Server) handleJoin(conn net.Conn, req protocol.JoinRequest) protocol.Re
 		Repo:      req.Repo,
 		Online:    true,
 	}
-
-	events, latestSeq, err := s.historyLocked(protocol.HistoryRequest{Limit: joinHistorySize}, ev.Seq)
-	if err != nil {
-		return errorResponse("history_failed", err.Error())
-	}
+	s.conns[name] = cc
 
 	return protocol.Response{
 		OK:           true,
@@ -412,14 +430,47 @@ func (s *Server) handleLeave(name string) protocol.Response {
 	}
 }
 
-func (s *Server) registerConnection(name string, conn net.Conn) *clientConn {
-	cc := &clientConn{name: name, conn: conn}
+func (s *Server) hasOnlineParticipantLocked(name string) bool {
+	for _, participant := range s.participants {
+		if participant.Online && strings.EqualFold(participant.Name, name) {
+			return true
+		}
+	}
+	return false
+}
 
+func (s *Server) addActiveConn(conn net.Conn) {
 	s.mu.Lock()
-	s.conns[name] = cc
+	s.activeConns[conn] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *Server) removeActiveConn(conn net.Conn) {
+	s.mu.Lock()
+	delete(s.activeConns, conn)
+	s.mu.Unlock()
+}
+
+func (s *Server) connectionForName(name string) *clientConn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conns[name]
+}
+
+func (s *Server) rollbackJoin(name string, cc *clientConn) {
+	s.mu.Lock()
+	if current, ok := s.conns[name]; ok && current == cc {
+		delete(s.conns, name)
+	}
+	if participant, ok := s.participants[name]; ok {
+		participant.Online = false
+		s.participants[name] = participant
+	}
 	s.mu.Unlock()
 
-	return cc
+	cc.close.Do(func() {
+		_ = cc.conn.Close()
+	})
 }
 
 func (s *Server) removeConnection(name string, cc *clientConn) {
@@ -440,12 +491,20 @@ func (s *Server) closeAllConnections() {
 		delete(s.conns, name)
 		conns = append(conns, cc)
 	}
+	activeConns := make([]net.Conn, 0, len(s.activeConns))
+	for conn := range s.activeConns {
+		activeConns = append(activeConns, conn)
+	}
+	s.activeConns = make(map[net.Conn]struct{})
 	s.mu.Unlock()
 
 	for _, cc := range conns {
 		cc.close.Do(func() {
 			_ = cc.conn.Close()
 		})
+	}
+	for _, conn := range activeConns {
+		_ = conn.Close()
 	}
 }
 
@@ -465,8 +524,22 @@ func (s *Server) broadcastEventExcept(name string, ev model.Event) {
 	}
 	s.mu.Unlock()
 
+	var failed []*clientConn
 	for _, cc := range conns {
-		_ = cc.writeData(data)
+		if err := cc.writeData(data); err != nil {
+			failed = append(failed, cc)
+		}
+	}
+	for _, cc := range failed {
+		s.dropConnection(cc)
+	}
+}
+
+func (s *Server) dropConnection(cc *clientConn) {
+	s.removeConnection(cc.name, cc)
+	resp := s.handleLeave(cc.name)
+	if resp.OK && resp.Event != nil {
+		s.broadcastEventExcept(cc.name, *resp.Event)
 	}
 }
 
@@ -531,11 +604,19 @@ func (cc *clientConn) write(resp protocol.Response) error {
 	return cc.writeData(data)
 }
 
+func (cc *clientConn) writeLocked(resp protocol.Response) error {
+	defer cc.writeMu.Unlock()
+	data, err := protocol.EncodeLine(resp)
+	if err != nil {
+		return err
+	}
+	return writeData(cc.conn, data)
+}
+
 func (cc *clientConn) writeData(data []byte) error {
 	cc.writeMu.Lock()
 	defer cc.writeMu.Unlock()
-	_, err := cc.conn.Write(data)
-	return err
+	return writeData(cc.conn, data)
 }
 
 func writeResponse(conn net.Conn, resp protocol.Response) error {
@@ -543,12 +624,20 @@ func writeResponse(conn net.Conn, resp protocol.Response) error {
 	if err != nil {
 		return err
 	}
-	_, err = conn.Write(data)
+	return writeData(conn, data)
+}
+
+func writeData(conn net.Conn, data []byte) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		return err
+	}
+	_, err := conn.Write(data)
+	_ = conn.SetWriteDeadline(time.Time{})
 	return err
 }
 
 func writeCurrentResponse(conn net.Conn, cc *clientConn, joined bool, resp protocol.Response) error {
-	if joined {
+	if joined && cc != nil {
 		return cc.write(resp)
 	}
 	return writeResponse(conn, resp)

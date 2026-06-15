@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"net"
 	"os"
@@ -240,6 +241,17 @@ func TestServerRejectsInvalidParticipantName(t *testing.T) {
 	assertErrorCode(t, conn.Read(t), "bad_request")
 }
 
+func TestServerRejectsCaseInsensitiveDuplicateOnlineName(t *testing.T) {
+	ts := newTestServer(t)
+	bob := dialAndJoin(t, ts.srv.Addr(), "room-1", "Bob")
+	defer bob.Close()
+
+	duplicate := dialClient(t, ts.srv.Addr())
+	defer duplicate.Close()
+	duplicate.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: "room-1", Name: "bob", Role: "participant"}})
+	assertErrorCode(t, duplicate.Read(t), "name_taken")
+}
+
 func TestServerBroadcastsSendToOtherClientsAndRespondsToSender(t *testing.T) {
 	ts := newTestServer(t)
 	alice := dialAndJoin(t, ts.srv.Addr(), "room-1", "alice")
@@ -290,6 +302,53 @@ func TestServerDisconnectEmitsParticipantLeftToOtherClients(t *testing.T) {
 
 	bob.Close()
 	readEvent(t, alice, model.EventParticipantLeft, "bob")
+}
+
+func TestServerCloseReturnsWithIdlePreJoinConnection(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialClient(t, ts.srv.Addr())
+	defer conn.Close()
+	if _, err := conn.conn.Write([]byte("{")); err != nil {
+		t.Fatalf("write partial pre-join request: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- ts.srv.Close()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(300 * time.Millisecond):
+		conn.Close()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Close after unblocking conn: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Close did not return even after idle connection was closed")
+		}
+		t.Fatal("Close did not return while idle pre-join connection was open")
+	}
+}
+
+func TestServerScannerErrorReturnsBadRequest(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialClient(t, ts.srv.Addr())
+	defer conn.Close()
+
+	tooLarge := bytes.Repeat([]byte("x"), 1024*1024+1)
+	tooLarge = append(tooLarge, '\n')
+	if _, err := conn.conn.Write(tooLarge); err != nil {
+		t.Fatalf("write oversized line: %v", err)
+	}
+
+	assertErrorCode(t, conn.Read(t), "bad_request")
 }
 
 func TestServerLeaveAppendFailureKeepsParticipantOnline(t *testing.T) {
