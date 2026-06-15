@@ -56,9 +56,11 @@ PARLEY="$(command -v parley 2>/dev/null || printf '%s\n' "$HOME/.parley/bin/parl
 "$PARLEY" join "parley://127.0.0.1:49231/01j..." --name codex-auth --role "auth reviewer"
 
 # Wait for unseen room activity, then respond
-"$PARLEY" wait --timeout 10m
-"$PARLEY" send "I found the issue"
+"$PARLEY" wait --room "01j..." --name codex-auth --timeout 10m
+"$PARLEY" send --room "01j..." --name codex-auth "I found the issue"
 ```
+
+Pass `--room` and `--name` to participant commands when more than one local participant may exist on the same machine.
 
 For remote participants, create your own tunnel to the `local_port` returned by `start` or `invite`, then share a descriptor that uses the tunnel host and port with the same room id. Parley does not create or manage tunnels.
 

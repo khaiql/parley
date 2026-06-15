@@ -154,7 +154,7 @@ func TestInboxPeekReadsParticipantMirrorWithoutAdvancingCursor(t *testing.T) {
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
-	if !body.OK || body.Status != "ok" || len(body.Events) != 1 || body.Events[0].Seq != 1 {
+	if !body.OK || body.Status != "" || len(body.Events) != 1 || body.Events[0].Seq != 1 {
 		t.Fatalf("inbox body = %#v", body)
 	}
 	meta, err := store.LoadMeta()
@@ -163,6 +163,62 @@ func TestInboxPeekReadsParticipantMirrorWithoutAdvancingCursor(t *testing.T) {
 	}
 	if meta.LastSeenSeq != 0 {
 		t.Fatalf("LastSeenSeq = %d, want 0 after peek", meta.LastSeenSeq)
+	}
+}
+
+func TestInboxWithoutFlagsFailsWhenRoomHasMultipleLocalParticipants(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	for _, name := range []string{"codex", "sle"} {
+		store := adapter.NewStore(
+			parleyRuntime.ParticipantMetaPath(p, "room-1", name),
+			parleyRuntime.ParticipantEventsPath(p, "room-1", name),
+		)
+		if err := store.SaveMeta(adapter.Meta{RoomID: "room-1", Name: name}); err != nil {
+			t.Fatalf("SaveMeta %s: %v", name, err)
+		}
+	}
+
+	out, err := executeForTest("inbox", "--peek")
+	if err == nil {
+		t.Fatalf("expected bare inbox to fail when local participants are ambiguous\n%s", out)
+	}
+	assertJSONErrorCode(t, out, "ambiguous_participation")
+}
+
+func TestInboxEmptyOmitsStatusAndReturnsEventsArray(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	store := adapter.NewStore(
+		parleyRuntime.ParticipantMetaPath(p, "room-1", "codex"),
+		parleyRuntime.ParticipantEventsPath(p, "room-1", "codex"),
+	)
+	if err := store.SaveMeta(adapter.Meta{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+
+	out, err := executeForTest("inbox", "--peek")
+	if err != nil {
+		t.Fatalf("inbox --peek: %v\n%s", err, out)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(out, &raw); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if _, ok := raw["status"]; ok {
+		t.Fatalf("status key present in empty inbox response: %s", out)
+	}
+	var events []model.Event
+	if err := json.Unmarshal(raw["events"], &events); err != nil {
+		t.Fatalf("events: %v\n%s", err, out)
+	}
+	if events == nil || len(events) != 0 {
+		t.Fatalf("events = %#v, want empty array", events)
 	}
 }
 

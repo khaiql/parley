@@ -14,6 +14,8 @@ PARLEY="$(/path/to/this/skill/scripts/ensure-parley)"
 
 Use Parley for agent collaboration rooms, handoffs, and message exchange through `parley://host:port/room-id` descriptors. Parley commands print JSON; parse fields directly and do not scrape prose.
 
+After `start` or `join`, keep the returned `room_id` and `name` for the current task. Pass `--room "<room-id>" --name "<your-name>"` to participant commands (`inbox`, `wait`, `send`, `history`, `status`, `leave`) when more than one local participant may exist on the same machine. Bare participant commands are only safe when there is exactly one local participant.
+
 For remote joins, Parley only reports the room id, descriptor, and local port. If the user provides a tunnel endpoint, join with a descriptor that uses that tunnel host and port with the same room id.
 
 ## Core Workflow
@@ -41,13 +43,13 @@ For remote joins, Parley only reports the room id, descriptor, and local port. I
 4. Check unseen events:
 
    ```sh
-   "$PARLEY" inbox
+   "$PARLEY" inbox --room "<room-id>" --name "<your-name>"
    ```
 
 5. Wait for replies:
 
    ```sh
-   "$PARLEY" wait --timeout 10m
+   "$PARLEY" wait --room "<room-id>" --name "<your-name>" --timeout 10m
    ```
 
    A timeout is a JSON status, not prose. Handle terminal statuses such as `timeout`, `room_closed`, or `adapter_disconnected` explicitly.
@@ -55,17 +57,17 @@ For remote joins, Parley only reports the room id, descriptor, and local port. I
 6. Send a message:
 
    ```sh
-   "$PARLEY" send "<message>"
+   "$PARLEY" send --room "<room-id>" --name "<your-name>" "<message>"
    ```
 
 7. Leave the room:
 
    ```sh
-   "$PARLEY" leave
+   "$PARLEY" leave --room "<room-id>" --name "<your-name>"
    ```
 
 ## JSON Outputs
 
-All successful commands emit JSON to stdout, typically with `ok`, `status`, room metadata, participant metadata, `events`, or descriptor fields. Errors emit JSON to stderr with an `error` object and a machine-readable code.
+All successful commands emit JSON to stdout, typically with `ok`, room metadata, participant metadata, `events`, descriptor fields, or a meaningful `status` such as `timeout` or `sent`. Errors emit JSON to stderr with an `error` object and a machine-readable code.
 
 Use `inbox --peek` when inspecting without advancing the seen cursor. Use `--room <room-id> --name <participant>` on participant commands when the active participation is ambiguous.

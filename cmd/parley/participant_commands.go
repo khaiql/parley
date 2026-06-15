@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -209,7 +212,13 @@ func runInbox(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return writeJSONError(cmd, "runtime_error", err.Error())
 	}
-	return writeJSON(cmd, adapter.ControlResponse{OK: true, Status: "ok", Events: events})
+	if events == nil {
+		events = []model.Event{}
+	}
+	return writeJSON(cmd, struct {
+		OK     bool          `json:"ok"`
+		Events []model.Event `json:"events"`
+	}{OK: true, Events: events})
 }
 
 func runHistory(cmd *cobra.Command, args []string) error {
@@ -319,6 +328,7 @@ func resolveParticipation(p paths.Paths, roomID, name string) (participation, er
 			message: "pass both --room and --name, or omit both to use the active participation",
 		}
 	}
+	usedActive := roomID == "" && name == ""
 	if roomID == "" || name == "" {
 		active, err := parleyRuntime.LoadActive(p)
 		if err != nil {
@@ -331,6 +341,18 @@ func resolveParticipation(p paths.Paths, roomID, name string) (participation, er
 			name = active.Name
 		}
 	}
+	if usedActive {
+		names, err := localParticipantNames(p, roomID)
+		if err != nil {
+			return participation{}, participationError{code: "runtime_error", message: err.Error()}
+		}
+		if len(names) > 1 {
+			return participation{}, participationError{
+				code:    "ambiguous_participation",
+				message: fmt.Sprintf("multiple local participants in room %s (%s); pass --room and --name", roomID, strings.Join(names, ", ")),
+			}
+		}
+	}
 	if roomID == "" || name == "" {
 		return participation{}, fmt.Errorf("room and participant name are required")
 	}
@@ -338,6 +360,33 @@ func resolveParticipation(p paths.Paths, roomID, name string) (participation, er
 		return participation{}, err
 	}
 	return participation{paths: p, room: roomID, name: name}, nil
+}
+
+func localParticipantNames(p paths.Paths, roomID string) ([]string, error) {
+	roomDir, err := p.RoomDir(roomID)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Join(roomDir, "participants"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".events.json") {
+			continue
+		}
+		names = append(names, strings.TrimSuffix(name, ".json"))
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func resolveRoomID(p paths.Paths, roomID string) (string, error) {
