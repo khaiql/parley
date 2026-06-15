@@ -24,6 +24,9 @@ func Parse(raw string) (Descriptor, error) {
 	if u.Scheme != "parley" {
 		return Descriptor{}, fmt.Errorf("descriptor scheme must be parley")
 	}
+	if u.User != nil {
+		return Descriptor{}, fmt.Errorf("descriptor userinfo is not supported")
+	}
 	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") {
 		return Descriptor{}, fmt.Errorf("descriptor query and fragment are not supported")
 	}

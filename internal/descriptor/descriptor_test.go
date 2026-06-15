@@ -43,6 +43,12 @@ func TestParseDescriptorRejectsEmptyQueryAndFragmentDelimiters(t *testing.T) {
 	}
 }
 
+func TestParseDescriptorRejectsUserinfo(t *testing.T) {
+	if _, err := Parse("parley://user@127.0.0.1:49231/room"); err == nil {
+		t.Fatal("expected userinfo to be rejected")
+	}
+}
+
 func TestParseDescriptorRejectsDecodedUnsafeRoomIDs(t *testing.T) {
 	tests := []string{
 		"parley://127.0.0.1:49231/%2F",
