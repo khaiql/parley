@@ -1,400 +1,44 @@
-package protocol_test
+package protocol
 
 import (
-	"bytes"
 	"encoding/json"
 	"testing"
-	"time"
 
-	"github.com/khaiql/parley/internal/protocol"
+	"github.com/khaiql/parley/internal/model"
 )
 
-func TestEncodeLineEndsWithNewline(t *testing.T) {
-	n := protocol.NewNotification("chat/message", protocol.MessageParams{
-		ID:   "msg-1",
-		Seq:  1,
-		From: "alice",
-		Role: "user",
-		Content: []protocol.Content{
-			{Type: "text", Text: "hello"},
+func TestEncodeDecodeRequest(t *testing.T) {
+	req := Request{
+		Type: RequestJoin,
+		Join: &JoinRequest{
+			RoomID: "room-1",
+			Name:   "codex",
+			Role:   "reviewer",
 		},
-	})
-
-	data, err := protocol.EncodeLine(n)
+	}
+	data, err := EncodeLine(req)
 	if err != nil {
-		t.Fatalf("EncodeLine error: %v", err)
+		t.Fatalf("EncodeLine: %v", err)
+	}
+	var decoded Request
+	if err := DecodeLine(data, &decoded); err != nil {
+		t.Fatalf("DecodeLine: %v", err)
+	}
+	if decoded.Type != RequestJoin || decoded.Join.Name != "codex" {
+		t.Fatalf("decoded = %#v", decoded)
+	}
+}
+
+func TestResponseCarriesEvent(t *testing.T) {
+	resp := Response{
+		OK:    true,
+		Event: &model.Event{Seq: 1, Type: model.EventMessage, RoomID: "room-1"},
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
 	}
 	if len(data) == 0 {
-		t.Fatal("EncodeLine returned empty data")
-	}
-	if data[len(data)-1] != '\n' {
-		t.Errorf("EncodeLine output does not end with newline; got %q", data[len(data)-1])
-	}
-}
-
-func TestDecodeLineParses(t *testing.T) {
-	raw := []byte(`{"jsonrpc":"2.0","method":"chat/message","params":{"id":"m1","seq":1,"from":"bob","role":"user","content":[]}}` + "\n")
-
-	msg, err := protocol.DecodeLine(raw)
-	if err != nil {
-		t.Fatalf("DecodeLine error: %v", err)
-	}
-	if msg.JSONRPC != "2.0" {
-		t.Errorf("expected jsonrpc 2.0, got %q", msg.JSONRPC)
-	}
-	if msg.Method != "chat/message" {
-		t.Errorf("expected method chat/message, got %q", msg.Method)
-	}
-	if msg.Params == nil {
-		t.Error("expected params to be non-nil")
-	}
-}
-
-func TestNotificationRoundTrip(t *testing.T) {
-	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	params := protocol.MessageParams{
-		ID:        "msg-42",
-		Seq:       42,
-		From:      "agent-1",
-		Source:    "agent",
-		Role:      "assistant",
-		Timestamp: now,
-		Mentions:  []string{"agent-2"},
-		Content: []protocol.Content{
-			{Type: "text", Text: "hello world"},
-		},
-	}
-
-	n := protocol.NewNotification("chat/message", params)
-	if n.JSONRPC != "2.0" {
-		t.Errorf("expected jsonrpc 2.0, got %q", n.JSONRPC)
-	}
-	if n.Method != "chat/message" {
-		t.Errorf("expected method chat/message, got %q", n.Method)
-	}
-
-	data, err := protocol.EncodeLine(n)
-	if err != nil {
-		t.Fatalf("EncodeLine error: %v", err)
-	}
-
-	// strip trailing newline for unmarshal
-	line := bytes.TrimRight(data, "\n")
-	var decoded protocol.Notification
-	if err := json.Unmarshal(line, &decoded); err != nil {
-		t.Fatalf("Unmarshal error: %v", err)
-	}
-	if decoded.Method != "chat/message" {
-		t.Errorf("round-trip method mismatch: got %q", decoded.Method)
-	}
-
-	// Decode the params
-	var decodedParams protocol.MessageParams
-	if err := json.Unmarshal(decoded.Params, &decodedParams); err != nil {
-		t.Fatalf("Unmarshal params error: %v", err)
-	}
-	if decodedParams.ID != "msg-42" {
-		t.Errorf("params ID mismatch: got %q", decodedParams.ID)
-	}
-	if decodedParams.Seq != 42 {
-		t.Errorf("params Seq mismatch: got %d", decodedParams.Seq)
-	}
-	if decodedParams.From != "agent-1" {
-		t.Errorf("params From mismatch: got %q", decodedParams.From)
-	}
-	if len(decodedParams.Content) != 1 || decodedParams.Content[0].Text != "hello world" {
-		t.Errorf("params Content mismatch: %+v", decodedParams.Content)
-	}
-	if len(decodedParams.Mentions) != 1 || decodedParams.Mentions[0] != "agent-2" {
-		t.Errorf("params Mentions mismatch: %+v", decodedParams.Mentions)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// TestParseMentions
-// ---------------------------------------------------------------------------
-
-func TestParseMentions_ExtractsAtMentions(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  []string
-	}{
-		{"no mentions", "hello world", nil},
-		{"single mention", "@alice hello", []string{"alice"}},
-		{"multiple mentions", "@alice and @bob should look", []string{"alice", "bob"}},
-		{"bare at sign skipped", "@ hello", nil},
-		{"mention with punctuation attached", "@alice: hello", []string{"alice:"}},
-		{"empty string", "", nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := protocol.ParseMentions(tt.input)
-			if len(got) != len(tt.want) {
-				t.Fatalf("ParseMentions(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-			for i := range tt.want {
-				if got[i] != tt.want[i] {
-					t.Errorf("ParseMentions(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
-				}
-			}
-		})
-	}
-}
-
-func TestStatusParamsEncodeDecodeRoundTrip(t *testing.T) {
-	params := protocol.StatusParams{
-		Name:   "bot1",
-		Status: "thinking…",
-	}
-
-	n := protocol.NewNotification(protocol.MethodStatus, params)
-	data, err := protocol.EncodeLine(n)
-	if err != nil {
-		t.Fatalf("EncodeLine error: %v", err)
-	}
-
-	msg, err := protocol.DecodeLine(data)
-	if err != nil {
-		t.Fatalf("DecodeLine error: %v", err)
-	}
-	if msg.Method != protocol.MethodStatus {
-		t.Errorf("method mismatch: got %q", msg.Method)
-	}
-
-	var decoded protocol.StatusParams
-	if err := json.Unmarshal(msg.Params, &decoded); err != nil {
-		t.Fatalf("Unmarshal StatusParams error: %v", err)
-	}
-	if decoded.Name != "bot1" {
-		t.Errorf("Name mismatch: got %q", decoded.Name)
-	}
-	if decoded.Status != "thinking…" {
-		t.Errorf("Status mismatch: got %q", decoded.Status)
-	}
-}
-
-func TestStatusParamsEmptyStatus(t *testing.T) {
-	params := protocol.StatusParams{Name: "bot1", Status: ""}
-	n := protocol.NewNotification(protocol.MethodStatus, params)
-	data, err := protocol.EncodeLine(n)
-	if err != nil {
-		t.Fatalf("EncodeLine error: %v", err)
-	}
-	msg, err := protocol.DecodeLine(data)
-	if err != nil {
-		t.Fatalf("DecodeLine error: %v", err)
-	}
-	var decoded protocol.StatusParams
-	if err := json.Unmarshal(msg.Params, &decoded); err != nil {
-		t.Fatalf("Unmarshal error: %v", err)
-	}
-	if decoded.Status != "" {
-		t.Errorf("expected empty status, got %q", decoded.Status)
-	}
-}
-
-func TestMatchMentions(t *testing.T) {
-	names := []string{"alice", "bob"}
-	tests := []struct {
-		name string
-		text string
-		want []string
-	}{
-		{"exact match", "hey @alice", []string{"alice"}},
-		{"multiple", "hey @bob, and @alice!", []string{"bob", "alice"}},
-		{"with punctuation", "@bob's idea", []string{"bob"}},
-		{"no match", "hey @charlie", nil},
-		{"no at sign", "hey alice", nil},
-		{"case insensitive", "hey @Alice", []string{"alice"}},
-		{"partial non-match", "@bobcat", nil},
-		{"empty text", "", nil},
-		{"deduplicates", "@alice @alice", []string{"alice"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := protocol.MatchMentions(tt.text, names)
-			if len(got) != len(tt.want) {
-				t.Errorf("MatchMentions(%q) = %v, want %v", tt.text, got, tt.want)
-				return
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("MatchMentions(%q)[%d] = %q, want %q", tt.text, i, got[i], tt.want[i])
-				}
-			}
-		})
-	}
-}
-
-func TestMatchMentions_HyphenatedNames(t *testing.T) {
-	names := []string{"vivid-junco", "alice"}
-	tests := []struct {
-		name string
-		text string
-		want []string
-	}{
-		{"exact hyphenated match", "hey @vivid-junco", []string{"vivid-junco"}},
-		{"hyphenated with trailing punctuation", "@vivid-junco: hello", []string{"vivid-junco"}},
-		{"partial hyphenated does not match shorter name", "@vivid hello", nil},
-		{"partial with extra char does not match", "@vivid-juncos extra", nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := protocol.MatchMentions(tt.text, names)
-			if len(got) != len(tt.want) {
-				t.Errorf("MatchMentions(%q) = %v, want %v", tt.text, got, tt.want)
-				return
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("MatchMentions(%q)[%d] = %q, want %q", tt.text, i, got[i], tt.want[i])
-				}
-			}
-		})
-	}
-}
-
-func TestMatchMentions_PrefixAmbiguity(t *testing.T) {
-	// When both "vivid" and "vivid-junco" are participants, @vivid-junco must
-	// match "vivid-junco" (not "vivid"), because the hyphen is a name character
-	// and isNameChar('-') prevents the prefix path from matching "vivid".
-	names := []string{"vivid", "vivid-junco"}
-	got := protocol.MatchMentions("hey @vivid-junco", names)
-	if len(got) != 1 || got[0] != "vivid-junco" {
-		t.Errorf("MatchMentions with prefix ambiguity = %v, want [vivid-junco]", got)
-	}
-}
-
-func TestJoinParamsEncodeDecodeRoundTrip(t *testing.T) {
-	params := protocol.JoinParams{
-		Name:      "agent-x",
-		Role:      "assistant",
-		Directory: "/workspace/project",
-		Repo:      "github.com/example/repo",
-		AgentType: "claude",
-	}
-
-	n := protocol.NewNotification("room/join", params)
-	data, err := protocol.EncodeLine(n)
-	if err != nil {
-		t.Fatalf("EncodeLine error: %v", err)
-	}
-
-	msg, err := protocol.DecodeLine(data)
-	if err != nil {
-		t.Fatalf("DecodeLine error: %v", err)
-	}
-	if msg.Method != "room/join" {
-		t.Errorf("method mismatch: got %q", msg.Method)
-	}
-
-	var decoded protocol.JoinParams
-	if err := json.Unmarshal(msg.Params, &decoded); err != nil {
-		t.Fatalf("Unmarshal JoinParams error: %v", err)
-	}
-	if decoded.Name != "agent-x" {
-		t.Errorf("Name mismatch: got %q", decoded.Name)
-	}
-	if decoded.Role != "assistant" {
-		t.Errorf("Role mismatch: got %q", decoded.Role)
-	}
-	if decoded.Directory != "/workspace/project" {
-		t.Errorf("Directory mismatch: got %q", decoded.Directory)
-	}
-	if decoded.Repo != "github.com/example/repo" {
-		t.Errorf("Repo mismatch: got %q", decoded.Repo)
-	}
-	if decoded.AgentType != "claude" {
-		t.Errorf("AgentType mismatch: got %q", decoded.AgentType)
-	}
-}
-
-func TestDefaultCommand(t *testing.T) {
-	tests := []struct {
-		agentType string
-		want      string
-	}{
-		{protocol.AgentTypeClaude, "claude"},
-		{" Claude ", "claude"},
-		{protocol.AgentTypeGemini, "gemini"},
-		{"GeMiNi", "gemini"},
-		{protocol.AgentTypeRovodev, "acli"},
-		{"ROVODEV", "acli"},
-		{protocol.AgentTypeCodex, "claude"},
-	}
-	for _, tt := range tests {
-		if got := protocol.DefaultCommand(tt.agentType); got != tt.want {
-			t.Errorf("DefaultCommand(%q) = %q, want %q", tt.agentType, got, tt.want)
-		}
-	}
-}
-
-func TestDefaultArgs(t *testing.T) {
-	args := protocol.DefaultArgs(protocol.AgentTypeRovodev)
-	if len(args) != 0 {
-		t.Errorf("DefaultArgs(rovodev) = %v, want nil", args)
-	}
-	if args := protocol.DefaultArgs("RoVoDeV"); len(args) != 0 {
-		t.Errorf("DefaultArgs(RoVoDeV) = %v, want nil", args)
-	}
-	if args := protocol.DefaultArgs(protocol.AgentTypeClaude); len(args) != 0 {
-		t.Errorf("DefaultArgs(claude) = %v, want nil", args)
-	}
-}
-
-func TestNormalizeAgentType(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"claude", "claude"},
-		{" Gemini ", "gemini"},
-		{"ROVODEV", "rovodev"},
-	}
-	for _, tt := range tests {
-		if got := protocol.NormalizeAgentType(tt.input); got != tt.want {
-			t.Errorf("NormalizeAgentType(%q) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// TestIsPassSignal
-// ---------------------------------------------------------------------------
-
-func TestIsPassSignal_ExactMatch(t *testing.T) {
-	if !protocol.IsPassSignal("[PASS]") {
-		t.Error("expected IsPassSignal to return true for '[PASS]'")
-	}
-}
-
-func TestIsPassSignal_WithWhitespace(t *testing.T) {
-	cases := []string{
-		"  [PASS]  ",
-		"\n[PASS]\n",
-		"\t[PASS]\t",
-		"[PASS]\n",
-	}
-	for _, c := range cases {
-		if !protocol.IsPassSignal(c) {
-			t.Errorf("expected IsPassSignal(%q) to return true", c)
-		}
-	}
-}
-
-func TestIsPassSignal_FalseForOtherText(t *testing.T) {
-	cases := []string{
-		"",
-		"Hello world",
-		"I am [PASS] on this",
-		"[pass]",
-		"PASS",
-		"[LISTENING]",
-	}
-	for _, c := range cases {
-		if protocol.IsPassSignal(c) {
-			t.Errorf("expected IsPassSignal(%q) to return false", c)
-		}
+		t.Fatal("expected JSON")
 	}
 }
