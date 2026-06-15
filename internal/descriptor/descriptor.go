@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/khaiql/parley/internal/paths"
 )
 
 type Descriptor struct {
@@ -22,7 +24,7 @@ func Parse(raw string) (Descriptor, error) {
 	if u.Scheme != "parley" {
 		return Descriptor{}, fmt.Errorf("descriptor scheme must be parley")
 	}
-	if u.RawQuery != "" || u.Fragment != "" {
+	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") {
 		return Descriptor{}, fmt.Errorf("descriptor query and fragment are not supported")
 	}
 	host := u.Hostname()
@@ -34,15 +36,15 @@ func Parse(raw string) (Descriptor, error) {
 	if err != nil || port <= 0 || port > 65535 {
 		return Descriptor{}, fmt.Errorf("descriptor port is invalid")
 	}
-	roomID := strings.TrimPrefix(u.EscapedPath(), "/")
-	if roomID == "" || strings.Contains(roomID, "/") {
-		return Descriptor{}, fmt.Errorf("descriptor requires exactly one room id path segment")
-	}
-	unescapedRoomID, err := url.PathUnescape(roomID)
+	escapedRoomID := strings.TrimPrefix(u.EscapedPath(), "/")
+	roomID, err := url.PathUnescape(escapedRoomID)
 	if err != nil {
 		return Descriptor{}, fmt.Errorf("descriptor room id is invalid: %w", err)
 	}
-	return Descriptor{Host: host, Port: port, RoomID: unescapedRoomID}, nil
+	if err := paths.ValidateRoomID(roomID); err != nil {
+		return Descriptor{}, fmt.Errorf("descriptor requires exactly one room id path segment: %w", err)
+	}
+	return Descriptor{Host: host, Port: port, RoomID: roomID}, nil
 }
 
 func (d Descriptor) Addr() string {

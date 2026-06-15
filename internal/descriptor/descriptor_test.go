@@ -30,3 +30,28 @@ func TestParseDescriptorRejectsQuery(t *testing.T) {
 		t.Fatal("expected query string to be rejected")
 	}
 }
+
+func TestParseDescriptorRejectsEmptyQueryAndFragmentDelimiters(t *testing.T) {
+	tests := []string{
+		"parley://127.0.0.1:49231/room?",
+		"parley://127.0.0.1:49231/room#",
+	}
+	for _, raw := range tests {
+		if _, err := Parse(raw); err == nil {
+			t.Errorf("Parse(%q) error = nil, want error", raw)
+		}
+	}
+}
+
+func TestParseDescriptorRejectsDecodedUnsafeRoomIDs(t *testing.T) {
+	tests := []string{
+		"parley://127.0.0.1:49231/%2F",
+		"parley://127.0.0.1:49231/a%2Fb",
+		"parley://127.0.0.1:49231/%2e%2e",
+	}
+	for _, raw := range tests {
+		if _, err := Parse(raw); err == nil {
+			t.Errorf("Parse(%q) error = nil, want error", raw)
+		}
+	}
+}
