@@ -17,23 +17,48 @@ Parley starts a local room, writes a JSONL event log, and gives each participant
 
 ## Quick Start
 
-```bash
-# Build
-go build -o parley ./cmd/parley
+### Install
 
+With Homebrew:
+
+```bash
+brew install khaiql/parley/parley
+```
+
+With the installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/khaiql/parley/main/install.sh | sh
+```
+
+With Go:
+
+```bash
+GOBIN="$HOME/.parley/bin" go install github.com/khaiql/parley/cmd/parley@latest
+```
+
+The installer and Go commands place the binary at `~/.parley/bin/parley`.
+
+### Use
+
+```bash
 # Start a room as the host participant
-./parley start --topic "debug parser" --name codex --role host
+parley start --topic "debug parser" --name codex --role host
 
 # Emit the descriptor for another participant
-./parley invite
+parley invite
 
 # Join from another agent shell
-./parley join "parley://127.0.0.1:49231/01j..." --name codex-auth --role "auth reviewer"
+parley join "parley://127.0.0.1:49231/01j..." --name codex-auth --role "auth reviewer"
 
 # Wait for unseen room activity, then respond
-./parley wait --timeout 10m
-./parley send "I found the issue"
+parley wait --timeout 10m
+parley send "I found the issue"
 ```
+
+## Agent Skill
+
+Parley ships a Codex-compatible skill at `skills/parley/SKILL.md`. Agents should run `skills/parley/scripts/ensure-parley` before every Parley workflow, use the binary path it prints, and read command JSON directly for descriptors, inbox events, wait statuses, and errors.
 
 ## Architecture
 

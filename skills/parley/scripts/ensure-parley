@@ -1,0 +1,72 @@
+#!/bin/sh
+set -eu
+
+fail() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+target="${HOME}/.parley/bin/parley"
+
+if [ "${PARLEY_BIN:-}" != "" ]; then
+  if [ -x "$PARLEY_BIN" ]; then
+    printf '%s\n' "$PARLEY_BIN"
+    exit 0
+  fi
+  fail "PARLEY_BIN is set but is not executable: $PARLEY_BIN"
+fi
+
+if command -v parley >/dev/null 2>&1; then
+  command -v parley
+  exit 0
+fi
+
+if [ -x "$target" ]; then
+  printf '%s\n' "$target"
+  exit 0
+fi
+
+mkdir -p "${HOME}/.parley/bin"
+
+if command -v brew >/dev/null 2>&1; then
+  if brew install khaiql/parley/parley; then
+    if command -v parley >/dev/null 2>&1; then
+      command -v parley
+      exit 0
+    fi
+    if [ -x "$target" ]; then
+      printf '%s\n' "$target"
+      exit 0
+    fi
+  else
+    printf '%s\n' "brew install khaiql/parley/parley failed; trying next installer" >&2
+  fi
+fi
+
+if command -v curl >/dev/null 2>&1; then
+  tmp="${TMPDIR:-/tmp}/parley-install.$$"
+  trap 'rm -f "$tmp"' EXIT HUP INT TERM
+  if curl -fsSL https://raw.githubusercontent.com/khaiql/parley/main/install.sh -o "$tmp" && sh "$tmp" >/dev/null; then
+    if [ -x "$target" ]; then
+      printf '%s\n' "$target"
+      exit 0
+    fi
+  else
+    printf '%s\n' "curl install script failed; trying next installer" >&2
+  fi
+  rm -f "$tmp"
+  trap - EXIT HUP INT TERM
+fi
+
+if command -v go >/dev/null 2>&1; then
+  if GOBIN="${HOME}/.parley/bin" go install github.com/khaiql/parley/cmd/parley@latest; then
+    if [ -x "$target" ]; then
+      printf '%s\n' "$target"
+      exit 0
+    fi
+    fail "go install completed but $target is not executable"
+  fi
+  fail "go install github.com/khaiql/parley/cmd/parley@latest failed"
+fi
+
+fail "parley not installed; tried PARLEY_BIN, PATH, $target, Homebrew, curl installer, and go install"
