@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -24,9 +25,21 @@ func (e cliError) Error() string {
 }
 
 func main() {
-	if err := newRootCmd().Execute(); err != nil {
+	if err := execute(newRootCmd()); err != nil {
 		os.Exit(1)
 	}
+}
+
+func execute(cmd *cobra.Command) error {
+	err := cmd.Execute()
+	if err == nil {
+		return nil
+	}
+	var jsonErr cliError
+	if errors.As(err, &jsonErr) {
+		return err
+	}
+	return writeJSONError(cmd, "invalid_arguments", err.Error())
 }
 
 func newRootCmd() *cobra.Command {

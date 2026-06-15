@@ -13,7 +13,7 @@ func executeForTest(args ...string) ([]byte, error) {
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
 	cmd.SetArgs(args)
-	err := cmd.Execute()
+	err := execute(cmd)
 	return buf.Bytes(), err
 }
 
@@ -96,6 +96,22 @@ func TestWaitBadTimeoutReturnsJSON(t *testing.T) {
 	out, err := executeForTest("wait", "--timeout", "nope")
 	if err == nil {
 		t.Fatal("expected wait with bad timeout to fail")
+	}
+	assertJSONErrorCode(t, out, "invalid_arguments")
+}
+
+func TestUnknownCommandReturnsJSON(t *testing.T) {
+	out, err := executeForTest("bogus")
+	if err == nil {
+		t.Fatal("expected unknown command to fail")
+	}
+	assertJSONErrorCode(t, out, "invalid_arguments")
+}
+
+func TestUnknownFlagReturnsJSON(t *testing.T) {
+	out, err := executeForTest("status", "--bogus")
+	if err == nil {
+		t.Fatal("expected unknown flag to fail")
 	}
 	assertJSONErrorCode(t, out, "invalid_arguments")
 }
