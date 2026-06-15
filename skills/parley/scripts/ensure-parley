@@ -44,7 +44,7 @@ if command -v brew >/dev/null 2>&1; then
 fi
 
 if command -v curl >/dev/null 2>&1; then
-  tmp="${TMPDIR:-/tmp}/parley-install.$$"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/parley-install.XXXXXX")"
   trap 'rm -f "$tmp"' EXIT HUP INT TERM
   if curl -fsSL https://raw.githubusercontent.com/khaiql/parley/main/install.sh -o "$tmp" && sh "$tmp" >/dev/null; then
     if [ -x "$target" ]; then

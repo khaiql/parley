@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"syscall"
 
 	"github.com/khaiql/parley/internal/eventlog"
@@ -144,14 +145,18 @@ func (s *Store) AppendLocal(ev model.Event) error {
 		}
 		return s.advanceLastReceived(meta, ev.Seq)
 	}
-	if ev.Seq < maxSeq {
-		return fmt.Errorf("event seq %d is older than last local seq %d", ev.Seq, maxSeq)
+	events = append(events, ev)
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Seq < events[j].Seq
+	})
+	if ev.Seq > maxSeq {
+		maxSeq = ev.Seq
 	}
 
-	if err := log.AppendAssigned(ev); err != nil {
+	if err := s.writeEvents(events); err != nil {
 		return err
 	}
-	return s.advanceLastReceived(meta, ev.Seq)
+	return s.advanceLastReceived(meta, maxSeq)
 }
 
 func (s *Store) Inbox(peek bool) ([]model.Event, error) {
@@ -200,7 +205,11 @@ func (s *Store) WaitReadyBatch(self string) ([]model.Event, error) {
 	}
 	batch := make([]model.Event, 0, len(events))
 	for _, ev := range events {
+		if ev.Seq != meta.LastSeenSeq+1 {
+			break
+		}
 		batch = append(batch, ev)
+		meta.LastSeenSeq = ev.Seq
 		if ev.Type == model.EventMessage && ev.Actor != self {
 			return batch, nil
 		}
@@ -222,8 +231,49 @@ func (s *Store) MarkSeenThrough(seq int64) error {
 	if seq <= meta.LastSeenSeq {
 		return nil
 	}
-	meta.LastSeenSeq = seq
+	events, err := eventlog.New(s.EventsPath).AfterSeq(meta.LastSeenSeq, 0)
+	if err != nil {
+		return err
+	}
+	for _, ev := range events {
+		if ev.Seq > seq || ev.Seq != meta.LastSeenSeq+1 {
+			break
+		}
+		meta.LastSeenSeq = ev.Seq
+	}
 	return s.writeMeta(meta)
+}
+
+func (s *Store) TakeUnseenThrough(seq int64) ([]model.Event, error) {
+	unlock, err := s.lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	meta, err := s.loadMeta()
+	if err != nil {
+		return nil, err
+	}
+	events, err := eventlog.New(s.EventsPath).AfterSeq(meta.LastSeenSeq, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.Event, 0, len(events))
+	for _, ev := range events {
+		if ev.Seq > seq || ev.Seq != meta.LastSeenSeq+1 {
+			break
+		}
+		out = append(out, ev)
+		meta.LastSeenSeq = ev.Seq
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	if err := s.writeMeta(meta); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) advanceLastReceived(meta Meta, seq int64) error {
@@ -241,6 +291,35 @@ func sameEvent(a, b model.Event) bool {
 		return false
 	}
 	return bytes.Equal(aData, bData)
+}
+
+func (s *Store) writeEvents(events []model.Event) (err error) {
+	dir := filepath.Dir(s.EventsPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".events-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	enc := json.NewEncoder(tmp)
+	for _, ev := range events {
+		if err := enc.Encode(ev); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, s.EventsPath)
 }
 
 func (s *Store) lock() (func(), error) {

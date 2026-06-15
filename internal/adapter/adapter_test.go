@@ -229,21 +229,56 @@ func TestAppendLocalRejectsConflictingDuplicateSequence(t *testing.T) {
 	}
 }
 
-func TestAppendLocalRejectsOutOfOrderSequence(t *testing.T) {
+func TestAppendLocalInsertsOutOfOrderSequence(t *testing.T) {
 	store := newTestStore(t)
 	mustAppendLocal(t, store, testEvent(2, model.EventMessage, "alice"))
 
-	err := store.AppendLocal(testEvent(1, model.EventMessage, "bob"))
-	if err == nil {
-		t.Fatal("AppendLocal out-of-order seq succeeded, want error")
+	if err := store.AppendLocal(testEvent(1, model.EventMessage, "bob")); err != nil {
+		t.Fatalf("AppendLocal out-of-order seq: %v", err)
 	}
 
-	events, readErr := eventlog.New(store.EventsPath).ReadAll()
-	if readErr != nil {
-		t.Fatalf("ReadAll: %v", readErr)
+	events, err := eventlog.New(store.EventsPath).ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
 	}
-	if len(events) != 1 || events[0].Seq != 2 {
-		t.Fatalf("events = %#v, want original seq 2 only", events)
+	if len(events) != 2 || events[0].Seq != 1 || events[1].Seq != 2 {
+		t.Fatalf("events = %#v, want sorted seqs 1 and 2", events)
+	}
+	meta, err := store.LoadMeta()
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if meta.LastReceivedSeq != 2 {
+		t.Fatalf("LastReceivedSeq = %d, want 2", meta.LastReceivedSeq)
+	}
+}
+
+func TestTakeUnseenThroughReturnsAndMarksOnlyReturnedEvents(t *testing.T) {
+	store := newTestStore(t)
+	mustAppendLocal(t, store, testEvent(1, model.EventMessage, "alice"))
+	mustAppendLocal(t, store, testEvent(2, model.EventMessage, "me"))
+	mustAppendLocal(t, store, testEvent(3, model.EventMessage, "carol"))
+
+	events, err := store.TakeUnseenThrough(2)
+	if err != nil {
+		t.Fatalf("TakeUnseenThrough: %v", err)
+	}
+	if len(events) != 2 || events[0].Seq != 1 || events[1].Seq != 2 {
+		t.Fatalf("events = %#v, want seqs 1 and 2", events)
+	}
+	meta, err := store.LoadMeta()
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if meta.LastSeenSeq != 2 {
+		t.Fatalf("LastSeenSeq = %d, want 2", meta.LastSeenSeq)
+	}
+	remaining, err := store.Inbox(true)
+	if err != nil {
+		t.Fatalf("Inbox peek: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].Seq != 3 {
+		t.Fatalf("remaining = %#v, want seq 3", remaining)
 	}
 }
 

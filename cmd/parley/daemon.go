@@ -311,16 +311,12 @@ func runRoomDaemon(cfg roomDaemonConfig) error {
 
 	select {
 	case <-stopCh:
-		_, _ = log.Append(model.Event{
-			Type:    model.EventRoomStopped,
-			RoomID:  cfg.RoomID,
-			Actor:   cfg.Name,
-			Payload: model.RoomStoppedPayload{Reason: "stop requested"},
-		})
+		_ = appendRoomStopped(log, cfg, "stop requested")
 		return srv.Close()
 	case err := <-hostErrCh:
 		_ = srv.Close()
 		if err == nil {
+			_ = appendRoomStopped(log, cfg, "host left")
 			return nil
 		}
 		return fmt.Errorf("host adapter stopped: %w", err)
@@ -328,6 +324,16 @@ func runRoomDaemon(cfg roomDaemonConfig) error {
 		_ = srv.Close()
 		return fmt.Errorf("server control stopped: %w", err)
 	}
+}
+
+func appendRoomStopped(log *eventlog.Log, cfg roomDaemonConfig, reason string) error {
+	_, err := log.Append(model.Event{
+		Type:    model.EventRoomStopped,
+		RoomID:  cfg.RoomID,
+		Actor:   cfg.Name,
+		Payload: model.RoomStoppedPayload{Reason: reason},
+	})
+	return err
 }
 
 type participantAdapterRuntime struct {
@@ -523,10 +529,11 @@ func (rt *participantAdapterRuntime) send(text string) ([]model.Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := rt.store.MarkSeenThrough(ev.Seq); err != nil {
+	events, err := rt.takeUnseenThrough(ev.Seq, daemonAckTimeout)
+	if err != nil {
 		return nil, err
 	}
-	return []model.Event{ev}, nil
+	return events, nil
 }
 
 func (rt *participantAdapterRuntime) wait(rawTimeout string) ([]model.Event, bool, error) {
@@ -594,6 +601,37 @@ func (rt *participantAdapterRuntime) waitForEvent(afterSeq int64, timeout time.D
 		case <-rt.notify:
 		case <-timer.C:
 			return model.Event{}, fmt.Errorf("timed out waiting for server acknowledgement")
+		}
+	}
+}
+
+func (rt *participantAdapterRuntime) takeUnseenThrough(seq int64, timeout time.Duration) ([]model.Event, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	var out []model.Event
+	for {
+		events, err := rt.store.TakeUnseenThrough(seq)
+		if err != nil {
+			return nil, err
+		}
+		if len(events) > 0 {
+			out = append(out, events...)
+			if out[len(out)-1].Seq >= seq {
+				return out, nil
+			}
+		}
+		meta, err := rt.store.LoadMeta()
+		if err != nil {
+			return nil, err
+		}
+		if meta.LastSeenSeq >= seq {
+			return out, nil
+		}
+		select {
+		case <-rt.notify:
+		case <-timer.C:
+			return nil, fmt.Errorf("timed out waiting for contiguous events through seq %d", seq)
 		}
 	}
 }

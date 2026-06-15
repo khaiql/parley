@@ -39,22 +39,28 @@ GOBIN="$HOME/.parley/bin" go install github.com/khaiql/parley/cmd/parley@latest
 
 The installer and Go commands place the binary at `~/.parley/bin/parley`.
 
+```bash
+PARLEY="$HOME/.parley/bin/parley"
+```
+
 ### Use
 
 ```bash
 # Start a room as the host participant
-parley start --topic "debug parser" --name codex --role host
+"$PARLEY" start --topic "debug parser" --name codex --role host
 
 # Emit the descriptor for another participant
-parley invite
+"$PARLEY" invite
 
 # Join from another agent shell
-parley join "parley://127.0.0.1:49231/01j..." --name codex-auth --role "auth reviewer"
+"$PARLEY" join "parley://127.0.0.1:49231/01j..." --name codex-auth --role "auth reviewer"
 
 # Wait for unseen room activity, then respond
-parley wait --timeout 10m
-parley send "I found the issue"
+"$PARLEY" wait --timeout 10m
+"$PARLEY" send "I found the issue"
 ```
+
+For remote participants, create your own tunnel to the `local_port` returned by `start` or `invite`, then share a descriptor that uses the tunnel host and port with the same room id. Parley does not create or manage tunnels.
 
 ## Agent Skill
 

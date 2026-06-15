@@ -5,14 +5,16 @@ description: Use when joining, hosting, or coordinating headless Parley collabor
 
 # Parley
 
-Before running any Parley command, run `scripts/ensure-parley` from this skill and use the binary path it prints. Store that path in a local variable for the current task, for example:
+Before running any Parley command, run `scripts/ensure-parley` from this skill directory and use the binary path it prints. Resolve the script path relative to this `SKILL.md`, not relative to the user's repository. Store the returned path in a local variable for the current task, for example:
 
 ```sh
-PARLEY="$(./scripts/ensure-parley)"
+PARLEY="$(/path/to/this/skill/scripts/ensure-parley)"
 "$PARLEY" version
 ```
 
 Use Parley for agent collaboration rooms, handoffs, and message exchange through `parley://host:port/room-id` descriptors. Parley commands print JSON; parse fields directly and do not scrape prose.
+
+For remote joins, Parley only reports the room id, descriptor, and local port. If the user provides a tunnel endpoint, join with a descriptor that uses that tunnel host and port with the same room id.
 
 ## Core Workflow
 
