@@ -73,7 +73,44 @@ For remote participants, create your own tunnel to the `local_port` returned by 
 
 ## Agent Skill
 
-Parley ships a Codex-compatible skill at `skills/parley/SKILL.md`. Agents should run `skills/parley/scripts/ensure-parley` before every Parley workflow, use the binary path it prints, and branch on command JSON `status` values for descriptors, inbox events, wait results, and errors.
+Parley ships an agent skill at `skills/parley/SKILL.md` for coding agents that
+support `SKILL.md`-style skills. The skill tells agents how to bootstrap the
+`parley` binary, start or join rooms, handle `parley://` descriptors, and parse
+command JSON by `status`.
+
+### Install With `npx skills`
+
+The easiest install path is the open
+[`vercel-labs/skills`](https://github.com/vercel-labs/skills) CLI.
+
+Install the Parley skill globally:
+
+```bash
+npx skills add khaiql/parley --skill parley --global
+```
+
+Install it into the current project instead of globally:
+
+```bash
+npx skills add khaiql/parley --skill parley
+```
+
+For unattended setup, add `--yes`:
+
+```bash
+npx skills add khaiql/parley --skill parley --global --yes
+```
+
+To target a specific agent, pass the agent id supported by `skills`:
+
+```bash
+npx skills add khaiql/parley --skill parley --agent <agent-id>
+```
+
+After installing, restart the agent or reload its skills. The installed skill
+runs its bundled `scripts/ensure-parley` helper before Parley workflows; that
+helper uses `PARLEY_BIN`, `PATH`, `~/.parley/bin/parley`, Homebrew, the
+installer script, or `go install` to locate or install the binary.
 
 ## Architecture
 
