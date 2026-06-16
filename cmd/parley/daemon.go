@@ -279,7 +279,7 @@ func runRoomDaemon(cfg roomDaemonConfig) error {
 		controlErrCh <- adapter.ServeControl(serverSocket, func(req adapter.ControlRequest) adapter.ControlResponse {
 			switch req.Type {
 			case "status":
-				return adapter.ControlResponse{OK: true, Status: "ok"}
+				return adapter.ControlResponse{OK: true}
 			case "stop":
 				stopOnce.Do(func() { close(stopCh) })
 				return adapter.ControlResponse{OK: true, Status: "stopping"}
@@ -487,7 +487,7 @@ func (rt *participantAdapterRuntime) appendResponse(resp protocol.Response) erro
 func (rt *participantAdapterRuntime) handleControl(req adapter.ControlRequest) adapter.ControlResponse {
 	switch req.Type {
 	case "status":
-		return adapter.ControlResponse{OK: true, Status: "ok"}
+		return adapter.ControlResponse{OK: true}
 	case "send":
 		events, err := rt.send(req.Text)
 		if err != nil {
@@ -502,7 +502,7 @@ func (rt *participantAdapterRuntime) handleControl(req adapter.ControlRequest) a
 		if timedOut {
 			return adapter.ControlResponse{OK: true, Status: "timeout"}
 		}
-		return adapter.ControlResponse{OK: true, Status: "ok", Events: events}
+		return adapter.ControlResponse{OK: true, Events: events}
 	case "leave":
 		events, err := rt.leave()
 		if err != nil {

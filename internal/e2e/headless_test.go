@@ -26,6 +26,9 @@ func TestHeadlessRoomTwoParticipants(t *testing.T) {
 
 	host.Send(t, "@agent please respond")
 	got := agent.Wait(t, 2*time.Second)
+	if got.Status != "" {
+		t.Fatalf("wait response status = %q, want omitted status for message events", got.Status)
+	}
 	assertMessage(t, got, "host", "@agent please respond")
 
 	agent.Send(t, "I am here")
@@ -151,8 +154,8 @@ func JoinForTest(t testing.TB, root, rawDescriptor, name, role string) *AdapterH
 
 func assertMessage(t testing.TB, resp adapter.ControlResponse, actor, text string) {
 	t.Helper()
-	if !resp.OK || resp.Status != "ok" {
-		t.Fatalf("response = %#v, want ok message response", resp)
+	if !resp.OK || resp.Status != "" {
+		t.Fatalf("response = %#v, want message response without status", resp)
 	}
 	if len(resp.Events) == 0 {
 		t.Fatal("response contained no events")
@@ -198,7 +201,7 @@ func (h *AdapterHandle) Wait(t testing.TB, timeout time.Duration) adapter.Contro
 			if _, err := h.store.Inbox(false); err != nil {
 				t.Fatalf("mark waited events seen: %v", err)
 			}
-			return adapter.ControlResponse{OK: true, Status: "ok", Events: events}
+			return adapter.ControlResponse{OK: true, Events: events}
 		}
 
 		select {

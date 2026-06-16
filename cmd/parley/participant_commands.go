@@ -251,9 +251,8 @@ func runHistory(cmd *cobra.Command, args []string) error {
 	}
 	return writeJSON(cmd, struct {
 		OK     bool          `json:"ok"`
-		Status string        `json:"status"`
 		Events []model.Event `json:"events"`
-	}{OK: true, Status: "ok", Events: events})
+	}{OK: true, Events: events})
 }
 
 func runAdapterControl(cmd *cobra.Command, args []string, req adapter.ControlRequest, includeTimeout bool) error {

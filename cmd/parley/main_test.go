@@ -562,6 +562,13 @@ func TestHistoryLimitReturnsBoundedTranscriptEvents(t *testing.T) {
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(out, &raw); err != nil {
+		t.Fatalf("json raw: %v\n%s", err, out)
+	}
+	if _, ok := raw["status"]; ok {
+		t.Fatalf("status key present in history response: %s", out)
+	}
 	if len(body.Events) != 2 {
 		t.Fatalf("events = %#v, want 2", body.Events)
 	}
