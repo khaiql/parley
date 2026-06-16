@@ -23,7 +23,7 @@ func TestInviteFromRuntimeMetadata(t *testing.T) {
 	if invite.Descriptor != "parley://127.0.0.1:49231/room-1" {
 		t.Fatalf("descriptor = %q", invite.Descriptor)
 	}
-	if invite.JoinCommandTemplate != `parley join "parley://127.0.0.1:49231/room-1" --name <participant-name> --role <participant-role>` {
+	if invite.JoinCommandTemplate != `parley join "parley://127.0.0.1:49231/room-1" --role <participant-role>` {
 		t.Fatalf("join_command_template = %q", invite.JoinCommandTemplate)
 	}
 	if invite.AgentInstruction != "Use your Parley skill to join this room: parley://127.0.0.1:49231/room-1" {
@@ -45,7 +45,7 @@ func TestInviteQuotesIPv6DescriptorInJoinTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Invite: %v", err)
 	}
-	want := `parley join "parley://[::1]:49231/room-1" --name <participant-name> --role <participant-role>`
+	want := `parley join "parley://[::1]:49231/room-1" --role <participant-role>`
 	if invite.JoinCommandTemplate != want {
 		t.Fatalf("join_command_template = %q, want %q", invite.JoinCommandTemplate, want)
 	}

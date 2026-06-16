@@ -26,7 +26,11 @@ func startCmd() *cobra.Command {
 				return writeJSONError(cmd, "missing_required_flag", "start requires --topic")
 			}
 			if name == "" {
-				return writeJSONError(cmd, "missing_required_flag", "start requires --name")
+				generated, err := generatedParticipantName()
+				if err != nil {
+					return writeJSONError(cmd, "runtime_error", fmt.Sprintf("generate participant name: %v", err))
+				}
+				name = generated
 			}
 			roomID, err := newRoomID()
 			if err != nil {
@@ -66,6 +70,7 @@ func startCmd() *cobra.Command {
 				Status              string `json:"status"`
 				RoomID              string `json:"room_id"`
 				Topic               string `json:"topic"`
+				Name                string `json:"name"`
 				SessionID           string `json:"session_id"`
 				CommandArgs         string `json:"command_args"`
 				Descriptor          string `json:"descriptor"`
@@ -79,6 +84,7 @@ func startCmd() *cobra.Command {
 				Status:              "started",
 				RoomID:              roomID,
 				Topic:               topic,
+				Name:                name,
 				SessionID:           sessionID,
 				CommandArgs:         "--session " + sessionID,
 				Descriptor:          invite.Descriptor,
@@ -91,7 +97,7 @@ func startCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&topic, "topic", "", "Room topic")
-	cmd.Flags().StringVar(&name, "name", "", "Host participant name")
+	cmd.Flags().StringVar(&name, "name", "", "Host participant name (generated when omitted)")
 	cmd.Flags().StringVar(&role, "role", "host", "Host participant role")
 	return cmd
 }

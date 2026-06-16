@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -70,14 +71,55 @@ func TestVersionJSON(t *testing.T) {
 	}
 }
 
-func TestJoinRequiresName(t *testing.T) {
-	out, err := executeForTest("join", "parley://127.0.0.1:1234/room-1")
-	if err == nil {
-		t.Fatal("expected join without --name to fail")
+var generatedNameRE = regexp.MustCompile(`^[a-z]+_[a-z]+_[0-9]{4}$`)
+
+func assertGeneratedName(t *testing.T, name string) {
+	t.Helper()
+	if !generatedNameRE.MatchString(name) {
+		t.Fatalf("generated name = %q, want adjective_noun_0000 format", name)
 	}
-	assertJSONErrorCode(t, out, "missing_required_flag")
-	if !strings.Contains(string(out), "--name") {
-		t.Fatalf("expected --name in error output, got %s", out)
+}
+
+func TestJoinGeneratesNameWhenOmitted(t *testing.T) {
+	p := useParleyHome(t)
+	original := launchParticipantDaemon
+	t.Cleanup(func() { launchParticipantDaemon = original })
+	launchParticipantDaemon = func(cfg participantDaemonConfig) (int, error) {
+		assertGeneratedName(t, cfg.Name)
+		store, err := parleyRuntime.ParticipantStore(p, cfg.Descriptor.RoomID, cfg.Name)
+		if err != nil {
+			t.Fatalf("ParticipantStore: %v", err)
+		}
+		if err := store.SaveMeta(adapter.Meta{
+			RoomID:     cfg.Descriptor.RoomID,
+			Name:       cfg.Name,
+			Role:       cfg.Role,
+			Descriptor: cfg.Descriptor.String(),
+			Status:     "online",
+		}); err != nil {
+			t.Fatalf("SaveMeta: %v", err)
+		}
+		return 23456, nil
+	}
+
+	out, err := executeForTest("join", "parley://127.0.0.1:1234/room-1", "--role", "reviewer")
+	if err != nil {
+		t.Fatalf("join: %v\n%s", err, out)
+	}
+	var body struct {
+		Name      string `json:"name"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	assertGeneratedName(t, body.Name)
+	session, err := parleyRuntime.LoadSession(p, body.SessionID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if session.Name != body.Name {
+		t.Fatalf("session name = %q, want %q", session.Name, body.Name)
 	}
 }
 
@@ -609,6 +651,7 @@ func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
 		OK                  bool   `json:"ok"`
 		Status              string `json:"status"`
 		RoomID              string `json:"room_id"`
+		Name                string `json:"name"`
 		SessionID           string `json:"session_id"`
 		CommandArgs         string `json:"command_args"`
 		Descriptor          string `json:"descriptor"`
@@ -622,6 +665,9 @@ func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
 	}
 	if !body.OK || body.Status != "started" || body.LocalPort != 49231 || body.ServerPID != 12345 {
 		t.Fatalf("start response = %#v", body)
+	}
+	if body.Name != "codex" {
+		t.Fatalf("name = %q, want codex", body.Name)
 	}
 	if body.Descriptor != "parley://127.0.0.1:49231/"+body.RoomID {
 		t.Fatalf("descriptor = %q, room id %q", body.Descriptor, body.RoomID)
@@ -648,14 +694,50 @@ func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
 	}
 }
 
-func TestStartRequiresName(t *testing.T) {
-	out, err := executeForTest("start", "--topic", "debug parser")
-	if err == nil {
-		t.Fatal("expected start without --name to fail")
+func TestStartGeneratesNameWhenOmitted(t *testing.T) {
+	p := useParleyHome(t)
+	original := launchRoomDaemon
+	t.Cleanup(func() { launchRoomDaemon = original })
+	launchRoomDaemon = func(cfg roomDaemonConfig) (int, error) {
+		assertGeneratedName(t, cfg.Name)
+		if err := parleyRuntime.SaveRoomRuntime(p, parleyRuntime.RoomRuntime{
+			RoomID:    cfg.RoomID,
+			Topic:     cfg.Topic,
+			LocalHost: "127.0.0.1",
+			LocalPort: 49231,
+			ServerPID: 12345,
+		}); err != nil {
+			t.Fatalf("SaveRoomRuntime: %v", err)
+		}
+		return 12345, nil
 	}
-	assertJSONErrorCode(t, out, "missing_required_flag")
-	if !strings.Contains(string(out), "--name") {
-		t.Fatalf("expected --name in error output, got %s", out)
+
+	out, err := executeForTest("start", "--topic", "debug parser")
+	if err != nil {
+		t.Fatalf("start: %v\n%s", err, out)
+	}
+	var body struct {
+		RoomID    string `json:"room_id"`
+		Name      string `json:"name"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	assertGeneratedName(t, body.Name)
+	session, err := parleyRuntime.LoadSession(p, body.SessionID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if session.RoomID != body.RoomID || session.Name != body.Name {
+		t.Fatalf("session = %#v, want room %q name %q", session, body.RoomID, body.Name)
+	}
+	active, err := parleyRuntime.LoadActive(p)
+	if err != nil {
+		t.Fatalf("LoadActive: %v", err)
+	}
+	if active.RoomID != body.RoomID || active.Name != body.Name {
+		t.Fatalf("active = %#v, want room %q name %q", active, body.RoomID, body.Name)
 	}
 }
 

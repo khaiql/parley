@@ -22,15 +22,19 @@ func joinCmd() *cobra.Command {
 		Short: "Join a Parley room",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if name == "" {
-				return writeJSONError(cmd, "missing_required_flag", "join requires --name")
-			}
 			if len(args) != 1 {
 				return writeJSONError(cmd, "invalid_arguments", "join requires exactly one descriptor")
 			}
 			desc, err := descriptor.Parse(args[0])
 			if err != nil {
 				return writeJSONError(cmd, "invalid_descriptor", fmt.Sprintf("invalid descriptor: %v", err))
+			}
+			if name == "" {
+				generated, err := generatedParticipantName()
+				if err != nil {
+					return writeJSONError(cmd, "runtime_error", fmt.Sprintf("generate participant name: %v", err))
+				}
+				name = generated
 			}
 			pid, err := launchParticipantDaemon(participantDaemonConfig{
 				Descriptor: desc,
@@ -85,7 +89,7 @@ func joinCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&name, "name", "", "Participant name")
+	cmd.Flags().StringVar(&name, "name", "", "Participant name (generated when omitted)")
 	cmd.Flags().StringVar(&role, "role", "participant", "Participant role")
 	cmd.Flags().StringVar(&dir, "dir", "", "Participant working directory")
 	cmd.Flags().StringVar(&repo, "repo", "", "Participant repository URL")
