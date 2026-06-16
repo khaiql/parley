@@ -549,9 +549,6 @@ func (rt *participantAdapterRuntime) wait(rawTimeout string) ([]model.Event, boo
 			return nil, false, err
 		}
 		if len(events) > 0 {
-			if err := rt.store.MarkSeenThrough(events[len(events)-1].Seq); err != nil {
-				return nil, false, err
-			}
 			return events, false, nil
 		}
 		select {

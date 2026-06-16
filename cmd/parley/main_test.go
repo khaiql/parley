@@ -562,6 +562,55 @@ func TestWaitSocketTimeoutReturnsTerminalState(t *testing.T) {
 	}
 }
 
+func TestWaitDoesNotAdvanceSeenCursor(t *testing.T) {
+	dir := t.TempDir()
+	store := adapter.NewStore(
+		filepath.Join(dir, "participant.json"),
+		filepath.Join(dir, "events.jsonl"),
+	)
+	if err := store.SaveMeta(adapter.Meta{RoomID: "room-1", Name: "me", LastSeenSeq: 0}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	for _, ev := range []model.Event{
+		{Seq: 1, Type: model.EventParticipantJoined, RoomID: "room-1", Actor: "alice"},
+		{Seq: 2, Type: model.EventMessage, RoomID: "room-1", Actor: "alice", Payload: model.MessagePayload{Text: "hello"}},
+	} {
+		if err := store.AppendLocal(ev); err != nil {
+			t.Fatalf("AppendLocal seq %d: %v", ev.Seq, err)
+		}
+	}
+	rt := &participantAdapterRuntime{
+		cfg:    participantDaemonConfig{Name: "me"},
+		store:  store,
+		notify: make(chan struct{}, 1),
+	}
+
+	events, timedOut, err := rt.wait("25ms")
+	if err != nil {
+		t.Fatalf("wait: %v", err)
+	}
+	if timedOut {
+		t.Fatal("wait timed out, want ready events")
+	}
+	if len(events) != 2 || events[1].Seq != 2 {
+		t.Fatalf("events = %#v, want batch through message seq 2", events)
+	}
+	meta, err := store.LoadMeta()
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if meta.LastSeenSeq != 0 {
+		t.Fatalf("LastSeenSeq = %d, want wait to leave cursor unchanged", meta.LastSeenSeq)
+	}
+	inbox, err := store.Inbox(true)
+	if err != nil {
+		t.Fatalf("Inbox peek: %v", err)
+	}
+	if len(inbox) != 2 || inbox[1].Seq != 2 {
+		t.Fatalf("inbox = %#v, want wait events to remain unread", inbox)
+	}
+}
+
 func TestInfoCorruptRuntimeReturnsRuntimeError(t *testing.T) {
 	p := useParleyHome(t)
 	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {

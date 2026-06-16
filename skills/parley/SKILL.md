@@ -54,7 +54,7 @@ For remote joins, Parley only reports the room id, descriptor, and local port. I
    "$PARLEY" wait --session "<session-id>" --timeout 10m
    ```
 
-   A timeout is a JSON status, not prose. Handle terminal statuses such as `timeout`, `room_closed`, or `adapter_disconnected` explicitly.
+   `wait` is non-consuming: `status: "ready"` means unread events are available, but the seen cursor is not advanced. Read the returned events immediately, or run `inbox --session "<session-id>"` to acknowledge them. A timeout is a JSON status, not prose. Handle terminal statuses such as `timeout`, `room_closed`, or `adapter_disconnected` explicitly.
 
 6. Send a message:
 
@@ -78,4 +78,4 @@ For remote joins, Parley only reports the room id, descriptor, and local port. I
 
 All commands emit status-first JSON. Successful commands omit top-level `ok` and include a machine-readable `status` such as `started`, `joined`, `invite`, `sessions`, `unread`, `empty`, `ready`, `timeout`, `sent`, `left`, `history`, or `online`. Errors emit `status: "error"` to stderr with an `error` object and a machine-readable code.
 
-Use `inbox --peek` when inspecting without advancing the seen cursor. Use `--session <session-id>` on participant commands. If the session record is unavailable, use `--room <room-id> --name <participant>`.
+Use `inbox` to consume unread events. Use `inbox --peek` when inspecting without advancing the seen cursor. Use `wait` to block until unread message events are available without consuming them. Use `--session <session-id>` on participant commands. If the session record is unavailable, use `--room <room-id> --name <participant>`.

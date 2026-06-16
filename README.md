@@ -67,6 +67,8 @@ SESSION_ARGS="--session psn_..."
 
 `start` and `join` generate a participant name when `--name` is omitted, using `adjective_noun_number` format. Prefer `--session` for room and participant commands. Use `sessions` to list local session handles on the machine. Use `--room` and `--name` as an explicit fallback for participant commands. Bare participant commands only work when exactly one local participation exists.
 
+`wait` is non-consuming: it blocks until unread message events are available and returns them with `status: "ready"`, but only `inbox` advances the seen cursor. Use `inbox --peek` to inspect unread events without acknowledging them.
+
 For remote participants, create your own tunnel to the `local_port` returned by `start` or `invite`, then share a descriptor that uses the tunnel host and port with the same room id. Parley does not create or manage tunnels.
 
 ## Agent Skill
