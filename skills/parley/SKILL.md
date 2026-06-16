@@ -76,6 +76,6 @@ For remote joins, Parley only reports the room id, descriptor, and local port. I
 
 ## JSON Outputs
 
-All successful commands emit JSON to stdout, typically with `ok`, room metadata, participant metadata, `events`, descriptor fields, or a meaningful `status` such as `timeout` or `sent`. Errors emit JSON to stderr with an `error` object and a machine-readable code.
+All commands emit status-first JSON. Successful commands omit top-level `ok` and include a machine-readable `status` such as `started`, `joined`, `invite`, `sessions`, `unread`, `empty`, `ready`, `timeout`, `sent`, `left`, `history`, or `online`. Errors emit `status: "error"` to stderr with an `error` object and a machine-readable code.
 
 Use `inbox --peek` when inspecting without advancing the seen cursor. Use `--session <session-id>` on participant commands. If the session record is unavailable, use `--room <room-id> --name <participant>`.

@@ -7,7 +7,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/khaiql/parley/internal/adapter"
 	"github.com/khaiql/parley/internal/jsonout"
+	"github.com/khaiql/parley/internal/model"
 )
 
 var version = "dev"
@@ -87,9 +89,11 @@ func versionCmd() *cobra.Command {
 		Args:  noArgsJSON,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return writeJSON(cmd, struct {
+				Status          string `json:"status"`
 				Version         string `json:"version"`
 				ProtocolVersion string `json:"protocol_version"`
 			}{
+				Status:          "ok",
 				Version:         version,
 				ProtocolVersion: protocolVersion,
 			})
@@ -98,6 +102,15 @@ func versionCmd() *cobra.Command {
 }
 
 func writeJSON(cmd *cobra.Command, v interface{}) error {
+	if resp, ok := v.(adapter.ControlResponse); ok {
+		v = struct {
+			Status string        `json:"status,omitempty"`
+			Events []model.Event `json:"events,omitempty"`
+		}{
+			Status: resp.Status,
+			Events: resp.Events,
+		}
+	}
 	out, err := jsonout.Marshal(v)
 	if err != nil {
 		return err

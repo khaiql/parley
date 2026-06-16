@@ -3,7 +3,8 @@ package jsonout
 import "encoding/json"
 
 type ErrorEnvelope struct {
-	Error ErrorBody `json:"error"`
+	Status string    `json:"status"`
+	Error  ErrorBody `json:"error"`
 }
 
 type ErrorBody struct {
@@ -17,5 +18,5 @@ func Marshal(v interface{}) ([]byte, error) {
 }
 
 func MarshalError(code, message string) ([]byte, error) {
-	return Marshal(ErrorEnvelope{Error: ErrorBody{Code: code, Message: message}})
+	return Marshal(ErrorEnvelope{Status: "error", Error: ErrorBody{Code: code, Message: message}})
 }

@@ -28,9 +28,9 @@ func sessionsCmd() *cobra.Command {
 				items = append(items, buildSessionListItem(p, session))
 			}
 			return writeJSON(cmd, struct {
-				OK       bool              `json:"ok"`
+				Status   string            `json:"status"`
 				Sessions []sessionListItem `json:"sessions"`
-			}{OK: true, Sessions: items})
+			}{Status: "sessions", Sessions: items})
 		},
 	}
 }

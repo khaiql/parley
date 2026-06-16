@@ -28,6 +28,30 @@ func executeForTest(args ...string) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
+func assertNoTopLevelOK(t *testing.T, out []byte) {
+	t.Helper()
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if _, ok := body["ok"]; ok {
+		t.Fatalf("top-level ok key present: %s", out)
+	}
+}
+
+func assertTopLevelStatus(t *testing.T, out []byte, want string) {
+	t.Helper()
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if body.Status != want {
+		t.Fatalf("status = %q, want %q\n%s", body.Status, want, out)
+	}
+}
+
 func useParleyHome(t *testing.T) paths.Paths {
 	t.Helper()
 	home := t.TempDir()
@@ -55,8 +79,11 @@ func TestVersionJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version: %v", err)
 	}
+	assertNoTopLevelOK(t, out)
+	assertTopLevelStatus(t, out, "ok")
 
 	var body struct {
+		Status          string `json:"status"`
 		Version         string `json:"version"`
 		ProtocolVersion string `json:"protocol_version"`
 	}
@@ -129,6 +156,7 @@ func TestStatusWithoutActiveParticipationReturnsJSON(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected status without active participation to fail")
 	}
+	assertTopLevelStatus(t, out, "error")
 	assertJSONErrorCode(t, out, "no_active_participation")
 }
 
@@ -223,7 +251,7 @@ func TestSessionsListsSessionMetadata(t *testing.T) {
 	}
 
 	var body struct {
-		OK       bool `json:"ok"`
+		Status   string `json:"status"`
 		Sessions []struct {
 			SessionID       string `json:"session_id"`
 			RoomID          string `json:"room_id"`
@@ -241,7 +269,8 @@ func TestSessionsListsSessionMetadata(t *testing.T) {
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
-	if !body.OK || len(body.Sessions) != 1 {
+	assertNoTopLevelOK(t, out)
+	if body.Status != "sessions" || len(body.Sessions) != 1 {
 		t.Fatalf("sessions body = %#v", body)
 	}
 	got := body.Sessions[0]
@@ -285,14 +314,14 @@ func TestInboxPeekReadsParticipantMirrorWithoutAdvancingCursor(t *testing.T) {
 	}
 
 	var body struct {
-		OK     bool          `json:"ok"`
 		Status string        `json:"status"`
 		Events []model.Event `json:"events"`
 	}
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
-	if !body.OK || body.Status != "" || len(body.Events) != 1 || body.Events[0].Seq != 1 {
+	assertNoTopLevelOK(t, out)
+	if body.Status != "unread" || len(body.Events) != 1 || body.Events[0].Seq != 1 {
 		t.Fatalf("inbox body = %#v", body)
 	}
 	meta, err := store.LoadMeta()
@@ -361,13 +390,14 @@ func TestInboxSessionSelectsParticipantWhenRoomHasMultipleLocalParticipants(t *t
 	}
 
 	var body struct {
-		OK     bool          `json:"ok"`
+		Status string        `json:"status"`
 		Events []model.Event `json:"events"`
 	}
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
-	if !body.OK || len(body.Events) != 1 || body.Events[0].Actor != "codex" {
+	assertNoTopLevelOK(t, out)
+	if body.Status != "unread" || len(body.Events) != 1 || body.Events[0].Actor != "codex" {
 		t.Fatalf("inbox body = %#v", body)
 	}
 }
@@ -386,7 +416,7 @@ func TestSessionCannotBeMixedWithRoomOrName(t *testing.T) {
 	}
 }
 
-func TestInboxEmptyOmitsStatusAndReturnsEventsArray(t *testing.T) {
+func TestInboxEmptyReturnsStatusAndEventsArray(t *testing.T) {
 	p := useParleyHome(t)
 	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
 		t.Fatalf("SaveActive: %v", err)
@@ -404,19 +434,16 @@ func TestInboxEmptyOmitsStatusAndReturnsEventsArray(t *testing.T) {
 		t.Fatalf("inbox --peek: %v\n%s", err, out)
 	}
 
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(out, &raw); err != nil {
+	var body struct {
+		Status string        `json:"status"`
+		Events []model.Event `json:"events"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
-	if _, ok := raw["status"]; ok {
-		t.Fatalf("status key present in empty inbox response: %s", out)
-	}
-	var events []model.Event
-	if err := json.Unmarshal(raw["events"], &events); err != nil {
-		t.Fatalf("events: %v\n%s", err, out)
-	}
-	if events == nil || len(events) != 0 {
-		t.Fatalf("events = %#v, want empty array", events)
+	assertNoTopLevelOK(t, out)
+	if body.Status != "empty" || body.Events == nil || len(body.Events) != 0 {
+		t.Fatalf("body = %#v, want empty status and empty events array", body)
 	}
 }
 
@@ -524,13 +551,13 @@ func TestWaitSocketTimeoutReturnsTerminalState(t *testing.T) {
 	default:
 	}
 	var body struct {
-		OK     bool   `json:"ok"`
 		Status string `json:"status"`
 	}
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
-	if !body.OK || body.Status != "timeout" {
+	assertNoTopLevelOK(t, out)
+	if body.Status != "timeout" {
 		t.Fatalf("body = %#v, want timeout terminal state", body)
 	}
 }
@@ -599,17 +626,15 @@ func TestHistoryLimitReturnsBoundedTranscriptEvents(t *testing.T) {
 	}
 
 	var body struct {
+		Status string        `json:"status"`
 		Events []model.Event `json:"events"`
 	}
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(out, &raw); err != nil {
-		t.Fatalf("json raw: %v\n%s", err, out)
-	}
-	if _, ok := raw["status"]; ok {
-		t.Fatalf("status key present in history response: %s", out)
+	assertNoTopLevelOK(t, out)
+	if body.Status != "history" {
+		t.Fatalf("status = %q, want history", body.Status)
 	}
 	if len(body.Events) != 2 {
 		t.Fatalf("events = %#v, want 2", body.Events)
@@ -648,7 +673,6 @@ func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
 	}
 
 	var body struct {
-		OK                  bool   `json:"ok"`
 		Status              string `json:"status"`
 		RoomID              string `json:"room_id"`
 		Name                string `json:"name"`
@@ -663,7 +687,8 @@ func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
-	if !body.OK || body.Status != "started" || body.LocalPort != 49231 || body.ServerPID != 12345 {
+	assertNoTopLevelOK(t, out)
+	if body.Status != "started" || body.LocalPort != 49231 || body.ServerPID != 12345 {
 		t.Fatalf("start response = %#v", body)
 	}
 	if body.Name != "codex" {
@@ -821,7 +846,6 @@ func TestJoinLaunchesParticipantDaemon(t *testing.T) {
 		t.Fatalf("join: %v\n%s", err, out)
 	}
 	var body struct {
-		OK          bool         `json:"ok"`
 		Status      string       `json:"status"`
 		RoomID      string       `json:"room_id"`
 		Name        string       `json:"name"`
@@ -834,7 +858,8 @@ func TestJoinLaunchesParticipantDaemon(t *testing.T) {
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
-	if !body.OK || body.Status != "joined" || body.RoomID != "room-1" || body.Name != "alice" || body.PID != 23456 {
+	assertNoTopLevelOK(t, out)
+	if body.Status != "joined" || body.RoomID != "room-1" || body.Name != "alice" || body.PID != 23456 {
 		t.Fatalf("join response = %#v", body)
 	}
 	if body.Participant.Role != "reviewer" || body.Participant.Status != "online" {

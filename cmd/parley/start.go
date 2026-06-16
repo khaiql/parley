@@ -66,7 +66,6 @@ func startCmd() *cobra.Command {
 				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("build invite: %v", err))
 			}
 			return writeJSON(cmd, struct {
-				OK                  bool   `json:"ok"`
 				Status              string `json:"status"`
 				RoomID              string `json:"room_id"`
 				Topic               string `json:"topic"`
@@ -80,7 +79,6 @@ func startCmd() *cobra.Command {
 				JoinCommandTemplate string `json:"join_command_template"`
 				AgentInstruction    string `json:"agent_instruction"`
 			}{
-				OK:                  true,
 				Status:              "started",
 				RoomID:              roomID,
 				Topic:               topic,

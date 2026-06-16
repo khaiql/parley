@@ -71,7 +71,7 @@ For remote participants, create your own tunnel to the `local_port` returned by 
 
 ## Agent Skill
 
-Parley ships a Codex-compatible skill at `skills/parley/SKILL.md`. Agents should run `skills/parley/scripts/ensure-parley` before every Parley workflow, use the binary path it prints, and read command JSON directly for descriptors, inbox events, wait statuses, and errors.
+Parley ships a Codex-compatible skill at `skills/parley/SKILL.md`. Agents should run `skills/parley/scripts/ensure-parley` before every Parley workflow, use the binary path it prints, and branch on command JSON `status` values for descriptors, inbox events, wait results, and errors.
 
 ## Architecture
 

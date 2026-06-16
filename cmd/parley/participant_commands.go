@@ -117,6 +117,9 @@ func stopCmd() *cobra.Command {
 			if err != nil {
 				return writeJSONError(cmd, "server_not_running", fmt.Sprintf("server control socket is not reachable: %v", err))
 			}
+			if !resp.OK {
+				return writeJSONError(cmd, "server_error", resp.Error)
+			}
 			return writeJSON(cmd, resp)
 		},
 	}
@@ -219,10 +222,14 @@ func runInbox(cmd *cobra.Command, args []string) error {
 	if events == nil {
 		events = []model.Event{}
 	}
+	status := "empty"
+	if len(events) > 0 {
+		status = "unread"
+	}
 	return writeJSON(cmd, struct {
-		OK     bool          `json:"ok"`
+		Status string        `json:"status"`
 		Events []model.Event `json:"events"`
-	}{OK: true, Events: events})
+	}{Status: status, Events: events})
 }
 
 func runHistory(cmd *cobra.Command, args []string) error {
@@ -250,9 +257,9 @@ func runHistory(cmd *cobra.Command, args []string) error {
 		return writeJSONError(cmd, "runtime_error", err.Error())
 	}
 	return writeJSON(cmd, struct {
-		OK     bool          `json:"ok"`
+		Status string        `json:"status"`
 		Events []model.Event `json:"events"`
-	}{OK: true, Events: events})
+	}{Status: "history", Events: events})
 }
 
 func runAdapterControl(cmd *cobra.Command, args []string, req adapter.ControlRequest, includeTimeout bool) error {
@@ -297,6 +304,12 @@ func callParticipantControl(cmd *cobra.Command, roomID, name, sessionID string, 
 			return writeJSON(cmd, adapter.ControlResponse{OK: true, Status: "timeout"})
 		}
 		return writeJSONError(cmd, "adapter_not_running", fmt.Sprintf("participant adapter socket is not reachable: %v", err))
+	}
+	if !resp.OK {
+		return writeJSONError(cmd, "adapter_error", resp.Error)
+	}
+	if req.Type == "wait" && resp.Status == "" {
+		resp.Status = "ready"
 	}
 	return writeJSON(cmd, resp)
 }
@@ -479,23 +492,23 @@ func infoResponse(part participation, room parleyRuntime.RoomRuntime, meta adapt
 		desc = descriptor.Descriptor{Host: room.LocalHost, Port: room.LocalPort, RoomID: room.RoomID}.String()
 	}
 	return struct {
-		OK                bool                      `json:"ok"`
+		Status            string                    `json:"status"`
 		RoomID            string                    `json:"room_id"`
 		Descriptor        string                    `json:"descriptor,omitempty"`
 		LocalHost         string                    `json:"local_host,omitempty"`
 		LocalPort         int                       `json:"local_port,omitempty"`
 		ActiveParticipant string                    `json:"active_participant,omitempty"`
 		Participant       adapter.Meta              `json:"participant"`
-		Status            participantStatusEnvelope `json:"status"`
+		State             participantStatusEnvelope `json:"state"`
 	}{
-		OK:                true,
+		Status:            "info",
 		RoomID:            part.room,
 		Descriptor:        desc,
 		LocalHost:         room.LocalHost,
 		LocalPort:         room.LocalPort,
 		ActiveParticipant: part.name,
 		Participant:       meta,
-		Status:            statusEnvelope(part, meta),
+		State:             statusEnvelope(part, meta),
 	}
 }
 
@@ -508,17 +521,21 @@ type participantStatusEnvelope struct {
 }
 
 func statusResponse(part participation, meta adapter.Meta) interface{} {
+	status := meta.Status
+	if status == "" {
+		status = "unknown"
+	}
 	return struct {
-		OK          bool                      `json:"ok"`
+		Status      string                    `json:"status"`
 		RoomID      string                    `json:"room_id"`
 		Name        string                    `json:"name"`
-		Status      participantStatusEnvelope `json:"status"`
+		State       participantStatusEnvelope `json:"state"`
 		Participant adapter.Meta              `json:"participant"`
 	}{
-		OK:          true,
+		Status:      status,
 		RoomID:      part.room,
 		Name:        part.name,
-		Status:      statusEnvelope(part, meta),
+		State:       statusEnvelope(part, meta),
 		Participant: meta,
 	}
 }

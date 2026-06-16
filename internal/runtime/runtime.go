@@ -25,6 +25,7 @@ type RoomRuntime struct {
 }
 
 type InviteResponse struct {
+	Status              string `json:"status"`
 	RoomID              string `json:"room_id"`
 	Descriptor          string `json:"descriptor"`
 	LocalHost           string `json:"local_host"`
@@ -90,6 +91,7 @@ func Invite(p paths.Paths, roomID string) (InviteResponse, error) {
 		RoomID: meta.RoomID,
 	}.String()
 	return InviteResponse{
+		Status:              "invite",
 		RoomID:              meta.RoomID,
 		Descriptor:          desc,
 		LocalHost:           meta.LocalHost,

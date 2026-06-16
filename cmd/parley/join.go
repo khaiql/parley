@@ -66,7 +66,6 @@ func joinCmd() *cobra.Command {
 				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("load participant metadata: %v", err))
 			}
 			return writeJSON(cmd, struct {
-				OK          bool         `json:"ok"`
 				Status      string       `json:"status"`
 				RoomID      string       `json:"room_id"`
 				Name        string       `json:"name"`
@@ -76,7 +75,6 @@ func joinCmd() *cobra.Command {
 				PID         int          `json:"pid"`
 				Participant adapter.Meta `json:"participant"`
 			}{
-				OK:          true,
 				Status:      "joined",
 				RoomID:      desc.RoomID,
 				Name:        name,
