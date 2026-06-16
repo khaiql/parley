@@ -60,9 +60,12 @@ SESSION_ARGS="--session psn_..."
 SESSION_ARGS="--session psn_..."
 "$PARLEY" wait $SESSION_ARGS --timeout 10m
 "$PARLEY" send $SESSION_ARGS "I found the issue"
+
+# Recover local session handles if needed
+"$PARLEY" sessions
 ```
 
-Prefer `--session` for room and participant commands. Use `--room` and `--name` as an explicit fallback for participant commands. Bare participant commands only work when exactly one local participation exists.
+Prefer `--session` for room and participant commands. Use `sessions` to list local session handles on the machine. Use `--room` and `--name` as an explicit fallback for participant commands. Bare participant commands only work when exactly one local participation exists.
 
 For remote participants, create your own tunnel to the `local_port` returned by `start` or `invite`, then share a descriptor that uses the tunnel host and port with the same room id. Parley does not create or manage tunnels.
 

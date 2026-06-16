@@ -56,6 +56,7 @@ func newRootCmd() *cobra.Command {
 		startCmd(),
 		joinCmd(),
 		inviteCmd(),
+		sessionsCmd(),
 		infoCmd(),
 		statusCmd(),
 		inboxCmd(),

@@ -84,3 +84,27 @@ func TestSessionRoundTrip(t *testing.T) {
 		t.Fatalf("session = %#v, want %#v", got, session)
 	}
 }
+
+func TestListSessionsReturnsSortedSessions(t *testing.T) {
+	p := paths.New(t.TempDir())
+	sessions := []Session{
+		{ID: "psn_b", RoomID: "room-2", Name: "bob"},
+		{ID: "psn_a", RoomID: "room-1", Name: "alice"},
+	}
+	for _, session := range sessions {
+		if err := SaveSession(p, session); err != nil {
+			t.Fatalf("SaveSession %s: %v", session.ID, err)
+		}
+	}
+
+	got, err := ListSessions(p)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("sessions = %#v, want 2", got)
+	}
+	if got[0].ID != "psn_a" || got[1].ID != "psn_b" {
+		t.Fatalf("sessions = %#v, want sorted by id", got)
+	}
+}

@@ -14,7 +14,7 @@ PARLEY="$(/path/to/this/skill/scripts/ensure-parley)"
 
 Use Parley for agent collaboration rooms, handoffs, and message exchange through `parley://host:port/room-id` descriptors. Parley commands print JSON; parse fields directly and do not scrape prose.
 
-After `start` or `join`, keep the returned `session_id` or `command_args` for the current task. Prefer `--session "<session-id>"` on room and participant commands (`invite`, `inbox`, `wait`, `send`, `history`, `status`, `leave`). Use `--room "<room-id>" --name "<your-name>"` only as an explicit fallback for participant commands. Bare participant commands are only safe when there is exactly one local participant.
+After `start` or `join`, keep the returned `session_id` or `command_args` for the current task. Prefer `--session "<session-id>"` on room and participant commands (`invite`, `inbox`, `wait`, `send`, `history`, `status`, `leave`). If you lose the session id, run `"$PARLEY" sessions` and use the `command_args` field for the matching room/name. Use `--room "<room-id>" --name "<your-name>"` only as an explicit fallback for participant commands. Bare participant commands are only safe when there is exactly one local participant.
 
 For remote joins, Parley only reports the room id, descriptor, and local port. If the user provides a tunnel endpoint, join with a descriptor that uses that tunnel host and port with the same room id.
 
@@ -64,6 +64,12 @@ For remote joins, Parley only reports the room id, descriptor, and local port. I
 
    ```sh
    "$PARLEY" leave --session "<session-id>"
+   ```
+
+8. Recover local session handles:
+
+   ```sh
+   "$PARLEY" sessions
    ```
 
 ## JSON Outputs

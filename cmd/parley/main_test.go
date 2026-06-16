@@ -146,6 +146,74 @@ func TestInviteUsesSessionRoomMetadata(t *testing.T) {
 	}
 }
 
+func TestSessionsListsSessionMetadata(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveRoomRuntime(p, parleyRuntime.RoomRuntime{
+		RoomID:    "room-1",
+		Topic:     "debug parser",
+		LocalHost: "127.0.0.1",
+		LocalPort: 49231,
+	}); err != nil {
+		t.Fatalf("SaveRoomRuntime: %v", err)
+	}
+	if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: "psn_test", RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	store := adapter.NewStore(
+		parleyRuntime.ParticipantMetaPath(p, "room-1", "codex"),
+		parleyRuntime.ParticipantEventsPath(p, "room-1", "codex"),
+	)
+	if err := store.SaveMeta(adapter.Meta{
+		RoomID:          "room-1",
+		Name:            "codex",
+		Role:            "reviewer",
+		Descriptor:      "parley://127.0.0.1:49231/room-1",
+		Status:          "online",
+		LastReceivedSeq: 8,
+		LastSeenSeq:     5,
+	}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+
+	out, err := executeForTest("sessions")
+	if err != nil {
+		t.Fatalf("sessions: %v\n%s", err, out)
+	}
+
+	var body struct {
+		OK       bool `json:"ok"`
+		Sessions []struct {
+			SessionID       string `json:"session_id"`
+			RoomID          string `json:"room_id"`
+			Name            string `json:"name"`
+			Role            string `json:"role"`
+			Descriptor      string `json:"descriptor"`
+			Status          string `json:"status"`
+			AdapterRunning  bool   `json:"adapter_running"`
+			ServerRunning   bool   `json:"server_running"`
+			LastReceivedSeq int64  `json:"last_received_seq"`
+			LastSeenSeq     int64  `json:"last_seen_seq"`
+			CommandArgs     string `json:"command_args"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if !body.OK || len(body.Sessions) != 1 {
+		t.Fatalf("sessions body = %#v", body)
+	}
+	got := body.Sessions[0]
+	if got.SessionID != "psn_test" || got.RoomID != "room-1" || got.Name != "codex" || got.Role != "reviewer" {
+		t.Fatalf("session = %#v", got)
+	}
+	if got.Descriptor != "parley://127.0.0.1:49231/room-1" || got.Status != "online" {
+		t.Fatalf("session descriptor/status = %#v", got)
+	}
+	if got.LastReceivedSeq != 8 || got.LastSeenSeq != 5 || got.CommandArgs != "--session psn_test" {
+		t.Fatalf("session cursors/command args = %#v", got)
+	}
+}
+
 func TestInboxPeekReadsParticipantMirrorWithoutAdvancingCursor(t *testing.T) {
 	p := useParleyHome(t)
 	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {

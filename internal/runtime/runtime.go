@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/khaiql/parley/internal/adapter"
@@ -174,6 +175,33 @@ func LoadSession(p paths.Paths, id string) (Session, error) {
 		return Session{}, fmt.Errorf("session id mismatch")
 	}
 	return session, nil
+}
+
+func ListSessions(p paths.Paths) ([]Session, error) {
+	dir := filepath.Join(p.Root, "sessions")
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []Session{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	sessions := make([]Session, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		session, err := LoadSession(p, id)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].ID < sessions[j].ID
+	})
+	return sessions, nil
 }
 
 func RoomRuntimePath(p paths.Paths, roomID string) string {
