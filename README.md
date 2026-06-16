@@ -1,77 +1,121 @@
 # Parley
 
-A TUI group chat where a human and AI coding agents collaborate as peers in a shared room.
+Parley is a headless, JSON-first room server for coordinating coding agents through short CLI commands.
 
 ## What It Does
 
-Parley lets you host a chat room and invite AI agents (Claude Code, Gemini CLI) to join as participants. Everyone sees the same conversation. Agents respond to messages, use tools, and collaborate on tasks — all visible in real-time.
-
-```
-parley host --topic "design the API"     # Start a room
-parley join --port 9000 -- claude        # Join a Claude agent
-parley join --port 9000 -- gemini        # Join a Gemini agent
-```
+Parley starts a local room, writes a JSONL event log, and gives each participant a local adapter with a Unix control socket. Agent skills can call small commands such as `wait`, `inbox`, `send`, and `history` without owning a long-running terminal UI.
 
 ## Features
 
-- **Multi-agent rooms** — Multiple AI agents + one human in the same conversation
-- **Real-time TUI** — 4-panel layout: chat, sidebar, input, status bar
-- **@mentions** — Direct messages to specific agents with tab-completion
-- **Slash commands** — `/info`, `/save`, `/send_command`
-- **Agent activity** — See who's thinking, generating, or using tools
-- **Session persistence** — Resume rooms with `--resume <roomID>`
-- **HTML export** — `parley export <roomID> -o transcript.html`
+- **Headless rooms** - TCP room server with line-delimited JSON protocol
+- **Participant adapters** - local mirrors and control sockets per agent
+- **JSON command output** - scriptable responses for agent skills and automation
+- **Event log first** - append-only room history with transcript filtering
+- **Descriptors** - `parley://host:port/room-id` invite strings for handoff
+- **Local runtime metadata** - session-scoped room and participant state under `~/.parley`
 
 ## Quick Start
 
+### Install
+
+With Homebrew on macOS:
+
 ```bash
-# Build
-go build -o parley ./cmd/parley
-
-# Host a room
-./parley host --topic "refactor the auth module"
-
-# In another terminal, join an agent
-./parley join --port <port> -- claude
+brew install --cask khaiql/parley/parley
 ```
+
+With the installer on macOS or Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/khaiql/parley/main/install.sh | sh
+```
+
+With Go:
+
+```bash
+GOBIN="$HOME/.parley/bin" go install github.com/khaiql/parley/cmd/parley@latest
+```
+
+The installer and Go commands place the binary at `~/.parley/bin/parley`.
+
+```bash
+PARLEY="$(command -v parley 2>/dev/null || printf '%s\n' "$HOME/.parley/bin/parley")"
+```
+
+### Use
+
+```bash
+# Start a room as the host participant
+"$PARLEY" start --topic "debug parser" --role host
+SESSION_ARGS="--session psn_..."
+
+# Emit the descriptor for another participant
+"$PARLEY" invite $SESSION_ARGS
+
+# Join from another agent shell
+"$PARLEY" join "parley://127.0.0.1:49231/01j..." --role "auth reviewer"
+
+# Save the command_args returned by start or join, then use it for room and participant commands
+SESSION_ARGS="--session psn_..."
+"$PARLEY" wait $SESSION_ARGS --timeout 10m
+"$PARLEY" send $SESSION_ARGS "I found the issue"
+
+# Recover local session handles if needed
+"$PARLEY" sessions
+```
+
+`start` and `join` generate a participant name when `--name` is omitted, using `adjective_noun_number` format. Prefer `--session` for room and participant commands. Use `sessions` to list local session handles on the machine. Use `--room` and `--name` as an explicit fallback for participant commands. Bare participant commands only work when exactly one local participation exists.
+
+`wait` is non-consuming: it blocks until unread message events are available and returns them with `status: "ready"`, but only `inbox` advances the seen cursor. Use `inbox --peek` to inspect unread events without acknowledging them.
+
+For remote participants, create your own tunnel to the `local_port` returned by `start` or `invite`, then share a descriptor that uses the tunnel host and port with the same room id. Parley does not create or manage tunnels.
+
+## Agent Skill
+
+Parley ships a Codex-compatible skill at `skills/parley/SKILL.md`. Agents should run `skills/parley/scripts/ensure-parley` before every Parley workflow, use the binary path it prints, and branch on command JSON `status` values for descriptors, inbox events, wait results, and errors.
 
 ## Architecture
 
 ```
-cmd/parley/         CLI entrypoint (host.go, join.go, export.go)
+cmd/parley/         CLI commands and JSON error handling
 internal/
-  protocol/         Wire format: JSON-RPC 2.0 over NDJSON TCP
-  server/           TCP server (transport only), ConnectionManager
-  client/           TCP client
-  room/             Business logic — single source of truth (pure Go, no TUI deps)
-  dispatcher/       Message delivery policies for agents (debounce, etc.)
-  persistence/      Room state storage (Store interface, JSONStore)
-  driver/           Agent subprocess management (Claude, Gemini)
-  tui/              Bubble Tea TUI shell (renders from room events)
-  web/              HTML export
+  model/            Event envelope, payloads, participant and room metadata
+  descriptor/       parley:// descriptor parse/format helpers
+  paths/            Per-user room paths and file permissions
+  jsonout/          JSON success and error response helpers
+  eventlog/         Append/read/query JSONL event logs
+  protocol/         V1 request/response/event wire types over NDJSON
+  server/           Headless TCP room server and local control socket
+  adapter/          Participant TCP adapter, mirror log, and control API
+  runtime/          Active room, invite, and participant runtime metadata
+  e2e/              Headless room integration coverage
 ```
 
 ### How It Works
 
 ```
-Human ──► TUI ──► Client ──► TCP Server ──► Broadcast to all
-                                  │
-                          room.State (single
-                          source of truth)
-                                  │
-Agent ◄── Dispatcher ◄── room events ◄─────┘
+parley start -> room server -> event log
+      |             ^             |
+      v             |             v
+ host adapter <- NDJSON -> participant adapter
+      |                           |
+      v                           v
+ parley send/wait         parley send/wait
 ```
 
-The **host** runs an embedded TCP server + TUI. **Agents** join via `parley join`, which connects a TCP client, spawns an agent subprocess, and runs a `Dispatcher` that routes messages to the agent with debouncing.
-
-`room.State` is the **single source of truth** — it owns participants, messages, and metadata. The server borrows it for mutations (under a mutex); the TUI subscribes to its events. The TUI uses a **Core/Shell architecture**: business logic lives in `internal/room/` (pure Go, no TUI deps), and the TUI is a thin Bubble Tea adapter that builds its own state from typed events.
+The server assigns sequence numbers, appends room events, and broadcasts them to connected adapters. Each adapter keeps a local event mirror and exposes a Unix control socket so short-lived CLI commands can inspect state, wait for unseen messages, or send responses.
 
 ## Development
 
 ```bash
-go test ./... -timeout 30s         # Run tests
-go test ./... -timeout 30s -race   # With race detector
-vhs test-host.tape                 # Visual regression test
+go test ./... -timeout 30s
+go test ./... -timeout 30s -race
+go test ./internal/e2e -run TestHeadlessRoomTwoParticipants -count=100
 ```
+
+## Release
+
+Push a SemVer tag such as `v0.1.0` to run the GoReleaser workflow. The workflow publishes GitHub release archives and updates the Homebrew cask in `khaiql/homebrew-parley`; it requires a `HOMEBREW_TAP_GITHUB_TOKEN` secret with contents write access to that tap repository.
 
 See [CLAUDE.md](CLAUDE.md) for detailed architecture docs, package dependencies, and contributor conventions.

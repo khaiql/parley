@@ -2,619 +2,516 @@ package server_test
 
 import (
 	"bufio"
-	"encoding/json"
+	"bytes"
 	"fmt"
 	"net"
-	"strings"
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
-	"github.com/khaiql/parley/internal/command"
+	"github.com/khaiql/parley/internal/eventlog"
+	"github.com/khaiql/parley/internal/model"
 	"github.com/khaiql/parley/internal/protocol"
-	"github.com/khaiql/parley/internal/room"
 	"github.com/khaiql/parley/internal/server"
 )
 
-const bufSize = 1024 * 1024 // 1 MB
-
-func newTestServer(t *testing.T) *server.TCPServer {
-	t.Helper()
-	state := room.New(nil, command.Context{})
-	state.Restore(state.GetID(), "test-topic", nil, nil, false)
-	s, err := server.New("127.0.0.1:0", state)
-	if err != nil {
-		t.Fatalf("server.New: %v", err)
-	}
-	go s.Serve()
-	t.Cleanup(func() { s.Close() })
-	return s
+type testServer struct {
+	srv     *server.Server
+	logPath string
 }
 
-func dialServer(t *testing.T, addr string) net.Conn {
-	t.Helper()
-	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-	if err != nil {
-		t.Fatalf("dial: %v", err)
+type testClient struct {
+	conn   net.Conn
+	reader *bufio.Reader
+}
+
+func TestServerJoinSendHistory(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialAndJoin(t, ts.srv.Addr(), "room-1", "alice")
+	defer conn.Close()
+
+	conn.Send(t, protocol.Request{Type: protocol.RequestSend, Send: &protocol.SendRequest{Text: "hello"}})
+	resp := conn.Read(t)
+	if !resp.OK || resp.Event == nil || resp.Event.Type != model.EventMessage {
+		t.Fatalf("send response = %#v", resp)
 	}
-	t.Cleanup(func() { conn.Close() })
+
+	conn.Send(t, protocol.Request{Type: protocol.RequestHistory, History: &protocol.HistoryRequest{Limit: 10}})
+	resp = conn.Read(t)
+	if !resp.OK || len(resp.Events) == 0 {
+		t.Fatalf("history response = %#v", resp)
+	}
+}
+
+func TestServerRejectsWrongRoomID(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialClient(t, ts.srv.Addr())
+	defer conn.Close()
+
+	conn.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: "wrong", Name: "alice", Role: "participant"}})
+	assertErrorCode(t, conn.Read(t), "room_mismatch")
+}
+
+func TestServerRejectsHistoryBeforeJoin(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialClient(t, ts.srv.Addr())
+	defer conn.Close()
+
+	conn.Send(t, protocol.Request{Type: protocol.RequestHistory, History: &protocol.HistoryRequest{Limit: 10}})
+	assertErrorCode(t, conn.Read(t), "not_joined")
+}
+
+func TestServerMalformedRequestsBeforeJoinReturnErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		req  protocol.Request
+		code string
+	}{
+		{
+			name: "send nil payload",
+			req:  protocol.Request{Type: protocol.RequestSend},
+			code: "bad_request",
+		},
+		{
+			name: "history nil payload",
+			req:  protocol.Request{Type: protocol.RequestHistory},
+			code: "bad_request",
+		},
+		{
+			name: "send before join",
+			req:  protocol.Request{Type: protocol.RequestSend, Send: &protocol.SendRequest{Text: "hello"}},
+			code: "not_joined",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestServer(t)
+			conn := dialClient(t, ts.srv.Addr())
+			defer conn.Close()
+
+			conn.Send(t, tt.req)
+			assertErrorCode(t, conn.Read(t), tt.code)
+		})
+	}
+}
+
+func TestServerMalformedRequestsAfterJoinReturnErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		req  protocol.Request
+		code string
+	}{
+		{
+			name: "send nil payload",
+			req:  protocol.Request{Type: protocol.RequestSend},
+			code: "bad_request",
+		},
+		{
+			name: "history nil payload",
+			req:  protocol.Request{Type: protocol.RequestHistory},
+			code: "bad_request",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestServer(t)
+			conn := dialAndJoin(t, ts.srv.Addr(), "room-1", "alice")
+			defer conn.Close()
+
+			conn.Send(t, tt.req)
+			assertErrorCode(t, conn.Read(t), tt.code)
+		})
+	}
+}
+
+func TestServerJoinResponseDoesNotDuplicateEventSeq(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialClient(t, ts.srv.Addr())
+	defer conn.Close()
+
+	conn.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: "room-1", Name: "alice", Role: "participant"}})
+	resp := conn.Read(t)
+	if !resp.OK || resp.Event == nil {
+		t.Fatalf("join response = %#v", resp)
+	}
+	for _, ev := range resp.Events {
+		if ev.Seq == resp.Event.Seq {
+			t.Fatalf("join response duplicated seq %d in Events and Event: %#v", ev.Seq, resp)
+		}
+	}
+}
+
+func TestServerJoinSnapshotIsBoundedToLatestTranscriptEvents(t *testing.T) {
+	ts := newTestServer(t)
+	alice := dialAndJoin(t, ts.srv.Addr(), "room-1", "alice")
+	defer alice.Close()
+
+	for i := 1; i <= 55; i++ {
+		alice.Send(t, protocol.Request{Type: protocol.RequestSend, Send: &protocol.SendRequest{Text: "message-" + twoDigit(i)}})
+		resp := alice.Read(t)
+		if !resp.OK {
+			t.Fatalf("send %d response = %#v", i, resp)
+		}
+	}
+
+	bob := dialClient(t, ts.srv.Addr())
+	defer bob.Close()
+	bob.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: "room-1", Name: "bob", Role: "participant"}})
+	resp := bob.Read(t)
+	if !resp.OK {
+		t.Fatalf("bob join response = %#v", resp)
+	}
+	if len(resp.Events) > 50 {
+		t.Fatalf("join response returned %d events, want at most 50", len(resp.Events))
+	}
+	if len(resp.Events) == 0 || eventText(t, resp.Events[len(resp.Events)-1]) != "message-55" {
+		t.Fatalf("join response latest event = %#v, want message-55", resp.Events)
+	}
+	if resp.Event != nil {
+		for _, ev := range resp.Events {
+			if ev.Seq == resp.Event.Seq {
+				t.Fatalf("join response duplicated current join event seq %d", ev.Seq)
+			}
+		}
+	}
+}
+
+func TestServerHistoryLimitReturnsLatestEvents(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialAndJoin(t, ts.srv.Addr(), "room-1", "alice")
+	defer conn.Close()
+
+	for _, text := range []string{"one", "two", "three"} {
+		conn.Send(t, protocol.Request{Type: protocol.RequestSend, Send: &protocol.SendRequest{Text: text}})
+		if resp := conn.Read(t); !resp.OK {
+			t.Fatalf("send response = %#v", resp)
+		}
+	}
+
+	conn.Send(t, protocol.Request{Type: protocol.RequestHistory, History: &protocol.HistoryRequest{Limit: 1}})
+	resp := conn.Read(t)
+	if !resp.OK || len(resp.Events) != 1 {
+		t.Fatalf("history response = %#v", resp)
+	}
+	if got := eventText(t, resp.Events[0]); got != "three" {
+		t.Fatalf("history latest text = %q, want three", got)
+	}
+}
+
+func TestServerRejectsDuplicateOnlineName(t *testing.T) {
+	ts := newTestServer(t)
+	alice := dialAndJoin(t, ts.srv.Addr(), "room-1", "alice")
+	defer alice.Close()
+
+	duplicate := dialClient(t, ts.srv.Addr())
+	defer duplicate.Close()
+	duplicate.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: "room-1", Name: "alice", Role: "participant"}})
+	assertErrorCode(t, duplicate.Read(t), "name_taken")
+}
+
+func TestServerNormalizesParticipantNamesForDuplicates(t *testing.T) {
+	ts := newTestServer(t)
+	alice := dialClient(t, ts.srv.Addr())
+	defer alice.Close()
+	alice.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: "room-1", Name: " alice ", Role: "participant"}})
+	resp := alice.Read(t)
+	if !resp.OK || resp.Event == nil || resp.Event.Actor != "alice" {
+		t.Fatalf("trimmed join response = %#v", resp)
+	}
+	if len(resp.Participants) != 1 || resp.Participants[0].Name != "alice" {
+		t.Fatalf("participants = %#v, want trimmed alice", resp.Participants)
+	}
+
+	duplicate := dialClient(t, ts.srv.Addr())
+	defer duplicate.Close()
+	duplicate.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: "room-1", Name: "alice", Role: "participant"}})
+	assertErrorCode(t, duplicate.Read(t), "name_taken")
+}
+
+func TestServerRejectsInvalidParticipantName(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialClient(t, ts.srv.Addr())
+	defer conn.Close()
+
+	conn.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: "room-1", Name: "bad name", Role: "participant"}})
+	assertErrorCode(t, conn.Read(t), "bad_request")
+}
+
+func TestServerRejectsCaseInsensitiveDuplicateOnlineName(t *testing.T) {
+	ts := newTestServer(t)
+	bob := dialAndJoin(t, ts.srv.Addr(), "room-1", "Bob")
+	defer bob.Close()
+
+	duplicate := dialClient(t, ts.srv.Addr())
+	defer duplicate.Close()
+	duplicate.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: "room-1", Name: "bob", Role: "participant"}})
+	assertErrorCode(t, duplicate.Read(t), "name_taken")
+}
+
+func TestServerBroadcastsSendToOtherClientsAndRespondsToSender(t *testing.T) {
+	ts := newTestServer(t)
+	alice := dialAndJoin(t, ts.srv.Addr(), "room-1", "alice")
+	defer alice.Close()
+	bob := dialAndJoin(t, ts.srv.Addr(), "room-1", "bob")
+	defer bob.Close()
+	readEvent(t, alice, model.EventParticipantJoined, "bob")
+
+	alice.Send(t, protocol.Request{Type: protocol.RequestSend, Send: &protocol.SendRequest{Text: "hello bob"}})
+	aliceResp := alice.Read(t)
+	if !aliceResp.OK || aliceResp.Event == nil || aliceResp.Event.Type != model.EventMessage || aliceResp.Event.Actor != "alice" {
+		t.Fatalf("alice command response = %#v", aliceResp)
+	}
+	if got := eventText(t, *aliceResp.Event); got != "hello bob" {
+		t.Fatalf("alice command response text = %q, want hello bob", got)
+	}
+
+	bobPush := readEvent(t, bob, model.EventMessage, "alice")
+	if got := eventText(t, *bobPush.Event); got != "hello bob" {
+		t.Fatalf("bob pushed text = %q, want hello bob", got)
+	}
+}
+
+func TestServerParsesMentionsForOnlineParticipants(t *testing.T) {
+	ts := newTestServer(t)
+	alice := dialAndJoin(t, ts.srv.Addr(), "room-1", "alice")
+	defer alice.Close()
+	bob := dialAndJoin(t, ts.srv.Addr(), "room-1", "bob")
+	defer bob.Close()
+	readEvent(t, alice, model.EventParticipantJoined, "bob")
+
+	alice.Send(t, protocol.Request{Type: protocol.RequestSend, Send: &protocol.SendRequest{Text: "@bob @missing @bob please check"}})
+	resp := alice.Read(t)
+	if !resp.OK || resp.Event == nil {
+		t.Fatalf("send response = %#v", resp)
+	}
+	if got := eventMentions(t, *resp.Event); !reflect.DeepEqual(got, []string{"bob"}) {
+		t.Fatalf("mentions = %#v, want [bob]", got)
+	}
+}
+
+func TestServerDisconnectEmitsParticipantLeftToOtherClients(t *testing.T) {
+	ts := newTestServer(t)
+	alice := dialAndJoin(t, ts.srv.Addr(), "room-1", "alice")
+	defer alice.Close()
+	bob := dialAndJoin(t, ts.srv.Addr(), "room-1", "bob")
+	readEvent(t, alice, model.EventParticipantJoined, "bob")
+
+	bob.Close()
+	readEvent(t, alice, model.EventParticipantLeft, "bob")
+}
+
+func TestServerCloseReturnsWithIdlePreJoinConnection(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialClient(t, ts.srv.Addr())
+	defer conn.Close()
+	if _, err := conn.conn.Write([]byte("{")); err != nil {
+		t.Fatalf("write partial pre-join request: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- ts.srv.Close()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(300 * time.Millisecond):
+		conn.Close()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Close after unblocking conn: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("Close did not return even after idle connection was closed")
+		}
+		t.Fatal("Close did not return while idle pre-join connection was open")
+	}
+}
+
+func TestServerScannerErrorReturnsBadRequest(t *testing.T) {
+	ts := newTestServer(t)
+	conn := dialClient(t, ts.srv.Addr())
+	defer conn.Close()
+
+	tooLarge := bytes.Repeat([]byte("x"), 1024*1024+1)
+	tooLarge = append(tooLarge, '\n')
+	if _, err := conn.conn.Write(tooLarge); err != nil {
+		t.Fatalf("write oversized line: %v", err)
+	}
+
+	assertErrorCode(t, conn.Read(t), "bad_request")
+}
+
+func TestServerLeaveAppendFailureKeepsParticipantOnline(t *testing.T) {
+	ts := newTestServer(t)
+	alice := dialAndJoin(t, ts.srv.Addr(), "room-1", "alice")
+	defer alice.Close()
+
+	originalLog, err := os.ReadFile(ts.logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if err := os.Remove(ts.logPath); err != nil {
+		t.Fatalf("remove log: %v", err)
+	}
+	if err := os.Mkdir(ts.logPath, 0o700); err != nil {
+		t.Fatalf("mkdir log path: %v", err)
+	}
+
+	alice.Send(t, protocol.Request{Type: protocol.RequestLeave, Leave: &protocol.LeaveRequest{}})
+	assertErrorCode(t, alice.Read(t), "log_append_failed")
+
+	if err := os.Remove(ts.logPath); err != nil {
+		t.Fatalf("remove log directory: %v", err)
+	}
+	if err := os.WriteFile(ts.logPath, originalLog, 0o600); err != nil {
+		t.Fatalf("restore log: %v", err)
+	}
+
+	duplicate := dialClient(t, ts.srv.Addr())
+	defer duplicate.Close()
+	duplicate.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: "room-1", Name: "alice", Role: "participant"}})
+	assertErrorCode(t, duplicate.Read(t), "name_taken")
+}
+
+func newTestServer(t *testing.T) testServer {
+	t.Helper()
+	logPath := filepath.Join(t.TempDir(), "events.jsonl")
+	log := eventlog.New(logPath)
+	srv, err := server.New("127.0.0.1:0", server.Config{
+		RoomID: "room-1",
+		Topic:  "test topic",
+		Log:    log,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	go srv.Serve()
+	t.Cleanup(func() { _ = srv.Close() })
+	return testServer{srv: srv, logPath: logPath}
+}
+
+func dialAndJoin(t *testing.T, addr, roomID, name string) *testClient {
+	t.Helper()
+	conn := dialClient(t, addr)
+	conn.Send(t, protocol.Request{Type: protocol.RequestJoin, Join: &protocol.JoinRequest{RoomID: roomID, Name: name, Role: "participant"}})
+	resp := conn.Read(t)
+	if !resp.OK {
+		t.Fatalf("join response = %#v", resp)
+	}
 	return conn
 }
 
-func sendLine(t *testing.T, conn net.Conn, v interface{}) {
+func dialClient(t *testing.T, addr string) *testClient {
 	t.Helper()
-	data, err := protocol.EncodeLine(v)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	return &testClient{conn: conn, reader: bufio.NewReader(conn)}
+}
+
+func (c *testClient) Close() {
+	_ = c.conn.Close()
+}
+
+func (c *testClient) Send(t *testing.T, req protocol.Request) {
+	t.Helper()
+	data, err := protocol.EncodeLine(req)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	if _, err := conn.Write(data); err != nil {
+	if _, err := c.conn.Write(data); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 }
 
-func readLine(t *testing.T, scanner *bufio.Scanner) []byte {
+func (c *testClient) Read(t *testing.T) protocol.Response {
 	t.Helper()
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			t.Fatalf("scanner error: %v", err)
-		}
-		t.Fatal("connection closed before response")
-	}
-	return scanner.Bytes()
+	return c.ReadWithin(t, 2*time.Second)
 }
 
-func newScanner(conn net.Conn) *bufio.Scanner {
-	sc := bufio.NewScanner(conn)
-	sc.Buffer(make([]byte, bufSize), bufSize)
-	return sc
-}
-
-// TestServerAcceptsConnection verifies the server accepts a TCP connection.
-func TestServerAcceptsConnection(t *testing.T) {
-	s := newTestServer(t)
-	conn, err := net.DialTimeout("tcp", s.Addr(), 2*time.Second)
-	if err != nil {
-		t.Fatalf("expected connection to succeed, got: %v", err)
-	}
-	conn.Close()
-}
-
-// TestJoinAndReceiveState sends room.join and verifies a room.state response
-// with the correct topic is returned.
-func TestJoinAndReceiveState(t *testing.T) {
-	s := newTestServer(t)
-	conn := dialServer(t, s.Addr())
-	sc := newScanner(conn)
-
-	join := protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "alice",
-		Role: "user",
-	})
-	sendLine(t, conn, join)
-
-	line := readLine(t, sc)
-
-	var raw protocol.RawMessage
-	if err := json.Unmarshal(line, &raw); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if raw.Method != protocol.MethodState {
-		t.Fatalf("expected method room.state, got %q", raw.Method)
-	}
-
-	var state protocol.RoomStateParams
-	if err := json.Unmarshal(raw.Params, &state); err != nil {
-		t.Fatalf("unmarshal state params: %v", err)
-	}
-	if state.Topic != "test-topic" {
-		t.Errorf("expected topic %q, got %q", "test-topic", state.Topic)
-	}
-}
-
-// TestBroadcastMessage verifies that when one client sends a message, the
-// other client receives it as a room.message notification.
-func TestBroadcastMessage(t *testing.T) {
-	s := newTestServer(t)
-
-	// Connect alice
-	connAlice := dialServer(t, s.Addr())
-	scAlice := newScanner(connAlice)
-
-	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "alice",
-		Role: "user",
-	}))
-	readLine(t, scAlice) // consume room.state
-
-	// Connect bob
-	connBob := dialServer(t, s.Addr())
-	scBob := newScanner(connBob)
-
-	sendLine(t, connBob, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "bob",
-		Role: "user",
-	}))
-	readLine(t, scBob) // consume room.state
-
-	// Bob sends a message
-	sendLine(t, connBob, protocol.NewNotification(protocol.MethodSend, protocol.SendParams{
-		Content: []protocol.Content{{Type: "text", Text: "hello alice"}},
-	}))
-
-	// Alice will receive some combination of: room.joined (bob), system "bob joined",
-	// and then the room.message from bob. Read until we find room.message from bob.
-	deadline := time.Now().Add(2 * time.Second)
-	var foundMsg *protocol.MessageParams
-	for time.Now().Before(deadline) {
-		connAlice.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		if !scAlice.Scan() {
-			break
-		}
-		connAlice.SetReadDeadline(time.Time{})
-
-		var raw protocol.RawMessage
-		if err := json.Unmarshal(scAlice.Bytes(), &raw); err != nil {
-			continue
-		}
-		if raw.Method != protocol.MethodMessage {
-			continue
-		}
-		var msg protocol.MessageParams
-		if err := json.Unmarshal(raw.Params, &msg); err != nil {
-			continue
-		}
-		if msg.From == "bob" {
-			foundMsg = &msg
-			break
-		}
-	}
-	connAlice.SetReadDeadline(time.Time{})
-
-	if foundMsg == nil {
-		t.Fatal("alice never received room.message from bob")
-	}
-	if len(foundMsg.Content) == 0 || foundMsg.Content[0].Text != "hello alice" {
-		t.Errorf("unexpected content: %+v", foundMsg.Content)
-	}
-}
-
-// TestDuplicateNameRejected verifies that when B tries to join with the same
-// name as A, B receives an error response and the connection is closed, while A
-// remains unaffected in the room.
-func TestDuplicateNameRejected(t *testing.T) {
-	s := newTestServer(t)
-
-	// Connect Alice.
-	connAlice := dialServer(t, s.Addr())
-	scAlice := newScanner(connAlice)
-
-	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "Alice",
-		Role: "user",
-	}))
-	readLine(t, scAlice) // consume room.state
-
-	// Connect a second client that also tries to join as "Alice".
-	connAlice2 := dialServer(t, s.Addr())
-	scAlice2 := newScanner(connAlice2)
-
-	sendLine(t, connAlice2, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "Alice",
-		Role: "user",
-	}))
-
-	// The second client should receive an error response and the connection
-	// should be closed by the server shortly after.
-	connAlice2.SetReadDeadline(time.Now().Add(2 * time.Second))
-	line := readLine(t, scAlice2)
-	connAlice2.SetReadDeadline(time.Time{})
-
-	var raw protocol.RawMessage
-	if err := json.Unmarshal(line, &raw); err != nil {
-		t.Fatalf("unmarshal response from duplicate join: %v", err)
-	}
-	if raw.Error == nil {
-		t.Fatalf("expected error response for duplicate name, got method=%q", raw.Method)
-	}
-	if !strings.Contains(raw.Error.Message, "name already taken") {
-		t.Errorf("unexpected error message: %q", raw.Error.Message)
-	}
-
-	// Wait for server to close the second connection.
-	connAlice2.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	if scAlice2.Scan() {
-		t.Error("expected connection to be closed after duplicate-name rejection")
-	}
-	connAlice2.SetReadDeadline(time.Time{})
-}
-
-// TestServerBroadcastsRoomStatus verifies that when one client sends room.status,
-// the other client receives a room.status notification.
-func TestServerBroadcastsRoomStatus(t *testing.T) {
-	s := newTestServer(t)
-
-	// Connect alice
-	connAlice := dialServer(t, s.Addr())
-	scAlice := newScanner(connAlice)
-
-	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "alice",
-		Role: "user",
-	}))
-	readLine(t, scAlice) // consume room.state
-
-	// Connect bot1
-	connBot := dialServer(t, s.Addr())
-	scBot := newScanner(connBot)
-
-	sendLine(t, connBot, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name:      "bot1",
-		Role:      "agent",
-		AgentType: "claude",
-	}))
-	readLine(t, scBot) // consume room.state for bot1
-
-	// Give the server time to deliver join notifications to alice.
-	time.Sleep(50 * time.Millisecond)
-
-	// Bot sends room.status
-	sendLine(t, connBot, protocol.NewNotification(protocol.MethodStatus, protocol.StatusParams{
-		Name:   "bot1",
-		Status: "thinking…",
-	}))
-
-	// Alice should eventually receive a room.status notification.
-	// She may first receive room.joined and system messages from bot joining.
-	deadline := time.Now().Add(2 * time.Second)
-	var foundStatus *protocol.StatusParams
-	for time.Now().Before(deadline) {
-		connAlice.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		if !scAlice.Scan() {
-			break
-		}
-		connAlice.SetReadDeadline(time.Time{})
-
-		var raw protocol.RawMessage
-		if err := json.Unmarshal(scAlice.Bytes(), &raw); err != nil {
-			continue
-		}
-		if raw.Method != protocol.MethodStatus {
-			continue
-		}
-		var sp protocol.StatusParams
-		if err := json.Unmarshal(raw.Params, &sp); err != nil {
-			continue
-		}
-		foundStatus = &sp
-		break
-	}
-	connAlice.SetReadDeadline(time.Time{})
-
-	if foundStatus == nil {
-		t.Fatal("alice never received room.status notification from bot1")
-	}
-	if foundStatus.Name != "bot1" {
-		t.Errorf("expected status Name %q, got %q", "bot1", foundStatus.Name)
-	}
-	if foundStatus.Status != "thinking…" {
-		t.Errorf("expected status %q, got %q", "thinking…", foundStatus.Status)
-	}
-}
-
-// TestJoinReceivesMessageHistory verifies that when a client joins after
-// messages have been sent, the room.state includes those messages.
-func TestJoinReceivesMessageHistory(t *testing.T) {
-	s := newTestServer(t)
-
-	// Connect alice and send 5 messages.
-	connAlice := dialServer(t, s.Addr())
-	scAlice := newScanner(connAlice)
-
-	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "alice",
-		Role: "user",
-	}))
-	readLine(t, scAlice) // consume room.state
-
-	for i := 0; i < 5; i++ {
-		sendLine(t, connAlice, protocol.NewNotification(protocol.MethodSend, protocol.SendParams{
-			Content: []protocol.Content{{Type: "text", Text: fmt.Sprintf("message %d", i+1)}},
-		}))
-	}
-
-	// Give the server time to process the messages.
-	time.Sleep(100 * time.Millisecond)
-
-	// Connect bob (new joiner).
-	connBob := dialServer(t, s.Addr())
-	scBob := newScanner(connBob)
-
-	sendLine(t, connBob, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "bob",
-		Role: "user",
-	}))
-
-	// Bob should receive room.state with the message history.
-	connBob.SetReadDeadline(time.Now().Add(2 * time.Second))
-	line := readLine(t, scBob)
-	connBob.SetReadDeadline(time.Time{})
-
-	var raw protocol.RawMessage
-	if err := json.Unmarshal(line, &raw); err != nil {
-		t.Fatalf("unmarshal room.state: %v", err)
-	}
-	if raw.Method != protocol.MethodState {
-		t.Fatalf("expected room.state, got %q", raw.Method)
-	}
-
-	var state protocol.RoomStateParams
-	if err := json.Unmarshal(raw.Params, &state); err != nil {
-		t.Fatalf("unmarshal state params: %v", err)
-	}
-
-	// The room broadcasts system messages too (alice joined), so we need at
-	// least 5 user messages among the history. Filter to alice's messages.
-	var aliceMsgs []protocol.MessageParams
-	for _, m := range state.Messages {
-		if m.From == "alice" {
-			aliceMsgs = append(aliceMsgs, m)
-		}
-	}
-	if len(aliceMsgs) != 5 {
-		t.Fatalf("expected 5 messages from alice in history, got %d (total: %d)", len(aliceMsgs), len(state.Messages))
-	}
-}
-
-// TestJoinReceivesAtMost50Messages verifies that when a room has more than 50
-// messages, only the last 50 are included in the room.state sent to a new joiner.
-func TestJoinReceivesAtMost50Messages(t *testing.T) {
-	s := newTestServer(t)
-
-	// Connect alice and send 60 messages.
-	connAlice := dialServer(t, s.Addr())
-	scAlice := newScanner(connAlice)
-
-	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "alice",
-		Role: "user",
-	}))
-	readLine(t, scAlice) // consume room.state
-
-	for i := 0; i < 60; i++ {
-		sendLine(t, connAlice, protocol.NewNotification(protocol.MethodSend, protocol.SendParams{
-			Content: []protocol.Content{{Type: "text", Text: fmt.Sprintf("message %d", i+1)}},
-		}))
-	}
-
-	// Give the server time to process all messages.
-	time.Sleep(200 * time.Millisecond)
-
-	// Connect bob (new joiner).
-	connBob := dialServer(t, s.Addr())
-	scBob := newScanner(connBob)
-
-	sendLine(t, connBob, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "bob",
-		Role: "user",
-	}))
-
-	connBob.SetReadDeadline(time.Now().Add(2 * time.Second))
-	line := readLine(t, scBob)
-	connBob.SetReadDeadline(time.Time{})
-
-	var raw protocol.RawMessage
-	if err := json.Unmarshal(line, &raw); err != nil {
-		t.Fatalf("unmarshal room.state: %v", err)
-	}
-	if raw.Method != protocol.MethodState {
-		t.Fatalf("expected room.state, got %q", raw.Method)
-	}
-
-	var state protocol.RoomStateParams
-	if err := json.Unmarshal(raw.Params, &state); err != nil {
-		t.Fatalf("unmarshal state params: %v", err)
-	}
-
-	if len(state.Messages) > 50 {
-		t.Fatalf("expected at most 50 messages in history, got %d", len(state.Messages))
-	}
-	if len(state.Messages) == 0 {
-		t.Fatal("expected messages in history, got 0")
-	}
-}
-
-// TestNewWithRoomState verifies that when a server is created with a room.State
-// that has been restored with topic and messages, a joining client receives
-// those messages in room.state.
-func TestNewWithRoomState(t *testing.T) {
-	// Build a room.State with some history via Restore.
-	state := room.New(nil, command.Context{})
-	state.Restore(state.GetID(), "resume-topic", nil, nil, false)
-	state.AddMessage("alice", "human", "human", protocol.Content{Type: "text", Text: "first message"})
-	state.AddMessage("alice", "human", "human", protocol.Content{Type: "text", Text: "second message"})
-
-	s, err := server.New("127.0.0.1:0", state)
-	if err != nil {
-		t.Fatalf("server.New: %v", err)
-	}
-	go s.Serve()
-	t.Cleanup(func() { s.Close() })
-
-	// Connect bob and verify room.state includes history.
-	conn := dialServer(t, s.Addr())
-	sc := newScanner(conn)
-	sendLine(t, conn, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "bob",
-		Role: "user",
-	}))
-
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	line := readLine(t, sc)
-	conn.SetReadDeadline(time.Time{})
-
-	var raw protocol.RawMessage
-	if err := json.Unmarshal(line, &raw); err != nil {
-		t.Fatalf("unmarshal room.state: %v", err)
-	}
-	if raw.Method != protocol.MethodState {
-		t.Fatalf("expected room.state, got %q", raw.Method)
-	}
-
-	var stateParams protocol.RoomStateParams
-	if err := json.Unmarshal(raw.Params, &stateParams); err != nil {
-		t.Fatalf("unmarshal state params: %v", err)
-	}
-	if stateParams.Topic != "resume-topic" {
-		t.Errorf("expected topic %q, got %q", "resume-topic", stateParams.Topic)
-	}
-	// History should include the 2 alice messages.
-	var aliceMsgs []protocol.MessageParams
-	for _, m := range stateParams.Messages {
-		if m.From == "alice" {
-			aliceMsgs = append(aliceMsgs, m)
-		}
-	}
-	if len(aliceMsgs) != 2 {
-		t.Errorf("expected 2 alice messages in history, got %d (total: %d)", len(aliceMsgs), len(stateParams.Messages))
-	}
-}
-
-// TestRoomLeftBroadcast verifies that when B disconnects, A receives a
-// room.left notification with B's name.
-func TestRoomLeftBroadcast(t *testing.T) {
-	s := newTestServer(t)
-
-	// Connect alice
-	connAlice := dialServer(t, s.Addr())
-	scAlice := newScanner(connAlice)
-
-	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "alice",
-		Role: "user",
-	}))
-	readLine(t, scAlice) // consume room.state
-
-	// Connect bob
-	connBob := dialServer(t, s.Addr())
-
-	sendLine(t, connBob, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "bob",
-		Role: "user",
-	}))
-	// Give the server time to process bob's join and deliver notifications to alice.
-	time.Sleep(100 * time.Millisecond)
-
-	// Bob disconnects.
-	connBob.Close()
-
-	// Alice should receive a room.left notification with bob's name.
-	// She may also receive room.joined + system messages from bob's join first.
-	deadline := time.Now().Add(2 * time.Second)
-	var foundLeft *protocol.LeftParams
-	for time.Now().Before(deadline) {
-		connAlice.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-		if !scAlice.Scan() {
-			break
-		}
-		connAlice.SetReadDeadline(time.Time{})
-
-		var raw protocol.RawMessage
-		if err := json.Unmarshal(scAlice.Bytes(), &raw); err != nil {
-			continue
-		}
-		if raw.Method != protocol.MethodLeft {
-			continue
-		}
-		var lp protocol.LeftParams
-		if err := json.Unmarshal(raw.Params, &lp); err != nil {
-			continue
-		}
-		if lp.Name == "bob" {
-			foundLeft = &lp
-			break
-		}
-	}
-	connAlice.SetReadDeadline(time.Time{})
-
-	if foundLeft == nil {
-		t.Fatal("alice never received room.left notification for bob")
-	}
-}
-
-// TestPassSignalDropped verifies that a [PASS] message is silently dropped by
-// the server — it must not be broadcast to other clients or stored in history.
-func TestPassSignalDropped(t *testing.T) {
-	s := newTestServer(t)
-
-	// Connect alice
-	connAlice := dialServer(t, s.Addr())
-	scAlice := newScanner(connAlice)
-	sendLine(t, connAlice, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "alice",
-		Role: "user",
-	}))
-	readLine(t, scAlice) // consume room.state
-
-	// Connect bob
-	connBob := dialServer(t, s.Addr())
-	sendLine(t, connBob, protocol.NewNotification(protocol.MethodJoin, protocol.JoinParams{
-		Name: "bob",
-		Role: "agent",
-	}))
-
-	// Drain alice's notification backlog (bob joined, system msg).
-	drainConn(t, connAlice, scAlice, 500*time.Millisecond)
-
-	// Bob sends [PASS]
-	sendLine(t, connBob, protocol.NewNotification(protocol.MethodSend, protocol.SendParams{
-		Content: []protocol.Content{{Type: "text", Text: "[PASS]"}},
-	}))
-
-	// Alice should receive nothing (no room.message with [PASS]).
-	deadline := time.Now().Add(300 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		connAlice.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		if !scAlice.Scan() {
-			break
-		}
-		connAlice.SetReadDeadline(time.Time{})
-		var raw protocol.RawMessage
-		if err := json.Unmarshal(scAlice.Bytes(), &raw); err != nil {
-			continue
-		}
-		if raw.Method == protocol.MethodMessage {
-			var msg protocol.MessageParams
-			if err := json.Unmarshal(raw.Params, &msg); err != nil {
-				continue
-			}
-			for _, c := range msg.Content {
-				if c.Text == "[PASS]" {
-					t.Error("server broadcast a [PASS] message — it should have been dropped")
-				}
-			}
-		}
-	}
-	connAlice.SetReadDeadline(time.Time{})
-
-	// Also verify [PASS] is not in the server's stored history.
-	snap := s.Snapshot()
-	for _, m := range snap.Messages {
-		for _, c := range m.Content {
-			if c.Text == "[PASS]" {
-				t.Error("server stored a [PASS] message in room history — it should have been dropped")
-			}
-		}
-	}
-}
-
-// drainConn reads and discards all messages from scConn until it times out.
-func drainConn(t *testing.T, conn net.Conn, sc *bufio.Scanner, timeout time.Duration) {
+func (c *testClient) ReadWithin(t *testing.T, timeout time.Duration) protocol.Response {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	_ = c.conn.SetReadDeadline(time.Now().Add(timeout))
+	line, err := c.reader.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	_ = c.conn.SetReadDeadline(time.Time{})
+	var resp protocol.Response
+	if err := protocol.DecodeLine(line, &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return resp
+}
+
+func readEvent(t *testing.T, conn *testClient, typ model.EventType, actor string) protocol.Response {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
-		if !sc.Scan() {
-			break
+		resp := conn.ReadWithin(t, time.Until(deadline))
+		if resp.Event == nil {
+			continue
+		}
+		if resp.Event.Type == typ && resp.Event.Actor == actor {
+			return resp
 		}
 	}
-	conn.SetReadDeadline(time.Time{})
+	t.Fatalf("did not receive event type=%s actor=%s", typ, actor)
+	return protocol.Response{}
+}
+
+func assertErrorCode(t *testing.T, resp protocol.Response, code string) {
+	t.Helper()
+	if resp.OK || resp.Error == nil || resp.Error.Code != code {
+		t.Fatalf("response = %#v, want error code %q", resp, code)
+	}
+}
+
+func eventText(t *testing.T, ev model.Event) string {
+	t.Helper()
+	payload, ok := ev.Payload.(map[string]interface{})
+	if !ok {
+		t.Fatalf("payload = %#v, want object", ev.Payload)
+	}
+	text, ok := payload["text"].(string)
+	if !ok {
+		t.Fatalf("payload text = %#v, want string", payload["text"])
+	}
+	return text
+}
+
+func eventMentions(t *testing.T, ev model.Event) []string {
+	t.Helper()
+	payload, ok := ev.Payload.(map[string]interface{})
+	if !ok {
+		t.Fatalf("payload = %#v, want object", ev.Payload)
+	}
+	raw, ok := payload["mentions"].([]interface{})
+	if !ok {
+		t.Fatalf("payload mentions = %#v, want array", payload["mentions"])
+	}
+	mentions := make([]string, 0, len(raw))
+	for _, item := range raw {
+		mention, ok := item.(string)
+		if !ok {
+			t.Fatalf("mention = %#v, want string", item)
+		}
+		mentions = append(mentions, mention)
+	}
+	return mentions
+}
+
+func twoDigit(n int) string {
+	return fmt.Sprintf("%02d", n)
 }

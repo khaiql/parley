@@ -1,8 +1,8 @@
 package server
 
-// Server is the interface for a Parley chat server.
+// Lifecycle is the interface for a Parley chat server.
 // Implementations manage client connections and route messages.
-type Server interface {
+type Lifecycle interface {
 	Addr() string
 	Port() int
 	Serve()
@@ -10,4 +10,4 @@ type Server interface {
 }
 
 // Compile-time interface check.
-var _ Server = (*TCPServer)(nil)
+var _ Lifecycle = (*Server)(nil)
