@@ -100,7 +100,7 @@ func stopCmd() *cobra.Command {
 		Use:   "stop",
 		Short: "Stop the room",
 		Args:  noArgsJSON,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			p := paths.New(paths.DefaultRoot())
 			resolvedRoomID, err := resolveRoomID(p, roomID, name, sessionID)
 			if err != nil {
@@ -136,7 +136,7 @@ func newParticipantCommand(name, short string) *cobra.Command {
 		Use:   name,
 		Short: short,
 		Args:  noArgsJSON,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return notImplemented(cmd, name)
 		},
 	}

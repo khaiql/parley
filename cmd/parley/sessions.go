@@ -17,7 +17,7 @@ func sessionsCmd() *cobra.Command {
 		Use:   "sessions",
 		Short: "List local Parley sessions",
 		Args:  noArgsJSON,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			p := paths.New(paths.DefaultRoot())
 			sessions, err := parleyRuntime.ListSessions(p)
 			if err != nil {

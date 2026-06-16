@@ -63,8 +63,8 @@ func randomChoice(values []string) (string, error) {
 	return values[index], nil
 }
 
-func randomInt(max int) (int, error) {
-	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+func randomInt(limit int) (int, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(limit)))
 	if err != nil {
 		return 0, err
 	}

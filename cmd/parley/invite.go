@@ -19,7 +19,7 @@ func inviteCmd() *cobra.Command {
 		Use:   "invite",
 		Short: "Print room invitation details",
 		Args:  noArgsJSON,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			p := paths.New(paths.DefaultRoot())
 			resolvedRoomID, err := resolveRoomID(p, roomID, "", sessionID)
 			if err != nil {

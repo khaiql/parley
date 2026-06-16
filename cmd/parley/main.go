@@ -87,7 +87,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print Parley version",
 		Args:  noArgsJSON,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			return writeJSON(cmd, struct {
 				Status          string `json:"status"`
 				Version         string `json:"version"`

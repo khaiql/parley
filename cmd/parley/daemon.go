@@ -59,7 +59,7 @@ func roomDaemonCmd() *cobra.Command {
 		Use:    "__room-daemon",
 		Hidden: true,
 		Args:   noArgsJSON,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			if cfg.RoomID == "" || cfg.Topic == "" || cfg.Name == "" {
 				return fmt.Errorf("room daemon requires --room, --topic, and --name")
 			}
@@ -84,7 +84,7 @@ func participantDaemonCmd() *cobra.Command {
 		Use:    "__participant-daemon",
 		Hidden: true,
 		Args:   noArgsJSON,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			desc, err := descriptor.Parse(rawDescriptor)
 			if err != nil {
 				return fmt.Errorf("invalid descriptor: %w", err)
