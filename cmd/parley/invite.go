@@ -13,6 +13,7 @@ import (
 
 func inviteCmd() *cobra.Command {
 	var roomID string
+	var sessionID string
 
 	cmd := &cobra.Command{
 		Use:   "invite",
@@ -20,7 +21,7 @@ func inviteCmd() *cobra.Command {
 		Args:  noArgsJSON,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := paths.New(paths.DefaultRoot())
-			resolvedRoomID, err := resolveRoomID(p, roomID)
+			resolvedRoomID, err := resolveRoomID(p, roomID, "", sessionID)
 			if err != nil {
 				return writeJSONError(cmd, "no_active_room", err.Error())
 			}
@@ -36,5 +37,6 @@ func inviteCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&roomID, "room", "", "Room ID")
+	cmd.Flags().StringVar(&sessionID, "session", "", "Session ID returned by start or join")
 	return cmd
 }

@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +35,20 @@ type InviteResponse struct {
 type ActiveParticipation struct {
 	RoomID string `json:"room_id"`
 	Name   string `json:"name,omitempty"`
+}
+
+type Session struct {
+	ID     string `json:"id"`
+	RoomID string `json:"room_id"`
+	Name   string `json:"name"`
+}
+
+func NewSessionID() (string, error) {
+	var b [10]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return "psn_" + hex.EncodeToString(b[:]), nil
 }
 
 func SaveRoomRuntime(p paths.Paths, meta RoomRuntime) error {
@@ -126,8 +142,46 @@ func LoadActive(p paths.Paths) (ActiveParticipation, error) {
 	return active, nil
 }
 
+func SaveSession(p paths.Paths, session Session) error {
+	if err := validateSession(session); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(p.Root, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(p.Root, 0o700); err != nil {
+		return err
+	}
+	return writeJSONFile(SessionPath(p, session.ID), session)
+}
+
+func LoadSession(p paths.Paths, id string) (Session, error) {
+	if err := validatePathSegment(id, "session id"); err != nil {
+		return Session{}, err
+	}
+	data, err := os.ReadFile(SessionPath(p, id))
+	if err != nil {
+		return Session{}, err
+	}
+	var session Session
+	if err := json.Unmarshal(data, &session); err != nil {
+		return Session{}, err
+	}
+	if err := validateSession(session); err != nil {
+		return Session{}, err
+	}
+	if session.ID != id {
+		return Session{}, fmt.Errorf("session id mismatch")
+	}
+	return session, nil
+}
+
 func RoomRuntimePath(p paths.Paths, roomID string) string {
 	return filepath.Join(p.RoomsDir(), roomID, "runtime.json")
+}
+
+func SessionPath(p paths.Paths, id string) string {
+	return filepath.Join(p.Root, "sessions", id+".json")
 }
 
 func RoomEventsPath(p paths.Paths, roomID string) string {
@@ -162,6 +216,13 @@ func validateRoomAndName(roomID, name string) error {
 		return err
 	}
 	return validatePathSegment(name, "participant name")
+}
+
+func validateSession(session Session) error {
+	if err := validatePathSegment(session.ID, "session id"); err != nil {
+		return err
+	}
+	return validateRoomAndName(session.RoomID, session.Name)
 }
 
 func validatePathSegment(value, label string) error {

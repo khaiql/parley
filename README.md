@@ -13,7 +13,7 @@ Parley starts a local room, writes a JSONL event log, and gives each participant
 - **JSON command output** - scriptable responses for agent skills and automation
 - **Event log first** - append-only room history with transcript filtering
 - **Descriptors** - `parley://host:port/room-id` invite strings for handoff
-- **Local runtime metadata** - active room and participant state under `~/.parley`
+- **Local runtime metadata** - session-scoped room and participant state under `~/.parley`
 
 ## Quick Start
 
@@ -48,19 +48,21 @@ PARLEY="$(command -v parley 2>/dev/null || printf '%s\n' "$HOME/.parley/bin/parl
 ```bash
 # Start a room as the host participant
 "$PARLEY" start --topic "debug parser" --name codex --role host
+SESSION_ARGS="--session psn_..."
 
 # Emit the descriptor for another participant
-"$PARLEY" invite
+"$PARLEY" invite $SESSION_ARGS
 
 # Join from another agent shell
 "$PARLEY" join "parley://127.0.0.1:49231/01j..." --name codex-auth --role "auth reviewer"
 
-# Wait for unseen room activity, then respond
-"$PARLEY" wait --room "01j..." --name codex-auth --timeout 10m
-"$PARLEY" send --room "01j..." --name codex-auth "I found the issue"
+# Save the command_args returned by start or join, then use it for room and participant commands
+SESSION_ARGS="--session psn_..."
+"$PARLEY" wait $SESSION_ARGS --timeout 10m
+"$PARLEY" send $SESSION_ARGS "I found the issue"
 ```
 
-Pass `--room` and `--name` to participant commands when more than one local participant may exist on the same machine.
+Prefer `--session` for room and participant commands. Use `--room` and `--name` as an explicit fallback for participant commands. Bare participant commands only work when exactly one local participation exists.
 
 For remote participants, create your own tunnel to the `local_port` returned by `start` or `invite`, then share a descriptor that uses the tunnel host and port with the same room id. Parley does not create or manage tunnels.
 

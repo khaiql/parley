@@ -46,6 +46,13 @@ func startCmd() *cobra.Command {
 			if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: roomID, Name: name}); err != nil {
 				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("save active participation: %v", err))
 			}
+			sessionID, err := parleyRuntime.NewSessionID()
+			if err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("create session id: %v", err))
+			}
+			if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: sessionID, RoomID: roomID, Name: name}); err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("save session: %v", err))
+			}
 			room, err := parleyRuntime.LoadRoomRuntime(p, roomID)
 			if err != nil {
 				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("load room runtime: %v", err))
@@ -59,6 +66,8 @@ func startCmd() *cobra.Command {
 				Status              string `json:"status"`
 				RoomID              string `json:"room_id"`
 				Topic               string `json:"topic"`
+				SessionID           string `json:"session_id"`
+				CommandArgs         string `json:"command_args"`
 				Descriptor          string `json:"descriptor"`
 				LocalHost           string `json:"local_host"`
 				LocalPort           int    `json:"local_port"`
@@ -70,6 +79,8 @@ func startCmd() *cobra.Command {
 				Status:              "started",
 				RoomID:              roomID,
 				Topic:               topic,
+				SessionID:           sessionID,
+				CommandArgs:         "--session " + sessionID,
 				Descriptor:          invite.Descriptor,
 				LocalHost:           room.LocalHost,
 				LocalPort:           room.LocalPort,

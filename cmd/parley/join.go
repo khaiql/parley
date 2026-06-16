@@ -46,6 +46,13 @@ func joinCmd() *cobra.Command {
 			if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: desc.RoomID, Name: name}); err != nil {
 				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("save active participation: %v", err))
 			}
+			sessionID, err := parleyRuntime.NewSessionID()
+			if err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("create session id: %v", err))
+			}
+			if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: sessionID, RoomID: desc.RoomID, Name: name}); err != nil {
+				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("save session: %v", err))
+			}
 			store, err := parleyRuntime.ParticipantStore(p, desc.RoomID, name)
 			if err != nil {
 				return writeJSONError(cmd, "runtime_error", err.Error())
@@ -59,6 +66,8 @@ func joinCmd() *cobra.Command {
 				Status      string       `json:"status"`
 				RoomID      string       `json:"room_id"`
 				Name        string       `json:"name"`
+				SessionID   string       `json:"session_id"`
+				CommandArgs string       `json:"command_args"`
 				Descriptor  string       `json:"descriptor"`
 				PID         int          `json:"pid"`
 				Participant adapter.Meta `json:"participant"`
@@ -67,6 +76,8 @@ func joinCmd() *cobra.Command {
 				Status:      "joined",
 				RoomID:      desc.RoomID,
 				Name:        name,
+				SessionID:   sessionID,
+				CommandArgs: "--session " + sessionID,
 				Descriptor:  desc.String(),
 				PID:         pid,
 				Participant: meta,

@@ -118,6 +118,34 @@ func TestInviteUsesActiveRoomMetadata(t *testing.T) {
 	}
 }
 
+func TestInviteUsesSessionRoomMetadata(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveRoomRuntime(p, parleyRuntime.RoomRuntime{
+		RoomID:    "room-1",
+		Topic:     "debug parser",
+		LocalHost: "127.0.0.1",
+		LocalPort: 49231,
+	}); err != nil {
+		t.Fatalf("SaveRoomRuntime: %v", err)
+	}
+	if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: "psn_test", RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	out, err := executeForTest("invite", "--session", "psn_test")
+	if err != nil {
+		t.Fatalf("invite: %v\n%s", err, out)
+	}
+
+	var body parleyRuntime.InviteResponse
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if body.Descriptor != "parley://127.0.0.1:49231/room-1" {
+		t.Fatalf("descriptor = %q", body.Descriptor)
+	}
+}
+
 func TestInboxPeekReadsParticipantMirrorWithoutAdvancingCursor(t *testing.T) {
 	p := useParleyHome(t)
 	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
@@ -188,6 +216,66 @@ func TestInboxWithoutFlagsFailsWhenRoomHasMultipleLocalParticipants(t *testing.T
 	assertJSONErrorCode(t, out, "ambiguous_participation")
 }
 
+func TestInboxSessionSelectsParticipantWhenRoomHasMultipleLocalParticipants(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	for _, name := range []string{"codex", "sle"} {
+		store := adapter.NewStore(
+			parleyRuntime.ParticipantMetaPath(p, "room-1", name),
+			parleyRuntime.ParticipantEventsPath(p, "room-1", name),
+		)
+		if err := store.SaveMeta(adapter.Meta{RoomID: "room-1", Name: name}); err != nil {
+			t.Fatalf("SaveMeta %s: %v", name, err)
+		}
+		if name == "sle" {
+			if err := store.AppendLocal(model.Event{
+				Seq:     1,
+				Type:    model.EventMessage,
+				RoomID:  "room-1",
+				Actor:   "codex",
+				Payload: model.MessagePayload{Text: "hello host"},
+			}); err != nil {
+				t.Fatalf("AppendLocal: %v", err)
+			}
+		}
+	}
+	if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: "psn_test", RoomID: "room-1", Name: "sle"}); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	out, err := executeForTest("inbox", "--session", "psn_test", "--peek")
+	if err != nil {
+		t.Fatalf("inbox --session: %v\n%s", err, out)
+	}
+
+	var body struct {
+		OK     bool          `json:"ok"`
+		Events []model.Event `json:"events"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if !body.OK || len(body.Events) != 1 || body.Events[0].Actor != "codex" {
+		t.Fatalf("inbox body = %#v", body)
+	}
+}
+
+func TestSessionCannotBeMixedWithRoomOrName(t *testing.T) {
+	useParleyHome(t)
+	for _, args := range [][]string{
+		{"inbox", "--session", "psn_test", "--room", "room-1", "--peek"},
+		{"inbox", "--session", "psn_test", "--name", "codex", "--peek"},
+	} {
+		out, err := executeForTest(args...)
+		if err == nil {
+			t.Fatalf("expected %v to fail", args)
+		}
+		assertJSONErrorCode(t, out, "ambiguous_participation")
+	}
+}
+
 func TestInboxEmptyOmitsStatusAndReturnsEventsArray(t *testing.T) {
 	p := useParleyHome(t)
 	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
@@ -229,6 +317,26 @@ func TestSendMissingSocketReturnsAdapterNotRunningJSON(t *testing.T) {
 	}
 
 	out, err := executeForTest("send", "hello")
+	if err == nil {
+		t.Fatal("expected send without adapter socket to fail")
+	}
+	assertJSONErrorCode(t, out, "adapter_not_running")
+}
+
+func TestSendSessionMissingSocketReturnsAdapterNotRunningJSON(t *testing.T) {
+	p := useParleyHome(t)
+	store := adapter.NewStore(
+		parleyRuntime.ParticipantMetaPath(p, "room-1", "codex"),
+		parleyRuntime.ParticipantEventsPath(p, "room-1", "codex"),
+	)
+	if err := store.SaveMeta(adapter.Meta{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: "psn_test", RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	out, err := executeForTest("send", "--session", "psn_test", "hello")
 	if err == nil {
 		t.Fatal("expected send without adapter socket to fail")
 	}
@@ -426,6 +534,8 @@ func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
 		OK                  bool   `json:"ok"`
 		Status              string `json:"status"`
 		RoomID              string `json:"room_id"`
+		SessionID           string `json:"session_id"`
+		CommandArgs         string `json:"command_args"`
 		Descriptor          string `json:"descriptor"`
 		LocalPort           int    `json:"local_port"`
 		ServerPID           int    `json:"server_pid"`
@@ -440,6 +550,16 @@ func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
 	}
 	if body.Descriptor != "parley://127.0.0.1:49231/"+body.RoomID {
 		t.Fatalf("descriptor = %q, room id %q", body.Descriptor, body.RoomID)
+	}
+	if body.SessionID == "" || !strings.Contains(body.CommandArgs, body.SessionID) {
+		t.Fatalf("session fields = %q %q", body.SessionID, body.CommandArgs)
+	}
+	session, err := parleyRuntime.LoadSession(p, body.SessionID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if session.RoomID != body.RoomID || session.Name != "codex" {
+		t.Fatalf("session = %#v, want room %q codex", session, body.RoomID)
 	}
 	if !strings.Contains(body.JoinCommandTemplate, body.Descriptor) || !strings.Contains(body.AgentInstruction, body.Descriptor) {
 		t.Fatalf("invite fields missing descriptor: %#v", body)
@@ -548,6 +668,8 @@ func TestJoinLaunchesParticipantDaemon(t *testing.T) {
 		Status      string       `json:"status"`
 		RoomID      string       `json:"room_id"`
 		Name        string       `json:"name"`
+		SessionID   string       `json:"session_id"`
+		CommandArgs string       `json:"command_args"`
 		Descriptor  string       `json:"descriptor"`
 		PID         int          `json:"pid"`
 		Participant adapter.Meta `json:"participant"`
@@ -560,6 +682,16 @@ func TestJoinLaunchesParticipantDaemon(t *testing.T) {
 	}
 	if body.Participant.Role != "reviewer" || body.Participant.Status != "online" {
 		t.Fatalf("participant = %#v", body.Participant)
+	}
+	if body.SessionID == "" || !strings.Contains(body.CommandArgs, body.SessionID) {
+		t.Fatalf("session fields = %q %q", body.SessionID, body.CommandArgs)
+	}
+	session, err := parleyRuntime.LoadSession(p, body.SessionID)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if session.RoomID != "room-1" || session.Name != "alice" {
+		t.Fatalf("session = %#v, want alice in room-1", session)
 	}
 	active, err := parleyRuntime.LoadActive(p)
 	if err != nil {

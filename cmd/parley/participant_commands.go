@@ -66,6 +66,7 @@ func waitCmd() *cobra.Command {
 func sendCmd() *cobra.Command {
 	var roomID string
 	var name string
+	var sessionID string
 
 	cmd := &cobra.Command{
 		Use:   "send <message>",
@@ -75,10 +76,10 @@ func sendCmd() *cobra.Command {
 			if len(args) != 1 {
 				return writeJSONError(cmd, "invalid_arguments", "send requires exactly one message argument")
 			}
-			return callParticipantControl(cmd, roomID, name, adapter.ControlRequest{Type: "send", Text: args[0]})
+			return callParticipantControl(cmd, roomID, name, sessionID, adapter.ControlRequest{Type: "send", Text: args[0]})
 		},
 	}
-	addParticipationFlags(cmd, &roomID, &name)
+	addParticipationFlags(cmd, &roomID, &name, &sessionID)
 	return cmd
 }
 
@@ -93,6 +94,7 @@ func leaveCmd() *cobra.Command {
 func stopCmd() *cobra.Command {
 	var roomID string
 	var name string
+	var sessionID string
 
 	cmd := &cobra.Command{
 		Use:   "stop",
@@ -100,7 +102,7 @@ func stopCmd() *cobra.Command {
 		Args:  noArgsJSON,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := paths.New(paths.DefaultRoot())
-			resolvedRoomID, err := resolveRoomID(p, roomID)
+			resolvedRoomID, err := resolveRoomID(p, roomID, name, sessionID)
 			if err != nil {
 				return writeJSONError(cmd, "no_active_room", err.Error())
 			}
@@ -118,13 +120,14 @@ func stopCmd() *cobra.Command {
 			return writeJSON(cmd, resp)
 		},
 	}
-	addParticipationFlags(cmd, &roomID, &name)
+	addParticipationFlags(cmd, &roomID, &name, &sessionID)
 	return cmd
 }
 
 func newParticipantCommand(name, short string) *cobra.Command {
 	var roomID string
 	var participantName string
+	var sessionID string
 
 	cmd := &cobra.Command{
 		Use:   name,
@@ -134,13 +137,14 @@ func newParticipantCommand(name, short string) *cobra.Command {
 			return notImplemented(cmd, name)
 		},
 	}
-	addParticipationFlags(cmd, &roomID, &participantName)
+	addParticipationFlags(cmd, &roomID, &participantName, &sessionID)
 	return cmd
 }
 
-func addParticipationFlags(cmd *cobra.Command, roomID, name *string) {
+func addParticipationFlags(cmd *cobra.Command, roomID, name, sessionID *string) {
 	cmd.Flags().StringVar(roomID, "room", "", "Room ID")
 	cmd.Flags().StringVar(name, "name", "", "Participant name")
+	cmd.Flags().StringVar(sessionID, "session", "", "Session ID returned by start or join")
 }
 
 type participation struct {
@@ -271,12 +275,13 @@ func runAdapterControl(cmd *cobra.Command, args []string, req adapter.ControlReq
 	}
 	roomID, _ := cmd.Flags().GetString("room")
 	name, _ := cmd.Flags().GetString("name")
-	return callParticipantControl(cmd, roomID, name, req)
+	sessionID, _ := cmd.Flags().GetString("session")
+	return callParticipantControl(cmd, roomID, name, sessionID, req)
 }
 
-func callParticipantControl(cmd *cobra.Command, roomID, name string, req adapter.ControlRequest) error {
+func callParticipantControl(cmd *cobra.Command, roomID, name, sessionID string, req adapter.ControlRequest) error {
 	p := paths.New(paths.DefaultRoot())
-	part, err := resolveParticipation(p, roomID, name)
+	part, err := resolveParticipation(p, roomID, name, sessionID)
 	if err != nil {
 		return writeJSONError(cmd, participationErrorCode(err), err.Error())
 	}
@@ -305,8 +310,9 @@ func isTimeout(err error) bool {
 func resolveParticipationFromFlags(cmd *cobra.Command) (participation, error) {
 	roomID, _ := cmd.Flags().GetString("room")
 	name, _ := cmd.Flags().GetString("name")
+	sessionID, _ := cmd.Flags().GetString("session")
 	p := paths.New(paths.DefaultRoot())
-	part, err := resolveParticipation(p, roomID, name)
+	part, err := resolveParticipation(p, roomID, name, sessionID)
 	if err != nil {
 		return participation{}, writeJSONError(cmd, participationErrorCode(err), err.Error())
 	}
@@ -321,14 +327,28 @@ func participationErrorCode(err error) string {
 	return "no_active_participation"
 }
 
-func resolveParticipation(p paths.Paths, roomID, name string) (participation, error) {
+func resolveParticipation(p paths.Paths, roomID, name, sessionID string) (participation, error) {
+	if sessionID != "" && (roomID != "" || name != "") {
+		return participation{}, participationError{
+			code:    "ambiguous_participation",
+			message: "pass --session, pass both --room and --name, or omit all to use the active participation",
+		}
+	}
 	if (roomID == "") != (name == "") {
 		return participation{}, participationError{
 			code:    "ambiguous_participation",
-			message: "pass both --room and --name, or omit both to use the active participation",
+			message: "pass --session, pass both --room and --name, or omit all to use the active participation",
 		}
 	}
-	usedActive := roomID == "" && name == ""
+	if sessionID != "" {
+		session, err := parleyRuntime.LoadSession(p, sessionID)
+		if err != nil {
+			return participation{}, participationError{code: "no_active_participation", message: fmt.Sprintf("session is not available: %v", err)}
+		}
+		roomID = session.RoomID
+		name = session.Name
+	}
+	usedActive := sessionID == "" && roomID == "" && name == ""
 	if roomID == "" || name == "" {
 		active, err := parleyRuntime.LoadActive(p)
 		if err != nil {
@@ -389,7 +409,20 @@ func localParticipantNames(p paths.Paths, roomID string) ([]string, error) {
 	return names, nil
 }
 
-func resolveRoomID(p paths.Paths, roomID string) (string, error) {
+func resolveRoomID(p paths.Paths, roomID, name, sessionID string) (string, error) {
+	if sessionID != "" {
+		if roomID != "" || name != "" {
+			return "", fmt.Errorf("pass --session, pass --room, or omit both to use the active room")
+		}
+		session, err := parleyRuntime.LoadSession(p, sessionID)
+		if err != nil {
+			return "", fmt.Errorf("session is not available: %v", err)
+		}
+		return session.RoomID, nil
+	}
+	if name != "" {
+		return "", fmt.Errorf("participant name requires --session or --room")
+	}
 	if roomID != "" {
 		if err := paths.ValidateRoomID(roomID); err != nil {
 			return "", err

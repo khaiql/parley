@@ -65,3 +65,22 @@ func TestActiveParticipationRoundTrip(t *testing.T) {
 		t.Fatalf("active = %#v, want %#v", got, active)
 	}
 }
+
+func TestSessionRoundTrip(t *testing.T) {
+	p := paths.New(t.TempDir())
+	id, err := NewSessionID()
+	if err != nil {
+		t.Fatalf("NewSessionID: %v", err)
+	}
+	session := Session{ID: id, RoomID: "room-1", Name: "codex"}
+	if err := SaveSession(p, session); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	got, err := LoadSession(p, id)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if got != session {
+		t.Fatalf("session = %#v, want %#v", got, session)
+	}
+}
