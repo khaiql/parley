@@ -99,7 +99,7 @@ internal/descriptor/     parley:// descriptor parser and formatter
   descriptor.go          Host, port, room-id grammar with IPv6 support
 
 internal/paths/          Per-user path layout and permissions
-  paths.go               ~/.parley room dirs, active pointer, socket paths
+  paths.go               runtime root selection, room dirs, active pointer, socket paths
 
 internal/jsonout/        JSON response helpers
   jsonout.go             Success and error envelopes for CLI commands
