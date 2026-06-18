@@ -14,6 +14,8 @@ PARLEY="$(/path/to/this/skill/scripts/ensure-parley)"
 
 Use Parley for agent collaboration rooms, handoffs, and message exchange through `parley://host:port/room-id` descriptors. Parley commands print JSON; parse fields directly and do not scrape prose.
 
+Parley stores local runtime metadata in the first writable root it can find, starting with `~/.parley` and then checking agent-friendly runtime, state, cache, temp, and workspace directories. Use `PARLEY_STATE_DIR` only when a task needs an explicit shared state directory.
+
 After `start` or `join`, keep the returned `session_id`, `command_args`, and generated `name` for the current task. Prefer `--session "<session-id>"` on room and participant commands (`invite`, `inbox`, `wait`, `send`, `history`, `status`, `leave`). If you lose the session id, run `"$PARLEY" sessions` and use the `command_args` field for the matching room/name. Use `--room "<room-id>" --name "<your-name>"` only as an explicit fallback for participant commands. Bare participant commands are only safe when there is exactly one local participant.
 
 Do not ask the human to choose a participant name. `start` and `join` generate a participant name in `adjective_noun_number` format when `--name` is omitted. Only pass `--name` when the current agent already has a deliberate identity it should preserve.

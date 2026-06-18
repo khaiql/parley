@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 type Paths struct {
@@ -16,11 +17,51 @@ func New(root string) Paths {
 }
 
 func DefaultRoot() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "."
+	if root := os.Getenv("PARLEY_STATE_DIR"); root != "" {
+		return root
 	}
-	return filepath.Join(home, ".parley")
+	for _, root := range defaultRootCandidates() {
+		if writableRoot(root) {
+			return root
+		}
+	}
+	return filepath.Join(".", ".parley")
+}
+
+func defaultRootCandidates() []string {
+	var roots []string
+	add := func(root string) {
+		if root == "" {
+			return
+		}
+		for _, existing := range roots {
+			if existing == root {
+				return
+			}
+		}
+		roots = append(roots, root)
+	}
+
+	home, err := os.UserHomeDir()
+	if err == nil {
+		add(filepath.Join(home, ".parley"))
+	}
+	if root := os.Getenv("XDG_RUNTIME_DIR"); root != "" {
+		add(filepath.Join(root, "parley"))
+	}
+	if root := os.Getenv("XDG_STATE_HOME"); root != "" {
+		add(filepath.Join(root, "parley"))
+	}
+	if root, err := os.UserCacheDir(); err == nil {
+		add(filepath.Join(root, "parley"))
+	}
+	if root := os.TempDir(); root != "" {
+		add(filepath.Join(root, "parley"))
+	}
+	if root, err := os.Getwd(); err == nil {
+		add(filepath.Join(root, ".parley"))
+	}
+	return roots
 }
 
 func (p Paths) RoomsDir() string {
@@ -120,4 +161,33 @@ func (p Paths) EnsureRoomDir(roomID string) (string, error) {
 
 func (p Paths) ActivePath() string {
 	return filepath.Join(p.Root, "active.json")
+}
+
+func writableRoot(root string) bool {
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return false
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		return false
+	}
+	probe, err := os.CreateTemp(root, ".write-test-*")
+	if err != nil {
+		return false
+	}
+	name := probe.Name()
+	if err := syscall.Flock(int(probe.Fd()), syscall.LOCK_EX); err != nil {
+		_ = probe.Close()
+		_ = os.Remove(name)
+		return false
+	}
+	if err := syscall.Flock(int(probe.Fd()), syscall.LOCK_UN); err != nil {
+		_ = probe.Close()
+		_ = os.Remove(name)
+		return false
+	}
+	if err := probe.Close(); err != nil {
+		_ = os.Remove(name)
+		return false
+	}
+	return os.Remove(name) == nil
 }

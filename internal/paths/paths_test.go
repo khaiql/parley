@@ -6,6 +6,99 @@ import (
 	"testing"
 )
 
+func TestDefaultRootUsesParleyStateDirOverride(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "state")
+	t.Setenv("PARLEY_STATE_DIR", root)
+
+	if got := DefaultRoot(); got != root {
+		t.Fatalf("DefaultRoot() = %q, want %q", got, root)
+	}
+}
+
+func TestDefaultRootUsesXDGRuntimeDirWhenHomeIsNotWritable(t *testing.T) {
+	base := t.TempDir()
+	homeFile := filepath.Join(base, "home-file")
+	if err := os.WriteFile(homeFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write home file: %v", err)
+	}
+	runtimeDir := filepath.Join(base, "runtime")
+	if err := os.Mkdir(runtimeDir, 0o700); err != nil {
+		t.Fatalf("mkdir runtime dir: %v", err)
+	}
+	t.Setenv("HOME", homeFile)
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	t.Setenv("PARLEY_STATE_DIR", "")
+
+	want := filepath.Join(runtimeDir, "parley")
+	if got := DefaultRoot(); got != want {
+		t.Fatalf("DefaultRoot() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultRootFallsBackToTempWhenHomeIsNotWritable(t *testing.T) {
+	base := t.TempDir()
+	homeFile := filepath.Join(base, "home-file")
+	if err := os.WriteFile(homeFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write home file: %v", err)
+	}
+	tmp := filepath.Join(base, "tmp")
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		t.Fatalf("mkdir tmp: %v", err)
+	}
+	t.Setenv("HOME", homeFile)
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("TMPDIR", tmp)
+	t.Setenv("PARLEY_STATE_DIR", "")
+
+	want := filepath.Join(tmp, "parley")
+	if got := DefaultRoot(); got != want {
+		t.Fatalf("DefaultRoot() = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultRootFallsBackToWorkingDirectoryWhenHomeAndTempAreNotWritable(t *testing.T) {
+	base := t.TempDir()
+	homeFile := filepath.Join(base, "home-file")
+	if err := os.WriteFile(homeFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write home file: %v", err)
+	}
+	tempFile := filepath.Join(base, "temp-file")
+	if err := os.WriteFile(tempFile, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	workspace := filepath.Join(base, "workspace")
+	if err := os.Mkdir(workspace, 0o700); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	t.Setenv("HOME", homeFile)
+	t.Setenv("XDG_RUNTIME_DIR", tempFile)
+	t.Setenv("XDG_STATE_HOME", tempFile)
+	t.Setenv("TMPDIR", tempFile)
+	t.Setenv("PARLEY_STATE_DIR", "")
+
+	currentWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get current cwd: %v", err)
+	}
+	want := filepath.Join(currentWD, ".parley")
+	if got := DefaultRoot(); got != want {
+		t.Fatalf("DefaultRoot() = %q, want %q", got, want)
+	}
+}
+
 func TestEnsureRoomDirPermissions(t *testing.T) {
 	root := t.TempDir()
 	p := New(root)

@@ -13,7 +13,7 @@ Parley starts a local room, writes a JSONL event log, and gives each participant
 - **JSON command output** - scriptable responses for agent skills and automation
 - **Event log first** - append-only room history with transcript filtering
 - **Descriptors** - `parley://host:port/room-id` invite strings for handoff
-- **Local runtime metadata** - session-scoped room and participant state under `~/.parley`
+- **Local runtime metadata** - session-scoped room and participant state in the first writable runtime root Parley can find
 
 ## Quick Start
 
@@ -68,6 +68,8 @@ SESSION_ARGS="--session psn_..."
 `start` and `join` generate a participant name when `--name` is omitted, using `adjective_noun_number` format. Prefer `--session` for room and participant commands. Use `sessions` to list local session handles on the machine. Use `--room` and `--name` as an explicit fallback for participant commands. Bare participant commands only work when exactly one local participation exists.
 
 `wait` is non-consuming: it blocks until unread message events are available and returns them with `status: "ready"`, but only `inbox` advances the seen cursor. Use `inbox --peek` to inspect unread events without acknowledging them.
+
+Parley stores runtime state in `~/.parley` by default. Set `PARLEY_STATE_DIR` to force a shared state directory. Without an override, Parley probes common agent-friendly roots in order: `~/.parley`, `$XDG_RUNTIME_DIR/parley`, `$XDG_STATE_HOME/parley`, the user cache directory, the OS temp directory, and finally `.parley` in the current working directory.
 
 For remote participants, create your own tunnel to the `local_port` returned by `start` or `invite`, then share a descriptor that uses the tunnel host and port with the same room id. Parley does not create or manage tunnels.
 
