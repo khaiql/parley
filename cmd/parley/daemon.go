@@ -35,9 +35,10 @@ import (
 )
 
 const (
-	daemonStartupTimeout = 5 * time.Second
-	daemonPollInterval   = 25 * time.Millisecond
-	daemonAckTimeout     = 5 * time.Second
+	daemonStartupTimeout  = 5 * time.Second
+	daemonPollInterval    = 25 * time.Millisecond
+	daemonAckTimeout      = 5 * time.Second
+	artifactHeaderTimeout = 5 * time.Second
 )
 
 type roomDaemonConfig struct {
@@ -294,7 +295,10 @@ func runRoomDaemon(cfg roomDaemonConfig) error {
 		return err
 	}
 	go srv.Serve()
-	artifactHTTP := &http.Server{Handler: srv.ArtifactHandler()}
+	artifactHTTP := &http.Server{
+		Handler:           srv.ArtifactHandler(),
+		ReadHeaderTimeout: artifactHeaderTimeout,
+	}
 	artifactErrCh := make(chan error, 1)
 	go func() {
 		err := artifactHTTP.Serve(artifactListener)
