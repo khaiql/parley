@@ -36,6 +36,36 @@ func TestHeadlessRoomTwoParticipants(t *testing.T) {
 	assertMessage(t, got, "agent", "I am here")
 }
 
+func TestAdapterHandleCloseWaitsForReadLoop(t *testing.T) {
+	root := t.TempDir()
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+
+	store, err := runtime.ParticipantStore(paths.New(root), "room-1", "agent")
+	if err != nil {
+		t.Fatalf("runtime.ParticipantStore: %v", err)
+	}
+	h := &AdapterHandle{
+		name:    "agent",
+		roomID:  "room-1",
+		conn:    clientConn,
+		reader:  bufio.NewReader(clientConn),
+		store:   store,
+		pending: make(map[int64]model.Event),
+		notify:  make(chan struct{}, 1),
+		done:    make(chan struct{}),
+	}
+	go h.readLoop()
+
+	h.Close(t)
+
+	select {
+	case <-h.done:
+	default:
+		t.Fatal("Close returned before readLoop stopped")
+	}
+}
+
 type ServerHandle struct {
 	*AdapterHandle
 	Descriptor string
@@ -149,6 +179,7 @@ func JoinForTest(t testing.TB, root, rawDescriptor, name, role string) *AdapterH
 	}
 
 	go h.readLoop()
+	t.Cleanup(func() { h.Close(t) })
 	return h
 }
 
@@ -180,6 +211,17 @@ func (h *AdapterHandle) Send(t testing.TB, text string) {
 	}
 	if _, err := h.store.Inbox(false); err != nil {
 		t.Fatalf("mark sent events seen: %v", err)
+	}
+}
+
+func (h *AdapterHandle) Close(t testing.TB) {
+	t.Helper()
+
+	_ = h.conn.Close()
+	select {
+	case <-h.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for adapter read loop to stop")
 	}
 }
 
