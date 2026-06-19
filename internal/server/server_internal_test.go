@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/khaiql/parley/internal/artifact"
 	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
 	"github.com/khaiql/parley/internal/protocol"
@@ -104,6 +105,136 @@ func TestServerHandleSendPublishesCommittedEventWhenSenderAckFails(t *testing.T)
 	pushed := bobConn.readResponse(t)
 	if !pushed.OK || pushed.Event == nil || pushed.Event.Seq != resp.Event.Seq || pushed.Event.Type != model.EventMessage {
 		t.Fatalf("bob pushed response = %#v, want committed message seq %d", pushed, resp.Event.Seq)
+	}
+}
+
+func TestServerHandleSendRejectsUnknownStagedArtifact(t *testing.T) {
+	srv := newInternalTestServer(t)
+	srv.registerOnlineTestClient("alice", newRecordingConn())
+
+	resp := srv.handleSend("alice", protocol.SendRequest{Text: "missing", ArtifactIDs: []string{"art_missing"}})
+	if resp.OK || resp.Error == nil || resp.Error.Code != "artifact_unavailable" {
+		t.Fatalf("handleSend response = %#v, want artifact_unavailable", resp)
+	}
+}
+
+func TestServerHandleSendCommitsParticipantArtifacts(t *testing.T) {
+	srv := newInternalTestServer(t)
+	srv.registerOnlineTestClient("alice", newRecordingConn())
+	first, err := srv.artifacts.Stage("alice", "before.log", []byte("before"))
+	if err != nil {
+		t.Fatalf("Stage first: %v", err)
+	}
+	second, err := srv.artifacts.Stage("alice", "after.log", []byte("after"))
+	if err != nil {
+		t.Fatalf("Stage second: %v", err)
+	}
+
+	resp := srv.handleSend("alice", protocol.SendRequest{Text: "compare", ArtifactIDs: []string{first.ID, second.ID}})
+	if !resp.OK || resp.Event == nil {
+		t.Fatalf("handleSend response = %#v", resp)
+	}
+	payload, ok := resp.Event.Payload.(model.MessagePayload)
+	if !ok {
+		t.Fatalf("payload = %#v, want model.MessagePayload", resp.Event.Payload)
+	}
+	if len(payload.Artifacts) != 2 {
+		t.Fatalf("artifacts = %#v, want two entries", payload.Artifacts)
+	}
+	if payload.Artifacts[0].ID != first.ID || payload.Artifacts[1].ID != second.ID {
+		t.Fatalf("artifact order = %#v, want request order", payload.Artifacts)
+	}
+}
+
+func TestServerHandleSendRejectsOtherParticipantStagedArtifact(t *testing.T) {
+	srv := newInternalTestServer(t)
+	srv.registerOnlineTestClient("alice", newRecordingConn())
+	staged, err := srv.artifacts.Stage("bob", "trace.log", []byte("bob-only"))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	resp := srv.handleSend("alice", protocol.SendRequest{Text: "inspect", ArtifactIDs: []string{staged.ID}})
+	if resp.OK || resp.Error == nil || resp.Error.Code != "artifact_unavailable" {
+		t.Fatalf("handleSend response = %#v, want artifact_unavailable", resp)
+	}
+	if _, _, err := srv.artifacts.Open(staged.ID); !artifact.IsCode(err, "artifact_unavailable") {
+		t.Fatalf("Open other participant staged artifact err = %v, want artifact_unavailable", err)
+	}
+}
+
+func TestServerHandleSendCommitFailureLeavesNoFetchableArtifact(t *testing.T) {
+	srv, logPath := newInternalTestServerWithLogPath(t)
+	srv.registerOnlineTestClient("alice", newRecordingConn())
+	staged, err := srv.artifacts.Stage("alice", "trace.log", []byte("trace bytes"))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	restore := forceLogAppendFailure(t, logPath)
+	defer restore()
+
+	resp := srv.handleSend("alice", protocol.SendRequest{Text: "inspect", ArtifactIDs: []string{staged.ID}})
+	if resp.OK || resp.Error == nil || resp.Error.Code != "log_append_failed" {
+		t.Fatalf("handleSend response = %#v, want log_append_failed", resp)
+	}
+	if _, _, err := srv.artifacts.Open(staged.ID); !artifact.IsCode(err, "artifact_unavailable") {
+		t.Fatalf("Open committed artifact after failed append err = %v, want artifact_unavailable", err)
+	}
+}
+
+func TestServerHandleSendPromotionFailureRollsBackEarlierArtifacts(t *testing.T) {
+	srv, logPath := newInternalTestServerWithLogPath(t)
+	srv.registerOnlineTestClient("alice", newRecordingConn())
+	first, err := srv.artifacts.Stage("alice", "first.log", []byte("first"))
+	if err != nil {
+		t.Fatalf("Stage first: %v", err)
+	}
+	second, err := srv.artifacts.Stage("alice", "second.log", []byte("second"))
+	if err != nil {
+		t.Fatalf("Stage second: %v", err)
+	}
+	committedSecondPath := filepath.Join(filepath.Dir(logPath), "artifacts", "committed", second.ID)
+	if err := os.MkdirAll(committedSecondPath, 0o700); err != nil {
+		t.Fatalf("create conflicting committed path: %v", err)
+	}
+
+	resp := srv.handleSend("alice", protocol.SendRequest{Text: "inspect", ArtifactIDs: []string{first.ID, second.ID}})
+	if resp.OK {
+		t.Fatalf("handleSend response = %#v, want failed promotion", resp)
+	}
+	if _, _, err := srv.artifacts.Open(first.ID); !artifact.IsCode(err, "artifact_unavailable") {
+		t.Fatalf("Open first artifact after failed promotion err = %v, want artifact_unavailable", err)
+	}
+	events, err := eventlog.New(logPath).ReadAll()
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	for _, ev := range events {
+		if ev.Type == model.EventMessage {
+			t.Fatalf("message event was appended after failed artifact promotion: %#v", ev)
+		}
+	}
+}
+
+func TestServerHandleSendPreservesMentionsFromTextOnly(t *testing.T) {
+	srv := newInternalTestServer(t)
+	srv.registerOnlineTestClient("alice", newRecordingConn())
+	srv.registerOnlineTestClient("bob", newRecordingConn())
+	staged, err := srv.artifacts.Stage("alice", "@bob.log", []byte("filename mention only"))
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	resp := srv.handleSend("alice", protocol.SendRequest{Text: "inspect", ArtifactIDs: []string{staged.ID}})
+	if !resp.OK || resp.Event == nil {
+		t.Fatalf("handleSend response = %#v", resp)
+	}
+	payload, ok := resp.Event.Payload.(model.MessagePayload)
+	if !ok {
+		t.Fatalf("payload = %#v, want model.MessagePayload", resp.Event.Payload)
+	}
+	if len(payload.Mentions) != 0 {
+		t.Fatalf("mentions = %#v, want none from artifact filename", payload.Mentions)
 	}
 }
 
@@ -596,9 +727,10 @@ func newInternalTestServerWithLogPath(t *testing.T) (*Server, string) {
 	t.Helper()
 	logPath := filepath.Join(t.TempDir(), "events.jsonl")
 	srv, err := New("127.0.0.1:0", Config{
-		RoomID: "room-1",
-		Topic:  "test topic",
-		Log:    eventlog.New(logPath),
+		RoomID:        "room-1",
+		Topic:         "test topic",
+		Log:           eventlog.New(logPath),
+		ArtifactStore: artifact.NewStore(filepath.Dir(logPath)),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -617,8 +749,9 @@ func newInternalTestServerWithoutPublisher(t *testing.T) *Server {
 	}
 	srv := &Server{
 		listener:      ln,
-		cfg:           Config{RoomID: "room-1", Topic: "test topic", Log: log},
+		cfg:           Config{RoomID: "room-1", Topic: "test topic", Log: log, ArtifactStore: artifact.NewStore(filepath.Dir(logPath))},
 		log:           log,
+		artifacts:     artifact.NewStore(filepath.Dir(logPath)),
 		participants:  make(map[string]model.Participant),
 		conns:         make(map[string]*clientConn),
 		activeConns:   make(map[net.Conn]struct{}),

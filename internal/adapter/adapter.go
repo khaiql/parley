@@ -15,13 +15,14 @@ import (
 )
 
 type Meta struct {
-	RoomID          string `json:"room_id"`
-	Name            string `json:"name"`
-	Role            string `json:"role"`
-	Descriptor      string `json:"descriptor"`
-	Status          string `json:"status"`
-	LastReceivedSeq int64  `json:"last_received_seq"`
-	LastSeenSeq     int64  `json:"last_seen_seq"`
+	RoomID           string `json:"room_id"`
+	Name             string `json:"name"`
+	Role             string `json:"role"`
+	Descriptor       string `json:"descriptor"`
+	ArtifactEndpoint string `json:"artifact_endpoint,omitempty"`
+	Status           string `json:"status"`
+	LastReceivedSeq  int64  `json:"last_received_seq"`
+	LastSeenSeq      int64  `json:"last_seen_seq"`
 }
 
 type Store struct {

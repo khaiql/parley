@@ -36,17 +36,20 @@ func sessionsCmd() *cobra.Command {
 }
 
 type sessionListItem struct {
-	SessionID       string `json:"session_id"`
-	RoomID          string `json:"room_id"`
-	Name            string `json:"name"`
-	Role            string `json:"role,omitempty"`
-	Descriptor      string `json:"descriptor,omitempty"`
-	Status          string `json:"status,omitempty"`
-	AdapterRunning  bool   `json:"adapter_running"`
-	ServerRunning   bool   `json:"server_running"`
-	LastReceivedSeq int64  `json:"last_received_seq,omitempty"`
-	LastSeenSeq     int64  `json:"last_seen_seq,omitempty"`
-	CommandArgs     string `json:"command_args"`
+	SessionID         string `json:"session_id"`
+	RoomID            string `json:"room_id"`
+	Name              string `json:"name"`
+	Role              string `json:"role,omitempty"`
+	Descriptor        string `json:"descriptor,omitempty"`
+	ArtifactEndpoint  string `json:"artifact_endpoint,omitempty"`
+	ArtifactLocalPort int    `json:"artifact_local_port,omitempty"`
+	ArtifactPath      string `json:"artifact_path,omitempty"`
+	Status            string `json:"status,omitempty"`
+	AdapterRunning    bool   `json:"adapter_running"`
+	ServerRunning     bool   `json:"server_running"`
+	LastReceivedSeq   int64  `json:"last_received_seq,omitempty"`
+	LastSeenSeq       int64  `json:"last_seen_seq,omitempty"`
+	CommandArgs       string `json:"command_args"`
 }
 
 func buildSessionListItem(p paths.Paths, session parleyRuntime.Session) sessionListItem {
@@ -56,19 +59,23 @@ func buildSessionListItem(p paths.Paths, session parleyRuntime.Session) sessionL
 	if desc == "" {
 		desc = loadSessionDescriptor(p, session.RoomID)
 	}
+	room, _ := parleyRuntime.LoadRoomRuntime(p, session.RoomID)
 	status := statusEnvelope(part, meta)
 	return sessionListItem{
-		SessionID:       session.ID,
-		RoomID:          session.RoomID,
-		Name:            session.Name,
-		Role:            meta.Role,
-		Descriptor:      desc,
-		Status:          meta.Status,
-		AdapterRunning:  status.AdapterRunning,
-		ServerRunning:   status.ServerRunning,
-		LastReceivedSeq: status.LastReceivedSeq,
-		LastSeenSeq:     status.LastSeenSeq,
-		CommandArgs:     "--session " + session.ID,
+		SessionID:         session.ID,
+		RoomID:            session.RoomID,
+		Name:              session.Name,
+		Role:              meta.Role,
+		Descriptor:        desc,
+		ArtifactEndpoint:  meta.ArtifactEndpoint,
+		ArtifactLocalPort: room.ArtifactLocalPort,
+		ArtifactPath:      room.ArtifactPath,
+		Status:            meta.Status,
+		AdapterRunning:    status.AdapterRunning,
+		ServerRunning:     status.ServerRunning,
+		LastReceivedSeq:   status.LastReceivedSeq,
+		LastSeenSeq:       status.LastSeenSeq,
+		CommandArgs:       "--session " + session.ID,
 	}
 }
 

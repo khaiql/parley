@@ -2,14 +2,23 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
+	"mime/multipart"
 	"net"
+	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/khaiql/parley/internal/adapter"
+	"github.com/khaiql/parley/internal/artifact"
 	"github.com/khaiql/parley/internal/descriptor"
 	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
@@ -66,6 +75,30 @@ func TestAdapterHandleCloseWaitsForReadLoop(t *testing.T) {
 	}
 }
 
+func TestHeadlessRoomArtifacts(t *testing.T) {
+	root := t.TempDir()
+	host := StartServerForTest(t, root, "topic", "host", "host")
+	agent := JoinForTest(t, root, host.Descriptor, "agent", "reviewer")
+
+	source := filepath.Join(t.TempDir(), "trace.json")
+	if err := os.WriteFile(source, []byte(`{"trace":true}`), 0o600); err != nil {
+		t.Fatalf("write source artifact: %v", err)
+	}
+
+	host.SendFiles(t, "inspect this", source)
+	got := agent.Wait(t, 2*time.Second)
+	assertMessage(t, got, "host", "inspect this")
+	artifacts := eventArtifacts(t, got.Events[len(got.Events)-1])
+	if len(artifacts) != 1 || artifacts[0].Name != "trace.json" || artifacts[0].Size != int64(len(`{"trace":true}`)) {
+		t.Fatalf("artifacts = %#v, want trace metadata", artifacts)
+	}
+
+	data := agent.FetchArtifact(t, artifacts[0].ID)
+	if string(data) != `{"trace":true}` {
+		t.Fatalf("fetched data = %q", data)
+	}
+}
+
 type ServerHandle struct {
 	*AdapterHandle
 	Descriptor string
@@ -97,20 +130,43 @@ func StartServerForTest(t testing.TB, root, topic, name, role string) ServerHand
 
 	p := paths.New(root)
 	roomID := "room-1"
+	roomDir, err := p.EnsureRoomDir(roomID)
+	if err != nil {
+		t.Fatalf("EnsureRoomDir: %v", err)
+	}
+	artifactListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("artifact listen: %v", err)
+	}
+	artifactPort := artifactListener.Addr().(*net.TCPAddr).Port
+	artifactStore := artifact.NewStore(roomDir)
 	log := eventlog.New(runtime.RoomEventsPath(p, roomID))
 	srv, err := server.New("127.0.0.1:0", server.Config{
-		RoomID: roomID,
-		Topic:  topic,
-		Log:    log,
+		RoomID:            roomID,
+		Topic:             topic,
+		Log:               log,
+		ArtifactStore:     artifactStore,
+		ArtifactLocalPort: artifactPort,
+		ArtifactPath:      "/rooms/" + roomID + "/artifacts",
+		ArtifactLimits:    artifact.DefaultLimits(),
 	})
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
 	}
 	go srv.Serve()
+	artifactHTTP := &http.Server{Handler: srv.ArtifactHandler()}
+	go func() {
+		err := artifactHTTP.Serve(artifactListener)
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Logf("artifact HTTP stopped: %v", err)
+		}
+	}()
 	t.Cleanup(func() {
+		_ = artifactHTTP.Close()
 		if err := srv.Close(); err != nil {
 			t.Fatalf("server.Close: %v", err)
 		}
+		_ = artifactStore.CleanupAll()
 	})
 
 	desc := descriptor.Descriptor{Host: "127.0.0.1", Port: srv.Port(), RoomID: roomID}.String()
@@ -171,6 +227,19 @@ func JoinForTest(t testing.TB, root, rawDescriptor, name, role string) *AdapterH
 	if !resp.OK {
 		t.Fatalf("join response = %#v", resp)
 	}
+	if resp.Room != nil && resp.Room.ArtifactLocalPort != 0 {
+		artifactEndpoint := "http://" + net.JoinHostPort(desc.Host, strconv.Itoa(resp.Room.ArtifactLocalPort)) + resp.Room.ArtifactPath
+		if err := store.SaveMeta(adapter.Meta{
+			RoomID:           desc.RoomID,
+			Name:             name,
+			Role:             role,
+			Descriptor:       rawDescriptor,
+			ArtifactEndpoint: artifactEndpoint,
+			Status:           "online",
+		}); err != nil {
+			t.Fatalf("store.SaveMeta artifact endpoint: %v", err)
+		}
+	}
 	if err := h.appendResponse(resp); err != nil {
 		t.Fatalf("append join response: %v", err)
 	}
@@ -223,6 +292,93 @@ func (h *AdapterHandle) Close(t testing.TB) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for adapter read loop to stop")
 	}
+}
+
+func (h *AdapterHandle) SendFiles(t testing.TB, text string, files ...string) {
+	t.Helper()
+
+	meta, err := h.store.LoadMeta()
+	if err != nil {
+		t.Fatalf("load meta before send files: %v", err)
+	}
+	afterSeq := meta.LastReceivedSeq
+	ids := make([]string, 0, len(files))
+	for _, path := range files {
+		ids = append(ids, h.uploadArtifact(t, path).ID)
+	}
+	h.write(t, protocol.Request{Type: protocol.RequestSend, Send: &protocol.SendRequest{Text: text, ArtifactIDs: ids}})
+	if err := h.waitForLocalMessage(text, afterSeq, 2*time.Second); err != nil {
+		t.Fatalf("wait for local send acknowledgement: %v", err)
+	}
+	if _, err := h.store.Inbox(false); err != nil {
+		t.Fatalf("mark sent events seen: %v", err)
+	}
+}
+
+func (h *AdapterHandle) uploadArtifact(t testing.TB, path string) artifact.Metadata {
+	t.Helper()
+
+	meta, err := h.store.LoadMeta()
+	if err != nil {
+		t.Fatalf("load meta before upload: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read artifact source: %v", err)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filepath.Base(path))
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		t.Fatalf("write multipart: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, meta.ArtifactEndpoint+"/staged?participant="+h.name, &body)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("upload artifact: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload artifact status = %d body = %s", resp.StatusCode, body)
+	}
+	var uploaded artifact.Metadata
+	if err := json.NewDecoder(resp.Body).Decode(&uploaded); err != nil {
+		t.Fatalf("decode upload metadata: %v", err)
+	}
+	return uploaded
+}
+
+func (h *AdapterHandle) FetchArtifact(t testing.TB, id string) []byte {
+	t.Helper()
+
+	meta, err := h.store.LoadMeta()
+	if err != nil {
+		t.Fatalf("load meta before fetch: %v", err)
+	}
+	resp, err := http.Get(meta.ArtifactEndpoint + "/" + id)
+	if err != nil {
+		t.Fatalf("fetch artifact: %v", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read fetched artifact: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("fetch artifact status = %d body = %s", resp.StatusCode, data)
+	}
+	return data
 }
 
 func (h *AdapterHandle) Wait(t testing.TB, timeout time.Duration) adapter.ControlResponse {
@@ -410,6 +566,41 @@ func eventText(ev model.Event) string {
 	}
 	text, _ := payload["text"].(string)
 	return text
+}
+
+func eventArtifacts(t testing.TB, ev model.Event) []model.ArtifactMetadata {
+	t.Helper()
+	if payload, ok := ev.Payload.(model.MessagePayload); ok {
+		return payload.Artifacts
+	}
+	payload, ok := ev.Payload.(map[string]interface{})
+	if !ok {
+		t.Fatalf("payload = %#v, want object", ev.Payload)
+	}
+	raw, ok := payload["artifacts"].([]interface{})
+	if !ok {
+		t.Fatalf("artifacts = %#v, want array", payload["artifacts"])
+	}
+	out := make([]model.ArtifactMetadata, 0, len(raw))
+	for _, item := range raw {
+		obj, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("artifact = %#v, want object", item)
+		}
+		size, _ := obj["size"].(float64)
+		out = append(out, model.ArtifactMetadata{
+			ID:     stringField(obj, "id"),
+			Name:   stringField(obj, "name"),
+			Size:   int64(size),
+			SHA256: stringField(obj, "sha256"),
+		})
+	}
+	return out
+}
+
+func stringField(obj map[string]interface{}, key string) string {
+	value, _ := obj[key].(string)
+	return value
 }
 
 func (h *AdapterHandle) signal() {

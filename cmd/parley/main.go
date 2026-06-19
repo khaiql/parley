@@ -65,6 +65,7 @@ func newRootCmd() *cobra.Command {
 		historyCmd(),
 		waitCmd(),
 		sendCmd(),
+		artifactCmd(),
 		leaveCmd(),
 		stopCmd(),
 		versionCmd(),
@@ -104,11 +105,17 @@ func versionCmd() *cobra.Command {
 func writeJSON(cmd *cobra.Command, v interface{}) error {
 	if resp, ok := v.(adapter.ControlResponse); ok {
 		v = struct {
-			Status string        `json:"status,omitempty"`
-			Events []model.Event `json:"events,omitempty"`
+			Status           string                         `json:"status,omitempty"`
+			Events           []model.Event                  `json:"events,omitempty"`
+			Results          []adapter.ArtifactFetchResult  `json:"results,omitempty"`
+			ArtifactShutdown string                         `json:"artifact_shutdown,omitempty"`
+			ArtifactCleanup  *adapter.ArtifactCleanupStatus `json:"artifact_cleanup,omitempty"`
 		}{
-			Status: resp.Status,
-			Events: resp.Events,
+			Status:           resp.Status,
+			Events:           resp.Events,
+			Results:          resp.Results,
+			ArtifactShutdown: resp.ArtifactShutdown,
+			ArtifactCleanup:  resp.ArtifactCleanup,
 		}
 	}
 	out, err := jsonout.Marshal(v)

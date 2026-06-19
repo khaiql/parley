@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/khaiql/parley/internal/artifact"
 	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
 	"github.com/khaiql/parley/internal/protocol"
@@ -388,9 +389,10 @@ func newTestServer(t *testing.T) testServer {
 	logPath := filepath.Join(t.TempDir(), "events.jsonl")
 	log := eventlog.New(logPath)
 	srv, err := server.New("127.0.0.1:0", server.Config{
-		RoomID: "room-1",
-		Topic:  "test topic",
-		Log:    log,
+		RoomID:        "room-1",
+		Topic:         "test topic",
+		Log:           log,
+		ArtifactStore: artifact.NewStore(filepath.Dir(logPath)),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

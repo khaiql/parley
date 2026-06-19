@@ -5,6 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/khaiql/parley/internal/artifact"
 	"github.com/khaiql/parley/internal/paths"
 	parleyRuntime "github.com/khaiql/parley/internal/runtime"
 )
@@ -66,18 +67,21 @@ func startCmd() *cobra.Command {
 				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("build invite: %v", err))
 			}
 			return writeJSON(cmd, struct {
-				Status              string `json:"status"`
-				RoomID              string `json:"room_id"`
-				Topic               string `json:"topic"`
-				Name                string `json:"name"`
-				SessionID           string `json:"session_id"`
-				CommandArgs         string `json:"command_args"`
-				Descriptor          string `json:"descriptor"`
-				LocalHost           string `json:"local_host"`
-				LocalPort           int    `json:"local_port"`
-				ServerPID           int    `json:"server_pid"`
-				JoinCommandTemplate string `json:"join_command_template"`
-				AgentInstruction    string `json:"agent_instruction"`
+				Status              string          `json:"status"`
+				RoomID              string          `json:"room_id"`
+				Topic               string          `json:"topic"`
+				Name                string          `json:"name"`
+				SessionID           string          `json:"session_id"`
+				CommandArgs         string          `json:"command_args"`
+				Descriptor          string          `json:"descriptor"`
+				LocalHost           string          `json:"local_host"`
+				LocalPort           int             `json:"local_port"`
+				ArtifactLocalPort   int             `json:"artifact_local_port,omitempty"`
+				ArtifactPath        string          `json:"artifact_path,omitempty"`
+				ArtifactLimits      artifact.Limits `json:"artifact_limits,omitempty"`
+				ServerPID           int             `json:"server_pid"`
+				JoinCommandTemplate string          `json:"join_command_template"`
+				AgentInstruction    string          `json:"agent_instruction"`
 			}{
 				Status:              "started",
 				RoomID:              roomID,
@@ -88,6 +92,9 @@ func startCmd() *cobra.Command {
 				Descriptor:          invite.Descriptor,
 				LocalHost:           room.LocalHost,
 				LocalPort:           room.LocalPort,
+				ArtifactLocalPort:   room.ArtifactLocalPort,
+				ArtifactPath:        room.ArtifactPath,
+				ArtifactLimits:      room.ArtifactLimits,
 				ServerPID:           pid,
 				JoinCommandTemplate: invite.JoinCommandTemplate,
 				AgentInstruction:    invite.AgentInstruction,

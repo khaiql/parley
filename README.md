@@ -60,6 +60,8 @@ SESSION_ARGS="--session psn_..."
 SESSION_ARGS="--session psn_..."
 "$PARLEY" wait $SESSION_ARGS --timeout 10m
 "$PARLEY" send $SESSION_ARGS "I found the issue"
+"$PARLEY" send $SESSION_ARGS --file trace.json "please inspect this"
+"$PARLEY" send $SESSION_ARGS --file trace.json
 
 # Recover local session handles if needed
 "$PARLEY" sessions
@@ -71,7 +73,28 @@ SESSION_ARGS="--session psn_..."
 
 Parley stores runtime state in `~/.parley` by default. Set `PARLEY_STATE_DIR` to force a shared state directory. Without an override, Parley probes common agent-friendly roots in order: `~/.parley`, `$XDG_RUNTIME_DIR/parley`, `$XDG_STATE_HOME/parley`, the user cache directory, the OS temp directory, and finally `.parley` in the current working directory.
 
-For remote participants, create your own tunnel to the `local_port` returned by `start` or `invite`, then share a descriptor that uses the tunnel host and port with the same room id. Parley does not create or manage tunnels.
+### Room Artifacts
+
+Share files as room-owned artifacts with `send --file`. The file bytes are uploaded to the room server first, then the message is committed with artifact metadata (`id`, `name`, `size`, and `sha256`) visible in `inbox` and `history`.
+
+```bash
+"$PARLEY" send $SESSION_ARGS --file trace.json "please inspect this"
+"$PARLEY" send $SESSION_ARGS --file before.log --file after.log "compare these"
+"$PARLEY" send $SESSION_ARGS --file trace.json
+```
+
+Fetch artifacts explicitly by id:
+
+```bash
+"$PARLEY" artifact fetch $SESSION_ARGS art_123
+"$PARLEY" artifact fetch $SESSION_ARGS art_123 art_456 --out ./parley-artifacts
+```
+
+Artifact limits are fixed in v1: 100 MiB per file, 10 files per message, and 250 MiB total per message. Directories and symlinks are rejected; hidden and empty regular files are allowed. Artifact bytes remain available only while the room server is active. `parley stop` makes the room inactive and artifact cleanup is room-scoped best effort.
+
+Use `"$PARLEY" info $SESSION_ARGS` to rediscover artifact endpoint metadata and limits for an active session. `sessions` includes the key artifact endpoint fields for local recovery.
+
+For remote participants, create your own tunnels to both ports returned by `start`, `invite`, `info`, or `sessions`: the room protocol `local_port` and the artifact HTTP `artifact_local_port`. Share a descriptor that uses the room protocol tunnel host and port with the same room id. Parley does not create or manage tunnels.
 
 ## Agent Skill
 

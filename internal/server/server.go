@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/khaiql/parley/internal/artifact"
 	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
 	"github.com/khaiql/parley/internal/protocol"
@@ -27,21 +28,28 @@ var mentionRE = regexp.MustCompile(`@([A-Za-z0-9_][A-Za-z0-9_-]*)`)
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]*$`)
 
 type Config struct {
-	RoomID string
-	Topic  string
-	Log    *eventlog.Log
+	RoomID            string
+	Topic             string
+	Log               *eventlog.Log
+	ArtifactStore     *artifact.Store
+	ArtifactLocalPort int
+	ArtifactPath      string
+	ArtifactLimits    artifact.Limits
 }
 
 type Server struct {
-	listener net.Listener
-	cfg      Config
-	log      *eventlog.Log
+	listener  net.Listener
+	cfg       Config
+	log       *eventlog.Log
+	artifacts *artifact.Store
 
 	mu           sync.Mutex
 	participants map[string]model.Participant
 	conns        map[string]*clientConn
 	activeConns  map[net.Conn]struct{}
 	closing      atomic.Bool
+
+	artifactTxMu sync.Mutex
 
 	serveStarted   chan struct{}
 	closed         chan struct{}
@@ -84,12 +92,16 @@ func New(addr string, cfg Config) (*Server, error) {
 		listener:      ln,
 		cfg:           cfg,
 		log:           cfg.Log,
+		artifacts:     cfg.ArtifactStore,
 		participants:  make(map[string]model.Participant),
 		conns:         make(map[string]*clientConn),
 		activeConns:   make(map[net.Conn]struct{}),
 		serveStarted:  make(chan struct{}),
 		closed:        make(chan struct{}),
 		publisherDone: make(chan struct{}),
+	}
+	if srv.artifacts == nil {
+		srv.artifacts = artifact.NewStore("")
 	}
 	srv.publishCond = sync.NewCond(&srv.publishMu)
 	go srv.runPublisher()
@@ -387,16 +399,37 @@ func (s *Server) handleSend(name string, req protocol.SendRequest) protocol.Resp
 		return errorResponse("not_joined", "join before sending messages")
 	}
 
+	s.artifactTxMu.Lock()
+	defer s.artifactTxMu.Unlock()
+
+	artifactMetas, err := s.artifacts.Commit(name, req.ArtifactIDs)
+	if err != nil {
+		return artifactErrorResponse(err)
+	}
+	committedArtifactIDs := make([]string, 0, len(artifactMetas))
+	messageArtifacts := make([]model.ArtifactMetadata, 0, len(artifactMetas))
+	for _, meta := range artifactMetas {
+		committedArtifactIDs = append(committedArtifactIDs, meta.ID)
+		messageArtifacts = append(messageArtifacts, model.ArtifactMetadata{
+			ID:     meta.ID,
+			Name:   meta.Name,
+			Size:   meta.Size,
+			SHA256: meta.SHA256,
+		})
+	}
+
 	ev, err := s.log.Append(model.Event{
 		Type:   model.EventMessage,
 		RoomID: s.cfg.RoomID,
 		Actor:  name,
 		Payload: model.MessagePayload{
-			Text:     req.Text,
-			Mentions: parseMentions(req.Text, s.participants),
+			Text:      req.Text,
+			Mentions:  parseMentions(req.Text, s.participants),
+			Artifacts: messageArtifacts,
 		},
 	})
 	if err != nil {
+		_ = s.artifacts.CleanupCommitted(committedArtifactIDs)
 		return errorResponse("log_append_failed", err.Error())
 	}
 	s.enqueuePublicationLocked(name, ev)
@@ -542,6 +575,7 @@ func (s *Server) rollbackJoin(name string, cc *clientConn) error {
 }
 
 func (s *Server) removeConnection(name string, cc *clientConn) {
+	_ = s.artifacts.CleanupStaged(name)
 	s.mu.Lock()
 	if current, ok := s.conns[name]; ok && current == cc {
 		delete(s.conns, name)
@@ -642,6 +676,7 @@ func (s *Server) dropConnection(cc *clientConn) {
 }
 
 func (s *Server) cleanupConnectionLeave(name string, cc *clientConn) error {
+	_ = s.artifacts.CleanupStaged(name)
 	s.mu.Lock()
 
 	participant, ok := s.participants[name]
@@ -734,8 +769,11 @@ func (s *Server) participantSnapshotLocked() []model.Participant {
 
 func (s *Server) roomMetadata() *model.RoomMetadata {
 	meta := &model.RoomMetadata{
-		RoomID: s.cfg.RoomID,
-		Topic:  s.cfg.Topic,
+		RoomID:            s.cfg.RoomID,
+		Topic:             s.cfg.Topic,
+		ArtifactLocalPort: s.cfg.ArtifactLocalPort,
+		ArtifactPath:      s.cfg.ArtifactPath,
+		ArtifactLimits:    s.cfg.ArtifactLimits,
 	}
 	if tcpAddr, ok := s.listener.Addr().(*net.TCPAddr); ok {
 		meta.LocalHost = tcpAddr.IP.String()

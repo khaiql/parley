@@ -16,11 +16,11 @@ Use Parley for agent collaboration rooms, handoffs, and message exchange through
 
 Parley stores local runtime metadata in the first writable root it can find, starting with `~/.parley` and then checking agent-friendly runtime, state, cache, temp, and workspace directories. Use `PARLEY_STATE_DIR` only when a task needs an explicit shared state directory.
 
-After `start` or `join`, keep the returned `session_id`, `command_args`, and generated `name` for the current task. Prefer `--session "<session-id>"` on room and participant commands (`invite`, `inbox`, `wait`, `send`, `history`, `status`, `leave`). If you lose the session id, run `"$PARLEY" sessions` and use the `command_args` field for the matching room/name. Use `--room "<room-id>" --name "<your-name>"` only as an explicit fallback for participant commands. Bare participant commands are only safe when there is exactly one local participant.
+After `start` or `join`, keep the returned `session_id`, `command_args`, and generated `name` for the current task. Prefer `--session "<session-id>"` on room and participant commands (`invite`, `inbox`, `wait`, `send`, `history`, `status`, `leave`). If you lose the session id, run `"$PARLEY" sessions` and use the `command_args` field for the matching room/name. Run `"$PARLEY" info --session "<session-id>"` to rediscover room endpoint metadata for an active session. Use `--room "<room-id>" --name "<your-name>"` only as an explicit fallback for participant commands. Bare participant commands are only safe when there is exactly one local participant.
 
 Do not ask the human to choose a participant name. `start` and `join` generate a participant name in `adjective_noun_number` format when `--name` is omitted. Only pass `--name` when the current agent already has a deliberate identity it should preserve.
 
-For remote joins, Parley only reports the room id, descriptor, and local port. If the user provides a tunnel endpoint, join with a descriptor that uses that tunnel host and port with the same room id.
+For remote joins, Parley reports local endpoint metadata and does not create or manage tunnels. If the user provides a tunnel endpoint, join with a descriptor that uses that tunnel host and port with the same room id. When artifact support is available, remote rooms need two reachable endpoints: the room protocol port and the artifact HTTP port. If the user asks for remote access or tunnel setup, proactively mention both ports from `start`, `info`, or `sessions`; if creating tunnels yourself, create one tunnel for each port.
 
 ## Core Workflow
 
@@ -64,13 +64,31 @@ For remote joins, Parley only reports the room id, descriptor, and local port. I
    "$PARLEY" send --session "<session-id>" "<message>"
    ```
 
-7. Leave the room:
+7. Send files as room artifacts:
+
+   ```sh
+   "$PARLEY" send --session "<session-id>" --file trace.json "please inspect this"
+   "$PARLEY" send --session "<session-id>" --file trace.json
+   ```
+
+   File-only sends are valid. Messages with no text and no files are invalid. Artifact metadata appears inline in `inbox` and `history`; artifact bytes are fetched separately.
+
+8. Fetch artifacts by id:
+
+   ```sh
+   "$PARLEY" artifact fetch --session "<session-id>" art_123
+   "$PARLEY" artifact fetch --session "<session-id>" art_123 art_456 --out ./parley-artifacts
+   ```
+
+   Fetch accepts artifact ids only, supports multiple ids, and reports per-artifact results. It does not overwrite existing files. Use `info` to rediscover artifact endpoint metadata and limits.
+
+9. Leave the room:
 
    ```sh
    "$PARLEY" leave --session "<session-id>"
    ```
 
-8. Recover local session handles:
+10. Recover local session handles:
 
    ```sh
    "$PARLEY" sessions
@@ -78,6 +96,6 @@ For remote joins, Parley only reports the room id, descriptor, and local port. I
 
 ## JSON Outputs
 
-All commands emit status-first JSON. Successful commands omit top-level `ok` and include a machine-readable `status` such as `started`, `joined`, `invite`, `sessions`, `unread`, `empty`, `ready`, `timeout`, `sent`, `left`, `history`, or `online`. Errors emit `status: "error"` to stderr with an `error` object and a machine-readable code.
+All commands emit status-first JSON. Successful commands omit top-level `ok` and include a machine-readable `status` such as `started`, `joined`, `invite`, `sessions`, `unread`, `empty`, `ready`, `timeout`, `sent`, `downloaded`, `partial`, `left`, `history`, or `online`. Errors emit `status: "error"` to stderr with an `error` object and a machine-readable code.
 
 Use `inbox` to consume unread events. Use `inbox --peek` when inspecting without advancing the seen cursor. Use `wait` to block until unread message events are available without consuming them. Use `--session <session-id>` on participant commands. If the session record is unavailable, use `--room <room-id> --name <participant>`.
