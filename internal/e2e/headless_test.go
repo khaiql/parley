@@ -547,7 +547,7 @@ func (h *AdapterHandle) waitForLocalMessage(text string, afterSeq int64, timeout
 }
 
 func (h *AdapterHandle) hasLocalMessage(text string, afterSeq int64) (bool, error) {
-	events, err := eventlog.New(h.store.EventsPath).AfterSeq(afterSeq, 0)
+	events, err := h.store.EventsAfterSeq(afterSeq, 0)
 	if err != nil {
 		return false, err
 	}

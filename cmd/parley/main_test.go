@@ -1084,7 +1084,7 @@ func TestArtifactFetchMissingParentFails(t *testing.T) {
 
 func TestArtifactFetchDefaultDirUsesFreshCollisionSafePath(t *testing.T) {
 	rt := newArtifactFetchRuntimeForTest(t, map[string]string{"art_one": "trace.json"})
-	defaultDir := filepath.Join(filepath.Dir(rt.store.MetaPath), "downloads")
+	defaultDir := rt.store.DefaultDownloadsDir()
 	if err := os.MkdirAll(defaultDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll downloads: %v", err)
 	}

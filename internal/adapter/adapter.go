@@ -26,12 +26,24 @@ type Meta struct {
 }
 
 type Store struct {
-	MetaPath   string
-	EventsPath string
+	metaPath   string
+	eventsPath string
 }
 
 func NewStore(metaPath, eventsPath string) *Store {
-	return &Store{MetaPath: metaPath, EventsPath: eventsPath}
+	return &Store{metaPath: metaPath, eventsPath: eventsPath}
+}
+
+func (s *Store) DefaultDownloadsDir() string {
+	return filepath.Join(filepath.Dir(s.metaPath), "downloads")
+}
+
+func (s *Store) EventsAfterSeq(seq int64, limit int) ([]model.Event, error) {
+	return eventlog.New(s.eventsPath).AfterSeq(seq, limit)
+}
+
+func (s *Store) ReadEvents() ([]model.Event, error) {
+	return eventlog.New(s.eventsPath).ReadAll()
 }
 
 func (s *Store) LoadMeta() (Meta, error) {
@@ -44,7 +56,7 @@ func (s *Store) LoadMeta() (Meta, error) {
 }
 
 func (s *Store) loadMeta() (Meta, error) {
-	data, err := os.ReadFile(s.MetaPath)
+	data, err := os.ReadFile(s.metaPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return Meta{}, nil
 	}
@@ -82,7 +94,7 @@ func (s *Store) saveMetaMerged(meta Meta) error {
 }
 
 func (s *Store) writeMeta(meta Meta) error {
-	dir := filepath.Dir(s.MetaPath)
+	dir := filepath.Dir(s.metaPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -109,7 +121,7 @@ func (s *Store) writeMeta(meta Meta) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, s.MetaPath)
+	return os.Rename(tmpPath, s.metaPath)
 }
 
 func (s *Store) AppendLocal(ev model.Event) error {
@@ -127,7 +139,7 @@ func (s *Store) AppendLocal(ev model.Event) error {
 	if err != nil {
 		return err
 	}
-	log := eventlog.New(s.EventsPath)
+	log := eventlog.New(s.eventsPath)
 	events, err := log.ReadAll()
 	if err != nil {
 		return err
@@ -171,7 +183,7 @@ func (s *Store) Inbox(peek bool) ([]model.Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	events, err := eventlog.New(s.EventsPath).AfterSeq(meta.LastSeenSeq, 0)
+	events, err := eventlog.New(s.eventsPath).AfterSeq(meta.LastSeenSeq, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +213,7 @@ func (s *Store) WaitReadyBatch(self string) ([]model.Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	events, err := eventlog.New(s.EventsPath).AfterSeq(meta.LastSeenSeq, 0)
+	events, err := eventlog.New(s.eventsPath).AfterSeq(meta.LastSeenSeq, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +245,7 @@ func (s *Store) MarkSeenThrough(seq int64) error {
 	if seq <= meta.LastSeenSeq {
 		return nil
 	}
-	events, err := eventlog.New(s.EventsPath).AfterSeq(meta.LastSeenSeq, 0)
+	events, err := eventlog.New(s.eventsPath).AfterSeq(meta.LastSeenSeq, 0)
 	if err != nil {
 		return err
 	}
@@ -275,7 +287,7 @@ func (s *Store) TakeUnseenThrough(seq int64) ([]model.Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	events, err := eventlog.New(s.EventsPath).AfterSeq(meta.LastSeenSeq, 0)
+	events, err := eventlog.New(s.eventsPath).AfterSeq(meta.LastSeenSeq, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +342,7 @@ func sameEvent(a, b model.Event) bool {
 }
 
 func (s *Store) writeEvents(events []model.Event) (err error) {
-	dir := filepath.Dir(s.EventsPath)
+	dir := filepath.Dir(s.eventsPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -355,15 +367,15 @@ func (s *Store) writeEvents(events []model.Event) (err error) {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, s.EventsPath)
+	return os.Rename(tmpPath, s.eventsPath)
 }
 
 func (s *Store) lock() (func(), error) {
-	dir := filepath.Dir(s.MetaPath)
+	dir := filepath.Dir(s.metaPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(s.MetaPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(s.metaPath+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}

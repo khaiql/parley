@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/khaiql/parley/internal/artifact"
-	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
 	"github.com/khaiql/parley/internal/protocol"
 )
@@ -30,8 +29,8 @@ var nameRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_-]*$`)
 type Config struct {
 	RoomID            string
 	Topic             string
-	Log               *eventlog.Log
-	ArtifactStore     *artifact.Store
+	Log               EventLog
+	ArtifactStore     ArtifactRepository
 	ArtifactLocalPort int
 	ArtifactPath      string
 	ArtifactLimits    artifact.Limits
@@ -40,8 +39,8 @@ type Config struct {
 type Server struct {
 	listener  net.Listener
 	cfg       Config
-	log       *eventlog.Log
-	artifacts *artifact.Store
+	log       EventLog
+	artifacts ArtifactRepository
 
 	mu           sync.Mutex
 	participants map[string]model.Participant

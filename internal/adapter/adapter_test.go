@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
 )
 
@@ -277,7 +276,7 @@ func TestAppendLocalPreservesSequenceAndUpdatesLastReceivedSeq(t *testing.T) {
 	if meta.LastReceivedSeq != 10 {
 		t.Fatalf("LastReceivedSeq = %d, want 10", meta.LastReceivedSeq)
 	}
-	events, err := eventlog.New(store.EventsPath).ReadAll()
+	events, err := store.ReadEvents()
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
@@ -293,7 +292,7 @@ func TestAppendLocalIsIdempotentForExistingSequence(t *testing.T) {
 	mustAppendLocal(t, store, ev)
 	mustAppendLocal(t, store, ev)
 
-	events, err := eventlog.New(store.EventsPath).ReadAll()
+	events, err := store.ReadEvents()
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
@@ -318,7 +317,7 @@ func TestAppendLocalRejectsConflictingDuplicateSequence(t *testing.T) {
 		t.Fatal("AppendLocal conflicting seq succeeded, want error")
 	}
 
-	events, readErr := eventlog.New(store.EventsPath).ReadAll()
+	events, readErr := store.ReadEvents()
 	if readErr != nil {
 		t.Fatalf("ReadAll: %v", readErr)
 	}
@@ -335,7 +334,7 @@ func TestAppendLocalInsertsOutOfOrderSequence(t *testing.T) {
 		t.Fatalf("AppendLocal out-of-order seq: %v", err)
 	}
 
-	events, err := eventlog.New(store.EventsPath).ReadAll()
+	events, err := store.ReadEvents()
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}

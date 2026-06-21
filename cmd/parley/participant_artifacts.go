@@ -291,7 +291,7 @@ func (rt *participantAdapterRuntime) fetchArtifact(id, out string, multiple bool
 
 func (rt *participantAdapterRuntime) artifactOutputPath(out, name string, multiple bool) (string, error) {
 	if out == "" {
-		dir := filepath.Join(filepath.Dir(rt.store.MetaPath), "downloads")
+		dir := rt.store.DefaultDownloadsDir()
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", err
 		}

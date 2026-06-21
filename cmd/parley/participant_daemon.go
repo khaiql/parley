@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/khaiql/parley/internal/adapter"
-	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
 	"github.com/khaiql/parley/internal/paths"
 	"github.com/khaiql/parley/internal/protocol"
@@ -315,7 +314,7 @@ func (rt *participantAdapterRuntime) waitForEvent(afterSeq int64, timeout time.D
 	defer timer.Stop()
 
 	for {
-		events, err := eventlog.New(rt.store.EventsPath).AfterSeq(afterSeq, 0)
+		events, err := rt.store.EventsAfterSeq(afterSeq, 0)
 		if err != nil {
 			return model.Event{}, err
 		}
