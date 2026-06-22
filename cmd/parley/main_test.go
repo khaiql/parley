@@ -1173,6 +1173,71 @@ func TestSessionsIncludesArtifactEndpointFields(t *testing.T) {
 	}
 }
 
+func TestStatusEnvelopeDoesNotReportStaleSocketsAsRunning(t *testing.T) {
+	p := useShortParleyHome(t)
+	part := participation{paths: p, room: "room-1", name: "codex"}
+	createStaleUnixSocketForTest(t, parleyRuntime.ParticipantSocketPath(p, "room-1", "codex"))
+	createStaleUnixSocketForTest(t, parleyRuntime.ServerSocketPath(p, "room-1"))
+
+	got := statusEnvelope(part, adapter.Meta{Status: "disconnected"})
+	if got.AdapterRunning || got.ServerRunning {
+		t.Fatalf("status = %#v, want stale sockets reported as not running", got)
+	}
+}
+
+func TestStatusEnvelopeReportsReachableControlSocketsAsRunning(t *testing.T) {
+	p := useShortParleyHome(t)
+	part := participation{paths: p, room: "room-1", name: "codex"}
+	serveControlSocketForStatusTest(t, parleyRuntime.ParticipantSocketPath(p, "room-1", "codex"))
+	serveControlSocketForStatusTest(t, parleyRuntime.ServerSocketPath(p, "room-1"))
+
+	deadline := time.Now().Add(2 * time.Second)
+	var got participantStatusEnvelope
+	for time.Now().Before(deadline) {
+		got = statusEnvelope(part, adapter.Meta{Status: "online"})
+		if got.AdapterRunning && got.ServerRunning {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("status = %#v, want reachable sockets reported as running", got)
+}
+
+func createStaleUnixSocketForTest(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("Listen unix: %v", err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close listener: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+}
+
+func serveControlSocketForStatusTest(t *testing.T, path string) {
+	t.Helper()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.ServeControl(path, func(req adapter.ControlRequest) adapter.ControlResponse {
+			if req.Type != "status" {
+				return adapter.ControlResponse{OK: false, Error: "unexpected request: " + req.Type}
+			}
+			return adapter.ControlResponse{OK: true}
+		})
+	}()
+	t.Cleanup(func() {
+		_ = os.Remove(path)
+		select {
+		case <-errCh:
+		default:
+		}
+	})
+}
+
 func newArtifactFetchRuntimeForTest(t *testing.T, names map[string]string) *participantAdapterRuntime {
 	t.Helper()
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -603,16 +603,16 @@ func statusResponse(part participation, meta adapter.Meta) interface{} {
 func statusEnvelope(part participation, meta adapter.Meta) participantStatusEnvelope {
 	return participantStatusEnvelope{
 		ParticipantStatus: meta.Status,
-		AdapterRunning:    socketExists(parleyRuntime.ParticipantSocketPath(part.paths, part.room, part.name)),
-		ServerRunning:     socketExists(parleyRuntime.ServerSocketPath(part.paths, part.room)),
+		AdapterRunning:    controlSocketReady(parleyRuntime.ParticipantSocketPath(part.paths, part.room, part.name)),
+		ServerRunning:     controlSocketReady(parleyRuntime.ServerSocketPath(part.paths, part.room)),
 		LastReceivedSeq:   meta.LastReceivedSeq,
 		LastSeenSeq:       meta.LastSeenSeq,
 	}
 }
 
-func socketExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode()&os.ModeSocket != 0
+func controlSocketReady(path string) bool {
+	resp, err := adapter.CallControl(path, adapter.ControlRequest{Type: "status"})
+	return err == nil && resp.OK
 }
 
 func validateSendFiles(files []string) ([]adapter.ArtifactFileResult, error) {
