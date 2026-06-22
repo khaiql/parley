@@ -12,8 +12,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/khaiql/parley/internal/adapter"
+	"github.com/khaiql/parley/internal/artifact"
 	"github.com/khaiql/parley/internal/descriptor"
 	"github.com/khaiql/parley/internal/eventlog"
+	"github.com/khaiql/parley/internal/jsonout"
 	"github.com/khaiql/parley/internal/model"
 	"github.com/khaiql/parley/internal/paths"
 	parleyRuntime "github.com/khaiql/parley/internal/runtime"
@@ -67,18 +69,38 @@ func sendCmd() *cobra.Command {
 	var roomID string
 	var name string
 	var sessionID string
+	var files []string
 
 	cmd := &cobra.Command{
-		Use:   "send <message>",
+		Use:   "send [message]",
 		Short: "Send a message to the room",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) != 1 {
-				return writeJSONError(cmd, "invalid_arguments", "send requires exactly one message argument")
+			if len(args) > 1 {
+				return writeJSONError(cmd, "invalid_arguments", "send accepts at most one message argument")
 			}
-			return callParticipantControl(cmd, roomID, name, sessionID, adapter.ControlRequest{Type: "send", Text: args[0]})
+			text := ""
+			if len(args) == 1 {
+				text = args[0]
+			}
+			if text == "" && len(files) == 0 {
+				return writeJSONError(cmd, "invalid_arguments", "send requires a message or at least one --file")
+			}
+			fileResults, err := validateSendFiles(files)
+			if err != nil {
+				code := "invalid_artifacts"
+				message := err.Error()
+				var artifactErr artifact.Error
+				if errors.As(err, &artifactErr) {
+					code = artifactErr.Code
+					message = artifactErr.Message
+				}
+				return writeArtifactSendError(cmd, code, message, fileResults)
+			}
+			return callParticipantControl(cmd, roomID, name, sessionID, adapter.ControlRequest{Type: "send", Text: text, Files: files})
 		},
 	}
+	cmd.Flags().StringArrayVar(&files, "file", nil, "File artifact to send")
 	addParticipationFlags(cmd, &roomID, &name, &sessionID)
 	return cmd
 }
@@ -306,12 +328,44 @@ func callParticipantControl(cmd *cobra.Command, roomID, name, sessionID string, 
 		return writeJSONError(cmd, "adapter_not_running", fmt.Sprintf("participant adapter socket is not reachable: %v", err))
 	}
 	if !resp.OK {
+		if req.Type == "send" && len(req.Files) > 0 {
+			return writeArtifactSendError(cmd, "artifact_upload_failed", resp.Error, resp.Files)
+		}
 		return writeJSONError(cmd, "adapter_error", resp.Error)
 	}
 	if req.Type == "wait" && resp.Status == "" {
 		resp.Status = "ready"
 	}
 	return writeJSON(cmd, resp)
+}
+
+func writeArtifactSendError(cmd *cobra.Command, code, message string, files []adapter.ArtifactFileResult) error {
+	if strings.TrimSpace(message) == "" {
+		message = "one or more artifacts failed to upload; no message was sent"
+	}
+	resp := struct {
+		Status string `json:"status"`
+		Error  struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+		Files            []adapter.ArtifactFileResult `json:"files,omitempty"`
+		MessageCommitted bool                         `json:"message_committed"`
+	}{
+		Status:           "error",
+		Files:            files,
+		MessageCommitted: false,
+	}
+	resp.Error.Code = code
+	resp.Error.Message = message
+	out, err := jsonout.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(cmd.OutOrStderr(), string(out)); err != nil {
+		return err
+	}
+	return cliError{code: code, message: message}
 }
 
 func isTimeout(err error) bool {
@@ -497,6 +551,9 @@ func infoResponse(part participation, room parleyRuntime.RoomRuntime, meta adapt
 		Descriptor        string                    `json:"descriptor,omitempty"`
 		LocalHost         string                    `json:"local_host,omitempty"`
 		LocalPort         int                       `json:"local_port,omitempty"`
+		ArtifactLocalPort int                       `json:"artifact_local_port,omitempty"`
+		ArtifactPath      string                    `json:"artifact_path,omitempty"`
+		ArtifactLimits    interface{}               `json:"artifact_limits,omitempty"`
 		ActiveParticipant string                    `json:"active_participant,omitempty"`
 		Participant       adapter.Meta              `json:"participant"`
 		State             participantStatusEnvelope `json:"state"`
@@ -506,6 +563,9 @@ func infoResponse(part participation, room parleyRuntime.RoomRuntime, meta adapt
 		Descriptor:        desc,
 		LocalHost:         room.LocalHost,
 		LocalPort:         room.LocalPort,
+		ArtifactLocalPort: room.ArtifactLocalPort,
+		ArtifactPath:      room.ArtifactPath,
+		ArtifactLimits:    room.ArtifactLimits,
 		ActiveParticipant: part.name,
 		Participant:       meta,
 		State:             statusEnvelope(part, meta),
@@ -543,14 +603,64 @@ func statusResponse(part participation, meta adapter.Meta) interface{} {
 func statusEnvelope(part participation, meta adapter.Meta) participantStatusEnvelope {
 	return participantStatusEnvelope{
 		ParticipantStatus: meta.Status,
-		AdapterRunning:    socketExists(parleyRuntime.ParticipantSocketPath(part.paths, part.room, part.name)),
-		ServerRunning:     socketExists(parleyRuntime.ServerSocketPath(part.paths, part.room)),
+		AdapterRunning:    controlSocketReady(parleyRuntime.ParticipantSocketPath(part.paths, part.room, part.name)),
+		ServerRunning:     controlSocketReady(parleyRuntime.ServerSocketPath(part.paths, part.room)),
 		LastReceivedSeq:   meta.LastReceivedSeq,
 		LastSeenSeq:       meta.LastSeenSeq,
 	}
 }
 
-func socketExists(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode()&os.ModeSocket != 0
+func controlSocketReady(path string) bool {
+	resp, err := adapter.CallControl(path, adapter.ControlRequest{Type: "status"})
+	return err == nil && resp.OK
+}
+
+func validateSendFiles(files []string) ([]adapter.ArtifactFileResult, error) {
+	if len(files) > artifact.MaxFilesPerMessage {
+		err := artifact.Error{Code: "too_many_artifacts", Message: fmt.Sprintf("at most %d artifacts are allowed", artifact.MaxFilesPerMessage)}
+		return artifactErrorResults(files, err), err
+	}
+	var total int64
+	var validationErrs []error
+	results := make([]adapter.ArtifactFileResult, 0, len(files))
+	for _, path := range files {
+		info, err := artifact.ValidateLocalFile(path)
+		if err != nil {
+			validationErrs = append(validationErrs, err)
+			results = append(results, artifactFileErrorResult(path, err))
+			continue
+		}
+		total += info.Size
+		if total > artifact.MaxTotalBytesPerMessage {
+			err := artifact.Error{Code: "artifact_batch_too_large", Message: fmt.Sprintf("artifact batch exceeds %d bytes", artifact.MaxTotalBytesPerMessage)}
+			return artifactErrorResults(files, err), err
+		}
+	}
+	if len(validationErrs) == 1 {
+		return results, validationErrs[0]
+	}
+	if len(validationErrs) > 1 {
+		messages := make([]string, 0, len(validationErrs))
+		for _, err := range validationErrs {
+			messages = append(messages, err.Error())
+		}
+		return results, artifact.Error{Code: "invalid_artifacts", Message: strings.Join(messages, "; ")}
+	}
+	return nil, nil
+}
+
+func artifactErrorResults(files []string, err error) []adapter.ArtifactFileResult {
+	results := make([]adapter.ArtifactFileResult, 0, len(files))
+	for _, path := range files {
+		results = append(results, artifactFileErrorResult(path, err))
+	}
+	return results
+}
+
+func artifactFileErrorResult(path string, err error) adapter.ArtifactFileResult {
+	return adapter.ArtifactFileResult{
+		Path:   path,
+		Status: "error",
+		Error:  controlErrorFromError(err, "invalid_artifacts"),
+	}
 }

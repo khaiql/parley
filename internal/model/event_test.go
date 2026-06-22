@@ -30,3 +30,20 @@ func TestMessagePayloadMentions(t *testing.T) {
 		t.Fatalf("mentions = %#v, want [codex]", payload.Mentions)
 	}
 }
+
+func TestMessagePayloadArtifactsPreserveOrder(t *testing.T) {
+	payload := MessagePayload{
+		Text: "compare these",
+		Artifacts: []ArtifactMetadata{
+			{ID: "art_before", Name: "before.log", Size: 3, SHA256: "abc"},
+			{ID: "art_after", Name: "after.log", Size: 5, SHA256: "def"},
+		},
+	}
+
+	if len(payload.Artifacts) != 2 {
+		t.Fatalf("artifacts = %#v, want two entries", payload.Artifacts)
+	}
+	if payload.Artifacts[0].ID != "art_before" || payload.Artifacts[1].ID != "art_after" {
+		t.Fatalf("artifact order = %#v, want CLI order", payload.Artifacts)
+	}
+}

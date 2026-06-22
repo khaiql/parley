@@ -18,18 +18,59 @@ const (
 )
 
 type ControlRequest struct {
-	Type    string `json:"type"`
-	Text    string `json:"text,omitempty"`
-	Peek    bool   `json:"peek,omitempty"`
-	Limit   int    `json:"limit,omitempty"`
-	Timeout string `json:"timeout,omitempty"`
+	Type        string   `json:"type"`
+	Text        string   `json:"text,omitempty"`
+	Files       []string `json:"files,omitempty"`
+	ArtifactIDs []string `json:"artifact_ids,omitempty"`
+	Out         string   `json:"out,omitempty"`
+	Peek        bool     `json:"peek,omitempty"`
+	Limit       int      `json:"limit,omitempty"`
+	Timeout     string   `json:"timeout,omitempty"`
 }
 
 type ControlResponse struct {
-	OK     bool          `json:"ok"`
-	Status string        `json:"status,omitempty"`
-	Events []model.Event `json:"events,omitempty"`
-	Error  string        `json:"error,omitempty"`
+	OK               bool                   `json:"ok"`
+	Status           string                 `json:"status,omitempty"`
+	Events           []model.Event          `json:"events,omitempty"`
+	Results          []ArtifactFetchResult  `json:"results,omitempty"`
+	Files            []ArtifactFileResult   `json:"files,omitempty"`
+	Error            string                 `json:"error,omitempty"`
+	MessageCommitted *bool                  `json:"message_committed,omitempty"`
+	ArtifactShutdown string                 `json:"artifact_shutdown,omitempty"`
+	ArtifactCleanup  *ArtifactCleanupStatus `json:"artifact_cleanup,omitempty"`
+}
+
+type ControlError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e ControlError) Error() string {
+	if e.Message == "" {
+		return e.Code
+	}
+	if e.Code == "" {
+		return e.Message
+	}
+	return e.Code + ": " + e.Message
+}
+
+type ArtifactFileResult struct {
+	Path   string        `json:"path"`
+	Status string        `json:"status"`
+	Error  *ControlError `json:"error,omitempty"`
+}
+
+type ArtifactFetchResult struct {
+	ID     string        `json:"id"`
+	Status string        `json:"status"`
+	Path   string        `json:"path,omitempty"`
+	Error  *ControlError `json:"error,omitempty"`
+}
+
+type ArtifactCleanupStatus struct {
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
 }
 
 func ServeControl(socketPath string, handler func(ControlRequest) ControlResponse) error {

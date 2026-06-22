@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"github.com/khaiql/parley/internal/artifact"
+)
 
 type EventType string
 
@@ -39,15 +43,26 @@ type Participant struct {
 }
 
 type RoomMetadata struct {
-	RoomID    string `json:"room_id"`
-	Topic     string `json:"topic"`
-	LocalHost string `json:"local_host,omitempty"`
-	LocalPort int    `json:"local_port,omitempty"`
+	RoomID            string          `json:"room_id"`
+	Topic             string          `json:"topic"`
+	LocalHost         string          `json:"local_host,omitempty"`
+	LocalPort         int             `json:"local_port,omitempty"`
+	ArtifactLocalPort int             `json:"artifact_local_port,omitempty"`
+	ArtifactPath      string          `json:"artifact_path,omitempty"`
+	ArtifactLimits    artifact.Limits `json:"artifact_limits,omitempty"`
 }
 
 type MessagePayload struct {
-	Text     string   `json:"text"`
-	Mentions []string `json:"mentions,omitempty"`
+	Text      string             `json:"text"`
+	Mentions  []string           `json:"mentions,omitempty"`
+	Artifacts []ArtifactMetadata `json:"artifacts,omitempty"`
+}
+
+type ArtifactMetadata struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
 }
 
 type ParticipantPayload struct {

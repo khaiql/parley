@@ -12,24 +12,32 @@ import (
 	"strings"
 
 	"github.com/khaiql/parley/internal/adapter"
+	"github.com/khaiql/parley/internal/artifact"
 	"github.com/khaiql/parley/internal/descriptor"
 	"github.com/khaiql/parley/internal/paths"
 )
 
 type RoomRuntime struct {
-	RoomID    string `json:"room_id"`
-	Topic     string `json:"topic,omitempty"`
-	LocalHost string `json:"local_host"`
-	LocalPort int    `json:"local_port"`
-	ServerPID int    `json:"server_pid,omitempty"`
+	RoomID            string          `json:"room_id"`
+	Topic             string          `json:"topic,omitempty"`
+	LocalHost         string          `json:"local_host"`
+	LocalPort         int             `json:"local_port"`
+	ArtifactLocalPort int             `json:"artifact_local_port,omitempty"`
+	ArtifactPath      string          `json:"artifact_path,omitempty"`
+	ArtifactLimits    artifact.Limits `json:"artifact_limits,omitempty"`
+	ServerPID         int             `json:"server_pid,omitempty"`
 }
 
 type InviteResponse struct {
-	Status              string `json:"status"`
-	RoomID              string `json:"room_id"`
-	Descriptor          string `json:"descriptor"`
-	LocalHost           string `json:"local_host"`
-	LocalPort           int    `json:"local_port"`
+	Status            string          `json:"status"`
+	RoomID            string          `json:"room_id"`
+	Descriptor        string          `json:"descriptor"`
+	LocalHost         string          `json:"local_host"`
+	LocalPort         int             `json:"local_port"`
+	ArtifactLocalPort int             `json:"artifact_local_port,omitempty"`
+	ArtifactPath      string          `json:"artifact_path,omitempty"`
+	ArtifactLimits    artifact.Limits `json:"artifact_limits,omitempty"`
+
 	JoinCommandTemplate string `json:"join_command_template"`
 	AgentInstruction    string `json:"agent_instruction"`
 }
@@ -90,14 +98,21 @@ func Invite(p paths.Paths, roomID string) (InviteResponse, error) {
 		Port:   meta.LocalPort,
 		RoomID: meta.RoomID,
 	}.String()
+	instruction := fmt.Sprintf("Use your Parley skill to join this room: %s", desc)
+	if meta.ArtifactLocalPort != 0 {
+		instruction = fmt.Sprintf("Use your Parley skill to join this room: %s. Remote setup needs two reachable endpoints: room protocol port %d and artifact HTTP port %d.", desc, meta.LocalPort, meta.ArtifactLocalPort)
+	}
 	return InviteResponse{
 		Status:              "invite",
 		RoomID:              meta.RoomID,
 		Descriptor:          desc,
 		LocalHost:           meta.LocalHost,
 		LocalPort:           meta.LocalPort,
+		ArtifactLocalPort:   meta.ArtifactLocalPort,
+		ArtifactPath:        meta.ArtifactPath,
+		ArtifactLimits:      meta.ArtifactLimits,
 		JoinCommandTemplate: fmt.Sprintf("parley join %q --role <participant-role>", desc),
-		AgentInstruction:    fmt.Sprintf("Use your Parley skill to join this room: %s", desc),
+		AgentInstruction:    instruction,
 	}, nil
 }
 

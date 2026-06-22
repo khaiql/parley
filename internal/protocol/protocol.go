@@ -33,7 +33,8 @@ type JoinRequest struct {
 }
 
 type SendRequest struct {
-	Text string `json:"text"`
+	Text        string   `json:"text"`
+	ArtifactIDs []string `json:"artifact_ids,omitempty"`
 }
 
 type HistoryRequest struct {

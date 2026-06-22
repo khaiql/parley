@@ -58,6 +58,27 @@ func TestDecodeLineTrimsWhitespace(t *testing.T) {
 	}
 }
 
+func TestArtifactSendRequestRoundTripsStagedIDs(t *testing.T) {
+	req := Request{
+		Type: RequestSend,
+		Send: &SendRequest{Text: "ship it", ArtifactIDs: []string{"art_one", "art_two"}},
+	}
+	data, err := EncodeLine(req)
+	if err != nil {
+		t.Fatalf("EncodeLine: %v", err)
+	}
+	var got Request
+	if err := DecodeLine(data, &got); err != nil {
+		t.Fatalf("DecodeLine: %v", err)
+	}
+	if got.Send == nil || got.Send.Text != "ship it" {
+		t.Fatalf("send = %#v, want ship it", got.Send)
+	}
+	if len(got.Send.ArtifactIDs) != 2 || got.Send.ArtifactIDs[0] != "art_one" || got.Send.ArtifactIDs[1] != "art_two" {
+		t.Fatalf("artifact ids = %#v, want [art_one art_two]", got.Send.ArtifactIDs)
+	}
+}
+
 func TestRequestPayloadRoundTrips(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -68,11 +89,14 @@ func TestRequestPayloadRoundTrips(t *testing.T) {
 			name: "send",
 			req: Request{
 				Type: RequestSend,
-				Send: &SendRequest{Text: "ship it"},
+				Send: &SendRequest{Text: "ship it", ArtifactIDs: []string{"art_one", "art_two"}},
 			},
 			check: func(t *testing.T, got Request) {
 				if got.Type != RequestSend || got.Send == nil || got.Send.Text != "ship it" {
 					t.Fatalf("got = %#v", got)
+				}
+				if len(got.Send.ArtifactIDs) != 2 || got.Send.ArtifactIDs[0] != "art_one" || got.Send.ArtifactIDs[1] != "art_two" {
+					t.Fatalf("artifact ids = %#v, want [art_one art_two]", got.Send.ArtifactIDs)
 				}
 			},
 		},

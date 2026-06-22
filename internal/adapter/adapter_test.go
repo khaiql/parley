@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
 )
 
@@ -196,6 +195,51 @@ func TestWaitTimeoutShape(t *testing.T) {
 	_ = time.Second
 }
 
+func TestArtifactControlRequestJSON(t *testing.T) {
+	req := ControlRequest{
+		Type:        "artifact_fetch",
+		Text:        "inspect",
+		Files:       []string{"/tmp/trace.json"},
+		ArtifactIDs: []string{"art_one", "art_two"},
+		Out:         "/tmp/out",
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got ControlRequest
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.Type != "artifact_fetch" || got.Text != "inspect" || got.Out != "/tmp/out" {
+		t.Fatalf("request = %#v, want artifact fetch fields", got)
+	}
+	if len(got.Files) != 1 || got.Files[0] != "/tmp/trace.json" {
+		t.Fatalf("files = %#v, want trace path", got.Files)
+	}
+	if len(got.ArtifactIDs) != 2 || got.ArtifactIDs[0] != "art_one" || got.ArtifactIDs[1] != "art_two" {
+		t.Fatalf("artifact ids = %#v, want two ids", got.ArtifactIDs)
+	}
+}
+
+func TestArtifactEndpointStoredInParticipantMeta(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.SaveMeta(Meta{
+		RoomID:           "room-1",
+		Name:             "codex",
+		ArtifactEndpoint: "http://127.0.0.1:49232/rooms/room-1/artifacts",
+	}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	got, err := store.LoadMeta()
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	if got.ArtifactEndpoint != "http://127.0.0.1:49232/rooms/room-1/artifacts" {
+		t.Fatalf("artifact endpoint = %q", got.ArtifactEndpoint)
+	}
+}
+
 func TestSaveMetaPreservesMaxCursorValues(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.SaveMeta(Meta{Name: "fresh", LastReceivedSeq: 10, LastSeenSeq: 7}); err != nil {
@@ -232,7 +276,7 @@ func TestAppendLocalPreservesSequenceAndUpdatesLastReceivedSeq(t *testing.T) {
 	if meta.LastReceivedSeq != 10 {
 		t.Fatalf("LastReceivedSeq = %d, want 10", meta.LastReceivedSeq)
 	}
-	events, err := eventlog.New(store.EventsPath).ReadAll()
+	events, err := store.ReadEvents()
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
@@ -248,7 +292,7 @@ func TestAppendLocalIsIdempotentForExistingSequence(t *testing.T) {
 	mustAppendLocal(t, store, ev)
 	mustAppendLocal(t, store, ev)
 
-	events, err := eventlog.New(store.EventsPath).ReadAll()
+	events, err := store.ReadEvents()
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}
@@ -273,7 +317,7 @@ func TestAppendLocalRejectsConflictingDuplicateSequence(t *testing.T) {
 		t.Fatal("AppendLocal conflicting seq succeeded, want error")
 	}
 
-	events, readErr := eventlog.New(store.EventsPath).ReadAll()
+	events, readErr := store.ReadEvents()
 	if readErr != nil {
 		t.Fatalf("ReadAll: %v", readErr)
 	}
@@ -290,7 +334,7 @@ func TestAppendLocalInsertsOutOfOrderSequence(t *testing.T) {
 		t.Fatalf("AppendLocal out-of-order seq: %v", err)
 	}
 
-	events, err := eventlog.New(store.EventsPath).ReadAll()
+	events, err := store.ReadEvents()
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
 	}

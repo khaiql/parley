@@ -3,7 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,6 +17,8 @@ import (
 	"time"
 
 	"github.com/khaiql/parley/internal/adapter"
+	"github.com/khaiql/parley/internal/artifact"
+	"github.com/khaiql/parley/internal/descriptor"
 	"github.com/khaiql/parley/internal/eventlog"
 	"github.com/khaiql/parley/internal/model"
 	"github.com/khaiql/parley/internal/paths"
@@ -72,6 +79,102 @@ func useShortParleyHome(t *testing.T) paths.Paths {
 	})
 	t.Setenv("HOME", home)
 	return paths.New(filepath.Join(home, ".parley"))
+}
+
+func serveParticipantControlForMainTest(t *testing.T, p paths.Paths, roomID, name string, handler func(adapter.ControlRequest) adapter.ControlResponse) <-chan adapter.ControlRequest {
+	t.Helper()
+	store := adapter.NewStore(
+		parleyRuntime.ParticipantMetaPath(p, roomID, name),
+		parleyRuntime.ParticipantEventsPath(p, roomID, name),
+	)
+	if err := store.SaveMeta(adapter.Meta{RoomID: roomID, Name: name, Status: "online"}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	socketPath := parleyRuntime.ParticipantSocketPath(p, roomID, name)
+	requests := make(chan adapter.ControlRequest, 4)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.ServeControl(socketPath, func(req adapter.ControlRequest) adapter.ControlResponse {
+			requests <- req
+			return handler(req)
+		})
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-errCh:
+			t.Fatalf("ServeControl stopped: %v", err)
+		default:
+		}
+		conn, err := net.DialTimeout("unix", socketPath, 10*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return requests
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("control socket did not become ready")
+	return requests
+}
+
+func TestStopReportsArtifactShutdownAndCleanupStatus(t *testing.T) {
+	p := useShortParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	socketPath := parleyRuntime.ServerSocketPath(p, "room-1")
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.ServeControl(socketPath, func(req adapter.ControlRequest) adapter.ControlResponse {
+			if req.Type != "stop" {
+				return adapter.ControlResponse{OK: false, Error: "unexpected request"}
+			}
+			return adapter.ControlResponse{
+				OK:               true,
+				Status:           "stopping",
+				ArtifactShutdown: "requested",
+				ArtifactCleanup: &adapter.ArtifactCleanupStatus{
+					Status:  "pending",
+					Message: "artifact cleanup runs after stop is accepted",
+				},
+			}
+		})
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-errCh:
+			t.Fatalf("ServeControl stopped: %v", err)
+		default:
+		}
+		conn, err := net.DialTimeout("unix", socketPath, 10*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			goto ready
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("server control socket did not become ready")
+
+ready:
+	out, err := executeForTest("stop")
+	if err != nil {
+		t.Fatalf("stop: %v\n%s", err, out)
+	}
+	var body struct {
+		Status           string `json:"status"`
+		ArtifactShutdown string `json:"artifact_shutdown"`
+		ArtifactCleanup  struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+		} `json:"artifact_cleanup"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if body.Status != "stopping" || body.ArtifactShutdown != "requested" || body.ArtifactCleanup.Status == "" || body.ArtifactCleanup.Message == "" {
+		t.Fatalf("stop body = %#v", body)
+	}
 }
 
 func TestVersionJSON(t *testing.T) {
@@ -480,6 +583,691 @@ func TestSendSessionMissingSocketReturnsAdapterNotRunningJSON(t *testing.T) {
 	assertJSONErrorCode(t, out, "adapter_not_running")
 }
 
+func TestSendWithFilePassesFilesAndMessageToAdapter(t *testing.T) {
+	p := useShortParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	tracePath := filepath.Join(t.TempDir(), "trace.json")
+	if err := os.WriteFile(tracePath, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write trace: %v", err)
+	}
+	requests := serveParticipantControlForMainTest(t, p, "room-1", "codex", func(req adapter.ControlRequest) adapter.ControlResponse {
+		if req.Type != "send" {
+			return adapter.ControlResponse{OK: false, Error: "unexpected request"}
+		}
+		return adapter.ControlResponse{OK: true, Status: "sent"}
+	})
+
+	out, err := executeForTest("send", "--file", tracePath, "inspect")
+	if err != nil {
+		t.Fatalf("send --file: %v\n%s", err, out)
+	}
+	req := <-requests
+	if req.Text != "inspect" || len(req.Files) != 1 || req.Files[0] != tracePath {
+		t.Fatalf("control request = %#v, want message and file path", req)
+	}
+	assertTopLevelStatus(t, out, "sent")
+}
+
+func TestSendFileOnlyIsValid(t *testing.T) {
+	p := useShortParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	tracePath := filepath.Join(t.TempDir(), "trace.json")
+	if err := os.WriteFile(tracePath, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write trace: %v", err)
+	}
+	requests := serveParticipantControlForMainTest(t, p, "room-1", "codex", func(req adapter.ControlRequest) adapter.ControlResponse {
+		return adapter.ControlResponse{OK: true, Status: "sent"}
+	})
+
+	out, err := executeForTest("send", "--file", tracePath)
+	if err != nil {
+		t.Fatalf("send file only: %v\n%s", err, out)
+	}
+	req := <-requests
+	if req.Text != "" || len(req.Files) != 1 || req.Files[0] != tracePath {
+		t.Fatalf("control request = %#v, want file-only send", req)
+	}
+}
+
+func TestSendFileRejectsDirectoryAndSymlink(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	out, err := executeForTest("send", "--file", dir, "inspect")
+	if err == nil {
+		t.Fatalf("expected directory send to fail\n%s", out)
+	}
+	assertArtifactSendValidationError(t, out, dir, "artifact_must_be_file")
+
+	out, err = executeForTest("send", "--file", link, "inspect")
+	if err == nil {
+		t.Fatalf("expected symlink send to fail\n%s", out)
+	}
+	assertArtifactSendValidationError(t, out, link, "artifact_must_be_regular_file")
+}
+
+func TestSendFileValidationReportsAllErrorsAndSkipsAdapter(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(target, []byte("data"), 0o600); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	link := filepath.Join(dir, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	out, err := executeForTest("send", "--file", dir, "--file", link, "inspect")
+	if err == nil {
+		t.Fatalf("expected invalid send to fail\n%s", out)
+	}
+	assertJSONErrorCode(t, out, "invalid_artifacts")
+	assertArtifactSendValidationError(t, out, dir, "artifact_must_be_file")
+	assertArtifactSendValidationError(t, out, link, "artifact_must_be_regular_file")
+}
+
+func TestSendFileValidationReportsTooLargeAndBatchLimitAsFileErrors(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	dir := t.TempDir()
+	tooLarge := filepath.Join(dir, "too-large.bin")
+	if err := os.WriteFile(tooLarge, []byte(""), 0o600); err != nil {
+		t.Fatalf("write too large file: %v", err)
+	}
+	if err := os.Truncate(tooLarge, artifact.MaxFileBytes+1); err != nil {
+		t.Fatalf("truncate too large file: %v", err)
+	}
+
+	out, err := executeForTest("send", "--file", tooLarge, "inspect")
+	if err == nil {
+		t.Fatalf("expected too-large send to fail\n%s", out)
+	}
+	assertArtifactSendValidationError(t, out, tooLarge, "artifact_too_large")
+
+	var files []string
+	args := []string{"send"}
+	for i := 0; i < artifact.MaxFilesPerMessage+1; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("file-%02d.txt", i))
+		if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
+			t.Fatalf("write batch file: %v", err)
+		}
+		files = append(files, path)
+		args = append(args, "--file", path)
+	}
+	args = append(args, "inspect")
+
+	out, err = executeForTest(args...)
+	if err == nil {
+		t.Fatalf("expected too-many-artifacts send to fail\n%s", out)
+	}
+	assertArtifactSendValidationError(t, out, files[0], "too_many_artifacts")
+}
+
+func TestSendFileValidationReportsOversizedBatchAsFileErrors(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	dir := t.TempDir()
+	var files []string
+	args := []string{"send"}
+	for i := 0; i < 3; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("large-%02d.bin", i))
+		if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
+			t.Fatalf("write large file: %v", err)
+		}
+		if err := os.Truncate(path, 90*1024*1024); err != nil {
+			t.Fatalf("truncate large file: %v", err)
+		}
+		files = append(files, path)
+		args = append(args, "--file", path)
+	}
+	args = append(args, "inspect")
+
+	out, err := executeForTest(args...)
+	if err == nil {
+		t.Fatalf("expected oversized batch send to fail\n%s", out)
+	}
+	assertArtifactSendValidationError(t, out, files[0], "artifact_batch_too_large")
+}
+
+func TestUploadFailureDoesNotExposeStagedIDsAndMarksMessageUncommitted(t *testing.T) {
+	p := useShortParleyHome(t)
+	if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: "psn_test", RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	tracePath := filepath.Join(t.TempDir(), "trace.json")
+	if err := os.WriteFile(tracePath, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write trace: %v", err)
+	}
+	serveParticipantControlForMainTest(t, p, "room-1", "codex", func(req adapter.ControlRequest) adapter.ControlResponse {
+		if req.Type != "send" {
+			return adapter.ControlResponse{OK: false, Error: "unexpected request"}
+		}
+		return adapter.ControlResponse{OK: false, Error: "one or more artifacts failed to upload; no message was sent"}
+	})
+
+	out, err := executeForTest("send", "--session", "psn_test", "--file", tracePath, "inspect")
+	if err == nil {
+		t.Fatalf("expected send failure\n%s", out)
+	}
+	var body struct {
+		Status           string `json:"status"`
+		MessageCommitted bool   `json:"message_committed"`
+		Error            struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if body.Status != "error" || body.Error.Code != "artifact_upload_failed" || body.MessageCommitted {
+		t.Fatalf("send failure body = %#v", body)
+	}
+	if strings.Contains(string(out), "art_") {
+		t.Fatalf("send failure exposed staged artifact id: %s", out)
+	}
+}
+
+func TestUploadFailureReportsFileLevelErrorsWithoutStagedIDs(t *testing.T) {
+	p := useShortParleyHome(t)
+	if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: "psn_test", RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	tracePath := filepath.Join(t.TempDir(), "trace.json")
+	if err := os.WriteFile(tracePath, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write trace: %v", err)
+	}
+	serveParticipantControlForMainTest(t, p, "room-1", "codex", func(req adapter.ControlRequest) adapter.ControlResponse {
+		if req.Type != "send" {
+			return adapter.ControlResponse{OK: false, Error: "unexpected request"}
+		}
+		return adapter.ControlResponse{
+			OK:    false,
+			Error: "one or more artifacts failed to upload; no message was sent",
+			Files: []adapter.ArtifactFileResult{{
+				Path:   tracePath,
+				Status: "error",
+				Error:  &adapter.ControlError{Code: "artifact_too_large", Message: "artifact exceeds limit"},
+			}},
+			MessageCommitted: boolPtr(false),
+		}
+	})
+
+	out, err := executeForTest("send", "--session", "psn_test", "--file", tracePath, "inspect")
+	if err == nil {
+		t.Fatalf("expected send failure\n%s", out)
+	}
+	var body struct {
+		Status           string `json:"status"`
+		MessageCommitted bool   `json:"message_committed"`
+		Files            []struct {
+			Path   string `json:"path"`
+			Status string `json:"status"`
+			Error  struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if body.Status != "error" || body.MessageCommitted || len(body.Files) != 1 {
+		t.Fatalf("send failure body = %#v", body)
+	}
+	if body.Files[0].Path != tracePath || body.Files[0].Status != "error" || body.Files[0].Error.Code != "artifact_too_large" || body.Files[0].Error.Message == "" {
+		t.Fatalf("file error = %#v", body.Files[0])
+	}
+	if strings.Contains(string(out), "art_") {
+		t.Fatalf("send failure exposed staged artifact id: %s", out)
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func TestAdapterSendInvalidBatchSkipsUploads(t *testing.T) {
+	var uploadCount int
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		uploadCount++
+		_ = json.NewEncoder(w).Encode(artifact.Metadata{ID: "art_uploaded", Name: "valid.txt"})
+	}))
+	defer httpSrv.Close()
+	dir := t.TempDir()
+	valid := filepath.Join(dir, "valid.txt")
+	if err := os.WriteFile(valid, []byte("valid"), 0o600); err != nil {
+		t.Fatalf("write valid: %v", err)
+	}
+	invalidDir := filepath.Join(dir, "not-a-file")
+	if err := os.Mkdir(invalidDir, 0o700); err != nil {
+		t.Fatalf("mkdir invalid dir: %v", err)
+	}
+	store := adapter.NewStore(filepath.Join(dir, "meta.json"), filepath.Join(dir, "events.jsonl"))
+	if err := store.SaveMeta(adapter.Meta{RoomID: "room-1", Name: "codex", ArtifactEndpoint: httpSrv.URL}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	rt := &participantAdapterRuntime{cfg: participantDaemonConfig{Name: "codex"}, store: store}
+
+	resp := rt.handleControl(adapter.ControlRequest{Type: "send", Text: "inspect", Files: []string{valid, invalidDir}})
+	if resp.OK {
+		t.Fatalf("response = %#v, want invalid batch failure", resp)
+	}
+	if uploadCount != 0 {
+		t.Fatalf("upload count = %d, want 0 for failed preflight", uploadCount)
+	}
+}
+
+func TestChangedFileDuringUploadFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "trace.json")
+	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			t.Fatalf("read upload body: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("after"), 0o600); err != nil {
+			t.Fatalf("mutate source: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(artifact.Metadata{ID: "art_uploaded", Name: "trace.json"})
+	}))
+	defer httpSrv.Close()
+	store := adapter.NewStore(filepath.Join(dir, "meta.json"), filepath.Join(dir, "events.jsonl"))
+	if err := store.SaveMeta(adapter.Meta{RoomID: "room-1", Name: "codex", ArtifactEndpoint: httpSrv.URL}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	rt := &participantAdapterRuntime{cfg: participantDaemonConfig{Name: "codex"}, store: store}
+
+	_, err := rt.uploadArtifact(path)
+	if err == nil {
+		t.Fatal("uploadArtifact succeeded after source mutation")
+	}
+	var controlErr adapter.ControlError
+	if !errors.As(err, &controlErr) || controlErr.Code != "artifact_upload_failed" {
+		t.Fatalf("uploadArtifact err = %v, want artifact_upload_failed", err)
+	}
+}
+
+func TestArtifactFetchAfterEndpointStopsReturnsEndpointError(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("still running"))
+	}))
+	endpoint := httpSrv.URL
+	httpSrv.Close()
+	dir := t.TempDir()
+	store := adapter.NewStore(filepath.Join(dir, "meta.json"), filepath.Join(dir, "events.jsonl"))
+	if err := store.SaveMeta(adapter.Meta{RoomID: "room-1", Name: "codex", ArtifactEndpoint: endpoint}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	rt := &participantAdapterRuntime{cfg: participantDaemonConfig{Name: "codex"}, store: store}
+
+	resp := rt.handleControl(adapter.ControlRequest{Type: "artifact_fetch", ArtifactIDs: []string{"art_one"}})
+	if !resp.OK || resp.Status != "error" || len(resp.Results) != 1 || resp.Results[0].Error == nil {
+		t.Fatalf("response = %#v, want per-artifact endpoint error", resp)
+	}
+	if resp.Results[0].Error.Code != "artifact_endpoint_unreachable" {
+		t.Fatalf("error = %#v, want artifact_endpoint_unreachable", resp.Results[0].Error)
+	}
+}
+
+func TestArtifactFetchPassesMultipleIDsToAdapter(t *testing.T) {
+	p := useShortParleyHome(t)
+	if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: "psn_test", RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	requests := serveParticipantControlForMainTest(t, p, "room-1", "codex", func(req adapter.ControlRequest) adapter.ControlResponse {
+		if req.Type != "artifact_fetch" {
+			return adapter.ControlResponse{OK: false, Error: "unexpected request"}
+		}
+		return adapter.ControlResponse{OK: true, Status: "downloaded"}
+	})
+
+	out, err := executeForTest("artifact", "fetch", "--session", "psn_test", "art_one", "art_two")
+	if err != nil {
+		t.Fatalf("artifact fetch: %v\n%s", err, out)
+	}
+	req := <-requests
+	if len(req.ArtifactIDs) != 2 || req.ArtifactIDs[0] != "art_one" || req.ArtifactIDs[1] != "art_two" {
+		t.Fatalf("artifact ids = %#v, want [art_one art_two]", req.ArtifactIDs)
+	}
+	assertTopLevelStatus(t, out, "downloaded")
+}
+
+func TestArtifactFetchMultipleIDsRejectsFileOut(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: "psn_test", RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	outFile := filepath.Join(t.TempDir(), "trace.json")
+	if err := os.WriteFile(outFile, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("write out file: %v", err)
+	}
+
+	out, err := executeForTest("artifact", "fetch", "--session", "psn_test", "--out", outFile, "art_one", "art_two")
+	if err == nil {
+		t.Fatalf("expected artifact fetch with file output to fail\n%s", out)
+	}
+	assertJSONErrorCode(t, out, "invalid_output_path")
+}
+
+func TestArtifactFetchAllFailuresReturnsErrorStatus(t *testing.T) {
+	rt := newArtifactFetchRuntimeForTest(t, nil)
+
+	resp := rt.handleControl(adapter.ControlRequest{
+		Type:        "artifact_fetch",
+		ArtifactIDs: []string{"art_missing", "art_gone"},
+	})
+	if !resp.OK {
+		t.Fatalf("response = %#v, want OK transport response", resp)
+	}
+	if resp.Status != "error" {
+		t.Fatalf("status = %q, want error for all failed fetches", resp.Status)
+	}
+	if len(resp.Results) != 2 || resp.Results[0].Status != "error" || resp.Results[1].Status != "error" {
+		t.Fatalf("results = %#v, want per-artifact errors", resp.Results)
+	}
+}
+
+func TestArtifactFetchFailureJSONUsesStructuredErrors(t *testing.T) {
+	rt := newArtifactFetchRuntimeForTest(t, nil)
+
+	resp := rt.handleControl(adapter.ControlRequest{
+		Type:        "artifact_fetch",
+		ArtifactIDs: []string{"art_missing"},
+	})
+	data, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var body struct {
+		Results []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Error  struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, data)
+	}
+	if len(body.Results) != 1 || body.Results[0].Error.Code != "artifact_unavailable" || body.Results[0].Error.Message == "" {
+		t.Fatalf("fetch response = %s, want structured artifact_unavailable error", data)
+	}
+}
+
+func TestArtifactFetchPartialResults(t *testing.T) {
+	rt := newArtifactFetchRuntimeForTest(t, map[string]string{"art_ok": "trace.json"})
+
+	resp := rt.handleControl(adapter.ControlRequest{
+		Type:        "artifact_fetch",
+		ArtifactIDs: []string{"art_ok", "art_missing"},
+	})
+	if !resp.OK {
+		t.Fatalf("response = %#v, want OK transport response", resp)
+	}
+	if resp.Status != "partial" {
+		t.Fatalf("status = %q, want partial", resp.Status)
+	}
+	if len(resp.Results) != 2 || resp.Results[0].Status != "downloaded" || resp.Results[1].Status != "error" {
+		t.Fatalf("results = %#v, want mixed download/error", resp.Results)
+	}
+}
+
+func TestArtifactFetchSingleIDExistingDirectoryWritesInsideDirectory(t *testing.T) {
+	rt := newArtifactFetchRuntimeForTest(t, map[string]string{"art_one": "trace.json"})
+	outDir := t.TempDir()
+
+	results := rt.fetchArtifacts([]string{"art_one"}, outDir)
+	if len(results) != 1 || results[0].Status != "downloaded" {
+		t.Fatalf("results = %#v, want one downloaded artifact", results)
+	}
+	want := filepath.Join(outDir, "trace.json")
+	if results[0].Path != want {
+		t.Fatalf("path = %q, want %q", results[0].Path, want)
+	}
+	if data, err := os.ReadFile(want); err != nil || string(data) != "bytes for art_one" {
+		t.Fatalf("read fetched artifact data = %q err = %v", data, err)
+	}
+}
+
+func TestArtifactFetchExplicitFileRefusesOverwrite(t *testing.T) {
+	rt := newArtifactFetchRuntimeForTest(t, map[string]string{"art_one": "trace.json"})
+	outFile := filepath.Join(t.TempDir(), "trace.json")
+	if err := os.WriteFile(outFile, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("write existing output: %v", err)
+	}
+
+	results := rt.fetchArtifacts([]string{"art_one"}, outFile)
+	if len(results) != 1 || results[0].Status != "error" {
+		t.Fatalf("results = %#v, want output overwrite error", results)
+	}
+	if data, err := os.ReadFile(outFile); err != nil || string(data) != "existing" {
+		t.Fatalf("existing output changed to %q err=%v", data, err)
+	}
+}
+
+func TestArtifactFetchMissingParentFails(t *testing.T) {
+	rt := newArtifactFetchRuntimeForTest(t, map[string]string{"art_one": "trace.json"})
+	outFile := filepath.Join(t.TempDir(), "missing", "trace.json")
+
+	results := rt.fetchArtifacts([]string{"art_one"}, outFile)
+	if len(results) != 1 || results[0].Status != "error" {
+		t.Fatalf("results = %#v, want missing parent error", results)
+	}
+}
+
+func TestArtifactFetchDefaultDirUsesFreshCollisionSafePath(t *testing.T) {
+	rt := newArtifactFetchRuntimeForTest(t, map[string]string{"art_one": "trace.json"})
+	defaultDir := rt.store.DefaultDownloadsDir()
+	if err := os.MkdirAll(defaultDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll downloads: %v", err)
+	}
+	existing := filepath.Join(defaultDir, "trace.json")
+	if err := os.WriteFile(existing, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("write existing default output: %v", err)
+	}
+
+	results := rt.fetchArtifacts([]string{"art_one"}, "")
+	if len(results) != 1 || results[0].Status != "downloaded" {
+		t.Fatalf("results = %#v, want downloaded collision-safe file", results)
+	}
+	if filepath.Base(results[0].Path) != "trace-1.json" {
+		t.Fatalf("path = %q, want trace-1.json", results[0].Path)
+	}
+	if data, err := os.ReadFile(existing); err != nil || string(data) != "existing" {
+		t.Fatalf("existing default output changed to %q err=%v", data, err)
+	}
+}
+
+func TestArtifactFetchDuplicateBasenamesUseCollisionSafeNames(t *testing.T) {
+	rt := newArtifactFetchRuntimeForTest(t, map[string]string{
+		"art_one": "trace.json",
+		"art_two": "trace.json",
+	})
+	outDir := filepath.Join(t.TempDir(), "downloads")
+
+	results := rt.fetchArtifacts([]string{"art_one", "art_two"}, outDir)
+	if len(results) != 2 || results[0].Status != "downloaded" || results[1].Status != "downloaded" {
+		t.Fatalf("results = %#v, want two downloaded artifacts", results)
+	}
+	if results[0].Path == results[1].Path {
+		t.Fatalf("duplicate basename paths matched: %#v", results)
+	}
+	if filepath.Base(results[0].Path) != "trace.json" || filepath.Base(results[1].Path) != "trace-1.json" {
+		t.Fatalf("paths = %q, %q; want collision-safe trace names", results[0].Path, results[1].Path)
+	}
+}
+
+func TestSessionsIncludesArtifactEndpointFields(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveRoomRuntime(p, parleyRuntime.RoomRuntime{
+		RoomID:            "room-1",
+		LocalHost:         "127.0.0.1",
+		LocalPort:         49231,
+		ArtifactLocalPort: 49232,
+		ArtifactPath:      "/rooms/room-1/artifacts",
+	}); err != nil {
+		t.Fatalf("SaveRoomRuntime: %v", err)
+	}
+	if err := parleyRuntime.SaveSession(p, parleyRuntime.Session{ID: "psn_test", RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+	store := adapter.NewStore(
+		parleyRuntime.ParticipantMetaPath(p, "room-1", "codex"),
+		parleyRuntime.ParticipantEventsPath(p, "room-1", "codex"),
+	)
+	if err := store.SaveMeta(adapter.Meta{
+		RoomID:           "room-1",
+		Name:             "codex",
+		Descriptor:       "parley://127.0.0.1:49231/room-1",
+		ArtifactEndpoint: "http://127.0.0.1:49232/rooms/room-1/artifacts",
+	}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+
+	out, err := executeForTest("sessions")
+	if err != nil {
+		t.Fatalf("sessions: %v\n%s", err, out)
+	}
+	var body struct {
+		Sessions []struct {
+			ArtifactEndpoint  string `json:"artifact_endpoint"`
+			ArtifactLocalPort int    `json:"artifact_local_port"`
+			ArtifactPath      string `json:"artifact_path"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if len(body.Sessions) != 1 || body.Sessions[0].ArtifactEndpoint != "http://127.0.0.1:49232/rooms/room-1/artifacts" {
+		t.Fatalf("sessions = %#v", body.Sessions)
+	}
+	if body.Sessions[0].ArtifactLocalPort != 49232 || body.Sessions[0].ArtifactPath != "/rooms/room-1/artifacts" {
+		t.Fatalf("artifact endpoint metadata = %#v", body.Sessions[0])
+	}
+}
+
+func TestStatusEnvelopeDoesNotReportStaleSocketsAsRunning(t *testing.T) {
+	p := useShortParleyHome(t)
+	part := participation{paths: p, room: "room-1", name: "codex"}
+	createStaleUnixSocketForTest(t, parleyRuntime.ParticipantSocketPath(p, "room-1", "codex"))
+	createStaleUnixSocketForTest(t, parleyRuntime.ServerSocketPath(p, "room-1"))
+
+	got := statusEnvelope(part, adapter.Meta{Status: "disconnected"})
+	if got.AdapterRunning || got.ServerRunning {
+		t.Fatalf("status = %#v, want stale sockets reported as not running", got)
+	}
+}
+
+func TestStatusEnvelopeReportsReachableControlSocketsAsRunning(t *testing.T) {
+	p := useShortParleyHome(t)
+	part := participation{paths: p, room: "room-1", name: "codex"}
+	serveControlSocketForStatusTest(t, parleyRuntime.ParticipantSocketPath(p, "room-1", "codex"))
+	serveControlSocketForStatusTest(t, parleyRuntime.ServerSocketPath(p, "room-1"))
+
+	deadline := time.Now().Add(2 * time.Second)
+	var got participantStatusEnvelope
+	for time.Now().Before(deadline) {
+		got = statusEnvelope(part, adapter.Meta{Status: "online"})
+		if got.AdapterRunning && got.ServerRunning {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("status = %#v, want reachable sockets reported as running", got)
+}
+
+func createStaleUnixSocketForTest(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("Listen unix: %v", err)
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close listener: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+}
+
+func serveControlSocketForStatusTest(t *testing.T, path string) {
+	t.Helper()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- adapter.ServeControl(path, func(req adapter.ControlRequest) adapter.ControlResponse {
+			if req.Type != "status" {
+				return adapter.ControlResponse{OK: false, Error: "unexpected request: " + req.Type}
+			}
+			return adapter.ControlResponse{OK: true}
+		})
+	}()
+	t.Cleanup(func() {
+		_ = os.Remove(path)
+		select {
+		case <-errCh:
+		default:
+		}
+	})
+}
+
+func newArtifactFetchRuntimeForTest(t *testing.T, names map[string]string) *participantAdapterRuntime {
+	t.Helper()
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := filepath.Base(r.URL.Path)
+		name, ok := names[id]
+		if !ok {
+			http.Error(w, `{"error":{"code":"artifact_unavailable","message":"artifact is not available"}}`, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+		_, _ = fmt.Fprintf(w, "bytes for %s", id)
+	}))
+	t.Cleanup(httpSrv.Close)
+
+	dir := t.TempDir()
+	store := adapter.NewStore(filepath.Join(dir, "meta.json"), filepath.Join(dir, "events.jsonl"))
+	if err := store.SaveMeta(adapter.Meta{
+		RoomID:           "room-1",
+		Name:             "codex",
+		ArtifactEndpoint: httpSrv.URL,
+	}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+	return &participantAdapterRuntime{
+		cfg:   participantDaemonConfig{Name: "codex"},
+		store: store,
+	}
+}
+
 func TestPartialParticipationFlagsDoNotMixWithActive(t *testing.T) {
 	p := useParleyHome(t)
 	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-a", Name: "codex"}); err != nil {
@@ -611,6 +1399,69 @@ func TestWaitDoesNotAdvanceSeenCursor(t *testing.T) {
 	}
 }
 
+func TestArtifactEndpointUsesDescriptorHost(t *testing.T) {
+	got := deriveArtifactEndpoint(
+		descriptor.Descriptor{Host: "tunnel.example", Port: 4000, RoomID: "room-1"},
+		parleyRuntime.RoomRuntime{RoomID: "room-1", ArtifactLocalPort: 5000, ArtifactPath: "/rooms/room-1/artifacts"},
+	)
+	if got != "http://tunnel.example:5000/rooms/room-1/artifacts" {
+		t.Fatalf("endpoint = %q, want descriptor host with artifact port", got)
+	}
+}
+
+func TestInfoIncludesArtifactEndpointMetadataAndLimits(t *testing.T) {
+	p := useParleyHome(t)
+	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
+		t.Fatalf("SaveActive: %v", err)
+	}
+	if err := parleyRuntime.SaveRoomRuntime(p, parleyRuntime.RoomRuntime{
+		RoomID:            "room-1",
+		LocalHost:         "127.0.0.1",
+		LocalPort:         49231,
+		ArtifactLocalPort: 49232,
+		ArtifactPath:      "/rooms/room-1/artifacts",
+		ArtifactLimits:    artifact.DefaultLimits(),
+	}); err != nil {
+		t.Fatalf("SaveRoomRuntime: %v", err)
+	}
+	store := adapter.NewStore(
+		parleyRuntime.ParticipantMetaPath(p, "room-1", "codex"),
+		parleyRuntime.ParticipantEventsPath(p, "room-1", "codex"),
+	)
+	if err := store.SaveMeta(adapter.Meta{
+		RoomID:           "room-1",
+		Name:             "codex",
+		ArtifactEndpoint: "http://127.0.0.1:49232/rooms/room-1/artifacts",
+	}); err != nil {
+		t.Fatalf("SaveMeta: %v", err)
+	}
+
+	out, err := executeForTest("info")
+	if err != nil {
+		t.Fatalf("info: %v\n%s", err, out)
+	}
+
+	var body struct {
+		Status            string          `json:"status"`
+		ArtifactLocalPort int             `json:"artifact_local_port"`
+		ArtifactPath      string          `json:"artifact_path"`
+		ArtifactLimits    artifact.Limits `json:"artifact_limits"`
+		Participant       adapter.Meta    `json:"participant"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json: %v\n%s", err, out)
+	}
+	if body.Status != "info" || body.ArtifactLocalPort != 49232 || body.ArtifactPath != "/rooms/room-1/artifacts" {
+		t.Fatalf("info artifact fields = %#v", body)
+	}
+	if body.ArtifactLimits != artifact.DefaultLimits() {
+		t.Fatalf("limits = %#v, want defaults", body.ArtifactLimits)
+	}
+	if body.Participant.ArtifactEndpoint != "http://127.0.0.1:49232/rooms/room-1/artifacts" {
+		t.Fatalf("participant endpoint = %q", body.Participant.ArtifactEndpoint)
+	}
+}
+
 func TestInfoCorruptRuntimeReturnsRuntimeError(t *testing.T) {
 	p := useParleyHome(t)
 	if err := parleyRuntime.SaveActive(p, parleyRuntime.ActiveParticipation{RoomID: "room-1", Name: "codex"}); err != nil {
@@ -705,11 +1556,14 @@ func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
 			t.Fatal("room daemon config missing room id")
 		}
 		if err := parleyRuntime.SaveRoomRuntime(p, parleyRuntime.RoomRuntime{
-			RoomID:    cfg.RoomID,
-			Topic:     cfg.Topic,
-			LocalHost: "127.0.0.1",
-			LocalPort: 49231,
-			ServerPID: 12345,
+			RoomID:            cfg.RoomID,
+			Topic:             cfg.Topic,
+			LocalHost:         "127.0.0.1",
+			LocalPort:         49231,
+			ServerPID:         12345,
+			ArtifactLocalPort: 49232,
+			ArtifactPath:      "/rooms/" + cfg.RoomID + "/artifacts",
+			ArtifactLimits:    artifact.DefaultLimits(),
 		}); err != nil {
 			t.Fatalf("SaveRoomRuntime: %v", err)
 		}
@@ -722,16 +1576,19 @@ func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
 	}
 
 	var body struct {
-		Status              string `json:"status"`
-		RoomID              string `json:"room_id"`
-		Name                string `json:"name"`
-		SessionID           string `json:"session_id"`
-		CommandArgs         string `json:"command_args"`
-		Descriptor          string `json:"descriptor"`
-		LocalPort           int    `json:"local_port"`
-		ServerPID           int    `json:"server_pid"`
-		JoinCommandTemplate string `json:"join_command_template"`
-		AgentInstruction    string `json:"agent_instruction"`
+		Status              string          `json:"status"`
+		RoomID              string          `json:"room_id"`
+		Name                string          `json:"name"`
+		SessionID           string          `json:"session_id"`
+		CommandArgs         string          `json:"command_args"`
+		Descriptor          string          `json:"descriptor"`
+		LocalPort           int             `json:"local_port"`
+		ArtifactLocalPort   int             `json:"artifact_local_port"`
+		ArtifactPath        string          `json:"artifact_path"`
+		ArtifactLimits      artifact.Limits `json:"artifact_limits"`
+		ServerPID           int             `json:"server_pid"`
+		JoinCommandTemplate string          `json:"join_command_template"`
+		AgentInstruction    string          `json:"agent_instruction"`
 	}
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
@@ -739,6 +1596,12 @@ func TestStartLaunchesRoomDaemonAndPrintsInvite(t *testing.T) {
 	assertNoTopLevelOK(t, out)
 	if body.Status != "started" || body.LocalPort != 49231 || body.ServerPID != 12345 {
 		t.Fatalf("start response = %#v", body)
+	}
+	if body.ArtifactLocalPort != 49232 || body.ArtifactPath != "/rooms/"+body.RoomID+"/artifacts" {
+		t.Fatalf("artifact endpoint fields = port %d path %q", body.ArtifactLocalPort, body.ArtifactPath)
+	}
+	if body.ArtifactLimits != artifact.DefaultLimits() {
+		t.Fatalf("artifact limits = %#v, want defaults", body.ArtifactLimits)
 	}
 	if body.Name != "codex" {
 		t.Fatalf("name = %q, want codex", body.Name)
@@ -987,4 +1850,45 @@ func assertJSONErrorCode(t *testing.T, out []byte, want string) {
 	if body.Error.Code != want {
 		t.Fatalf("error.code = %q, want %q\n%s", body.Error.Code, want, out)
 	}
+}
+
+func assertArtifactSendValidationError(t *testing.T, out []byte, wantPath, wantCode string) {
+	t.Helper()
+
+	var body struct {
+		Status           string `json:"status"`
+		MessageCommitted bool   `json:"message_committed"`
+		Error            struct {
+			Code string `json:"code"`
+		} `json:"error"`
+		Files []struct {
+			Path   string `json:"path"`
+			Status string `json:"status"`
+			Error  struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("json error: %v\n%s", err, out)
+	}
+	if body.Status != "error" || body.MessageCommitted {
+		t.Fatalf("artifact send status = %q committed = %v\n%s", body.Status, body.MessageCommitted, out)
+	}
+	if body.Error.Code == "" {
+		t.Fatalf("artifact send error code missing\n%s", out)
+	}
+	for _, file := range body.Files {
+		if file.Path == wantPath {
+			if file.Status != "error" || file.Error.Code != wantCode || file.Error.Message == "" {
+				t.Fatalf("file error = %#v, want code %q\n%s", file, wantCode, out)
+			}
+			if strings.Contains(string(out), "art_") {
+				t.Fatalf("send failure exposed staged artifact id: %s", out)
+			}
+			return
+		}
+	}
+	t.Fatalf("file error for %q not found\n%s", wantPath, out)
 }
