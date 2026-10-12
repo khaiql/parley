@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -20,6 +21,23 @@ import (
 	"github.com/khaiql/parley/internal/descriptor"
 	parleyRuntime "github.com/khaiql/parley/internal/runtime"
 )
+
+func validateArtifactEndpoint(raw, roomID string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid artifact endpoint: %w", err)
+	}
+	if u.Scheme != "http" || u.Hostname() == "" || u.User != nil ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") ||
+		u.Opaque != "" || u.Path != artifactHTTPPath(roomID) {
+		return fmt.Errorf("invalid artifact endpoint")
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("artifact endpoint requires a valid port")
+	}
+	return nil
+}
 
 func deriveArtifactEndpoint(desc descriptor.Descriptor, room parleyRuntime.RoomRuntime) string {
 	if room.ArtifactLocalPort == 0 {

@@ -81,6 +81,10 @@ func startParticipantDaemonProcess(cfg participantDaemonConfig) (int, error) {
 		args = append(args, "--repo", cfg.Repo)
 	}
 
+	if cfg.ArtifactEndpoint != "" {
+		args = append(args, "--artifact-endpoint", cfg.ArtifactEndpoint)
+	}
+
 	cmd := exec.Command(exe, args...)
 	cmd.Env = os.Environ()
 	cmd.Stdin = nil
