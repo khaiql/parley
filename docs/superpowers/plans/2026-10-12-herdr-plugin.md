@@ -24,11 +24,11 @@
 
 ## Review Focus
 
-- A Join queued twice or a lost result must not create a second participant/lease; Tasks 3 and 6.
+- Simultaneous distinct request IDs or direct/queued Join for one binding must return one session/lease without another CLI Join; Tasks 3 and 6.
 - One forward fails or a local port is occupied: roll back or remap, never announce usable endpoints early; Task 5.
 - Missing metadata, conflicting room IDs, unavailable hosts or moved/replaced panes must not route to the wrong room/conversation; Tasks 4 and 6.
 - Coalesced events, `events_lost`, requests before subscription, or commit-before-marker crashes must recover from durable requests; Tasks 1, 3, 4 and 6.
-- Corrupt state, forged origin or another controller must not overwrite ownership or dispatch a mutation; Tasks 3 and 4.
+- Shared per-user plugin roots, corrupt state, forged origin or another controller must not cross session namespaces or overwrite ownership; Tasks 1, 3 and 4.
 
 ## Execution order and files
 
@@ -84,10 +84,12 @@ Use an actual saved profile ID. Capture sanitized `terminal_id`, `pane_id`, `age
 Use a throwaway manifest with a pane action running the following standard-library script. It saves a private request on that host, then reports only a random marker:
 
 ```python
-import json, os, pathlib, socket, uuid
+import hashlib, json, os, pathlib, socket, uuid
 context = json.loads(os.environ['HERDR_PLUGIN_CONTEXT_JSON'])
 request_id = uuid.uuid4().hex
-state = pathlib.Path(os.environ['HERDR_PLUGIN_STATE_DIR'])
+canonical_socket = str(pathlib.Path(os.environ['HERDR_SOCKET_PATH']).resolve(strict=True))
+session_key = hashlib.sha256(canonical_socket.encode('utf-8')).hexdigest()
+state = pathlib.Path(os.environ['HERDR_PLUGIN_STATE_DIR']) / 'sessions' / session_key
 queue = state / 'requests'
 queue.mkdir(mode=0o700, parents=True, exist_ok=True)
 request = {'id': request_id, 'op': 'join', 'room_id': 'room-proof',
@@ -101,7 +103,7 @@ with temporary.open('x') as file:
 temporary.replace(queue / (request_id + '.json'))
 with socket.socket(socket.AF_UNIX) as connection:
     connection.settimeout(5)
-    connection.connect(os.environ['HERDR_SOCKET_PATH'])
+    connection.connect(canonical_socket)
     document = {'id': request_id, 'method': 'workspace.report_metadata',
                 'params': {'workspace_id': os.environ['HERDR_WORKSPACE_ID'],
                            'source': 'plugin:parley-proof',
@@ -132,7 +134,9 @@ Expected: local stdout receives subscription acknowledgement and the action's wo
 
 - [ ] **Step 3: Test queue recovery and routing independently.**
 
-Commit a request before subscribing, acknowledge the subscription, then read that host's pending files over a separate outbound SSH call. Update the marker twice before the first read; fetch both requests. Disconnect/reconnect, remove ephemeral metadata by restarting the fixture server, and prove durable room/request files remain accessible. Force `events_lost` if the fixture permits; otherwise record it as unverified and cover it with a synthetic frame in Task 4.
+Run two named Herdr sessions for the same OS user with shared XDG/plugin roots, not two isolated XDG roots. Confirm both receive identical injected plugin root directories but derive different session keys from their canonical sockets. Run action/startup/probe on each and prove their requests, config, role and controller records cannot cross namespaces, including after restart.
+
+Commit a request before subscribing, acknowledge the subscription, then read that session's pending files over a separate outbound SSH call. Update the marker twice before the first read; fetch both requests. Disconnect/reconnect, remove ephemeral metadata by restarting the fixture server, and prove durable room/request files remain accessible. Force `events_lost` if the fixture permits; otherwise record it as unverified and cover it with a synthetic frame in Task 4.
 
 Start an owned SSH master with no callback/socket/room forwards. Add a protocol forward and a separate HTTP artifact forward only for Join:
 
@@ -238,6 +242,7 @@ git commit -m "feat: allow artifact endpoint overrides for tunneled joins"
 
 **Interfaces:**
 - Produces the exact contracts below; later tasks consume them.
+- Produces `SessionKey(canonicalSocket string) (string,error)`, `SessionDirs(configRoot, stateRoot, canonicalSocket string) (string,string,error)` returning config/state session directories, `HostBindingKey(roomID string, target AgentTarget) string`, and `(*Store).WithBinding(ctx context.Context, key string, fn func() error) error`.
 - Produces `NewStore(dir string) *Store`, `(*Store).Read() (State,error)`, `(*Store).Update(func(*State) error) error`, `(*Store).Enqueue(Request) error`, `(*Store).Pending() ([]Request,error)`, `(*Store).Claim(requestID, digest, controllerID string) (Outcome,error)`, and `(*Store).Complete(requestID string, outcome Outcome) error`.
 - Produces `DecodeRequest(r io.Reader, origin Peer) (Request,error)`, `ServeLocal(ctx context.Context, path string, origin Peer, dispatch func(context.Context, Peer, Request) (Response,error)) error`, and `CallLocal(ctx context.Context, path string, req Request) (Response,error)`.
 
@@ -278,12 +283,15 @@ type Binding struct {
     StateDir string `json:"state_dir"`
     Routed Endpoints `json:"routed"`
     Status string `json:"status"` // online, disconnected, left
+    JoinPhase string `json:"join_phase"` // intent, complete, uncertain
+    JoinRequestID string `json:"join_request_id"`
 }
 type SessionConfig struct {
     Role string `json:"role"` // controller or participant
     ControllerID string `json:"controller_id"`
     MachineID string `json:"machine_id"`
     HerdrSocket string `json:"herdr_socket"`
+    SessionKey string `json:"session_key"`
 }
 type Peer struct {
     Machine Machine `json:"machine"`
@@ -344,17 +352,42 @@ func TestTwoPendingRequestsSurviveOneMarker(t *testing.T) {
 }
 ```
 
+Add `TestSessionNamespaceIsolation`: two canonical socket paths and identical config/state roots produce distinct session directories; `Enqueue`, `Pending`, ownership, rooms and restart reads do not cross them. Two aliases canonicalized to the same socket produce the same key. Reject relative/unclean socket paths and never derive a namespace from request JSON. Test startup in one participant session cannot read a sibling controller config.
+
+Add `TestBindingLockAcrossStores` using two `Store` instances and two processes on one session directory. Hold `join:<host-key>` in the first process, attempt it in the second with a deadline, and assert the callback never runs before release; cancellation leaves the first transaction intact. After releasing it, the second reads the first persisted binding intent rather than creating a fresh one. Host key tests require `self` and controller-normalized machine IDs to hash identically, but different sessions/terminals/kinds/conversations to hash differently.
+
 Add changed-body request ID rejection, concurrent claims by different controllers, idempotent claim by the same controller, symlink request/outcome rejection, and corrupt outcome preservation. Decoder tests reject unknown fields, `op:"exec"`, multiple JSON objects, invalid UTF-8, 65,537 bytes, topic over 512 bytes, unsafe IDs over 128 bytes, and forged origin/socket. Every rejected decode leaves dispatch count zero.
 
 - [ ] **Step 2: Run failing tests.**
 
 ```sh
-go test ./internal/herdr -run 'TestCorruptState|TestTwoPending|TestClaim|TestDecodeRequest|TestStore' -count=1
+go test ./internal/herdr -run 'TestCorruptState|TestTwoPending|TestClaim|TestDecodeRequest|TestStore|TestSessionNamespace|TestBindingLock|TestHostBindingKey' -count=1
 ```
 
 - [ ] **Step 3: Implement private records and fixed boundaries.**
 
-Use per-session directory locking, mode `0600` temporary files, `Sync`, close, and rename. Directories are `0700`. Persist immutable requests under `requests/<id>.json` and outcomes under `outcomes/<id>.json`; state contains rooms/bindings/peers and local intent indexes. `Pending` returns every non-complete request, not the latest metadata marker. `Claim` compares digest/controller under the same lock before side effects. Reject path separators in IDs; helpers derive paths internally. Missing files initialize maps, corrupt files fail visibly. Avoid separate generic persistence abstractions.
+On the selected host, resolve the trusted server socket with `filepath.EvalSymlinks`, then `filepath.Abs`/`Clean`; persist the verified canonical path for offline recovery. Apply this exact namespace derivation in action, form, startup, and helper:
+
+```go
+func SessionKey(canonicalSocket string) (string, error) {
+    if !filepath.IsAbs(canonicalSocket) || canonicalSocket != filepath.Clean(canonicalSocket) {
+        return "", fmt.Errorf("session socket must be canonical and absolute")
+    }
+    sum := sha256.Sum256([]byte(canonicalSocket))
+    return hex.EncodeToString(sum[:]), nil
+}
+func SessionDirs(configRoot, stateRoot, canonicalSocket string) (string, string, error) {
+    key, err := SessionKey(canonicalSocket)
+    if err != nil { return "", "", err }
+    return filepath.Join(configRoot, "sessions", key), filepath.Join(stateRoot, "sessions", key), nil
+}
+```
+
+`NewStore` receives only the derived session state directory. Put `config.json` and `controller.json` under the derived config directory; all records/logs/locks remain within that namespace. Preserve the participant's separately trusted `PARLEY_STATE_DIR`; do not move or reset existing Parley runtime files. Keep Unix IPC/master paths short in a private runtime directory and validate the full session key in their handshake. Never use a PID/inode/controller ID as the session namespace or scan sibling namespaces.
+
+Use a short-lived session data lock, mode `0600` temporary files, `Sync`, close, and rename. Directories are `0700`. Persist immutable requests under `requests/<id>.json` and outcomes under `outcomes/<id>.json`; state contains rooms/bindings/peers and local intent indexes. `Pending` returns every non-complete request, not the latest metadata marker. `Claim` compares digest/controller under the same lock before side effects. Reject path separators in IDs; helpers derive paths internally. Missing files initialize maps, corrupt files fail visibly. Avoid separate generic persistence abstractions.
+
+`HostBindingKey` hashes the JSON string tuple `[session_key, room_id, terminal_id, kind, native_session]` with full SHA-256 hex; it takes an already-validated canonical target. Exclude controller machine IDs. `WithBinding` hashes its prefixed key into `locks/<hash>.lock`, rejects symlinks, and uses an OS file lock across processes, with bounded nonblocking acquisition retries honoring context cancellation. Acquire a `route:` lock before a `join:` lock, never in reverse order. The callback may take/release the short session data lock to persist an intent/result, but that data lock is never held across a subprocess. OS lock release after crash does not erase persisted intents.
 
 `DecodeRequest` uses a 64 KiB limit, `utf8.Valid`, `DisallowUnknownFields`, exactly one object, and operation-specific validation for `start`, `join`, `status`. Set origin machine/session from the trusted peer after rejecting incompatible claims. Hash normalized request JSON with SHA-256. No token authentication is added: IPC is local/private and remote operations arrive through SSH-authenticated fixed helpers. Local socket requests have five-second read/write deadlines; operations have a 30-second deadline and uncertain mutation handling.
 
@@ -363,7 +396,7 @@ Use per-session directory locking, mode `0600` temporary files, `Sync`, close, a
 Start `ServeLocal` under a temporary short private socket, use `CallLocal` for valid status/invalid join, and assert exact error codes, shutdown, modes, and refusal to replace a live/symlink socket. Restart the store after a claim and retain its controller/digest/intent. No network callback server is created.
 
 ```sh
-go test ./internal/herdr -run 'TestCorruptState|TestTwoPending|TestClaim|TestDecodeRequest|TestStore|TestLocal' -count=1 -race
+go test ./internal/herdr -run 'TestCorruptState|TestTwoPending|TestClaim|TestDecodeRequest|TestStore|TestLocal|TestSessionNamespace|TestBindingLock|TestHostBindingKey' -count=1 -race
 ```
 
 - [ ] **Step 5: Commit.**
@@ -416,9 +449,9 @@ go test ./internal/herdr ./cmd/parley -run 'TestMachines|TestAgentIdentity|TestM
 
 `RunProcess` uses `exec.CommandContext`, direct argv/stdin JSON, bounded stderr and 8 MiB stdout. Oversized output errors rather than truncating valid JSON. Kill/reap on cancellation. Do not use local `sh -c` or a finite stdout accumulator for long-lived events.
 
-`ManagePeer` obtains the installed helper's absolute path from plugin listing, probes compatible capabilities and its selected-session socket, and claims that session for the local controller through a locked remote config record. `probe` must resolve the saved profile's session explicitly using the verified Herdr mechanism, not whichever shell default happens to be active. No callback path/token is exchanged and no tunnel master is started here. A conflicting record must be explicitly released, never overwritten because a controller appears offline.
+`ManagePeer` obtains the installed helper's absolute path from plugin listing, probes compatible capabilities and its selected-session socket, and verifies the helper-derived canonical socket/session key before claiming that session for the local controller through its namespaced config record. `probe` must resolve the saved profile's session explicitly using the verified Herdr mechanism, not whichever shell default happens to be active. No callback path/token is exchanged and no tunnel master is started here. A conflicting record must be explicitly released, never overwritten because a controller appears offline.
 
-The remote command is the shell-quoted trusted executable plus fixed `herdr rpc`; structured fields go on stdin. Typed dispatch permits only the operations listed above. State roots/socket come from verified managed-session config. `probe-route` accepts validated routed endpoints and tests them from the participant host; it is not an arbitrary network probe. `requests` lists all pending request files; `room`/`rooms` expose only validated plugin records, not filesystem paths. Per-request claim and outcome writes are atomic and idempotent.
+The remote command is the shell-quoted trusted executable plus fixed `herdr rpc`; structured fields go on stdin. Typed dispatch permits only the operations listed above. State roots/socket come from verified managed-session config. `probe` derives its namespace from the resolved saved session, without needing a pre-existing config; it returns the canonical socket/full session key. Every later helper resolves that same session and checks its key/config before state access. A caller may supply the trusted saved session selector, never a socket/root override. `probe-route` accepts validated routed endpoints and tests them from the participant host; it is not an arbitrary network probe. `requests` lists all pending request files; `room`/`rooms` expose only validated plugin records, not filesystem paths. Per-request claim and outcome writes are atomic and idempotent.
 
 `rpc events` connects to its pinned Herdr Unix socket, sends exactly this request, then relays its acknowledgement/events until cancellation or API failure:
 
@@ -451,12 +484,13 @@ git commit -m "feat: subscribe to remote Herdr requests over outbound SSH"
 
 **Files:**
 - Modify: `internal/herdr/ssh.go`
-- Create: `internal/herdr/ssh_test.go`
+- Create: `internal/herdr/ssh_test.go`, `probe.go`, `probe_test.go`
 
 **Interfaces:**
 - Consumes: Task 3 `Peer`, `Room`, `AgentTarget`; Task 4 `Run`, `StartMaster`.
 - Produces `RouteKind(hostMachineID, participantMachineID string) (string,error)` returning `direct`, `reverse`, or `local`.
 - Produces `TunnelManager{Run Run, Masters map[string]*Master}` with `Acquire(ctx context.Context, peer Peer, room Room, target AgentTarget) (Endpoints,error)`, `Release(ctx context.Context, roomID string, target AgentTarget) error`, and `Close() error`.
+- Produces `ProbeArtifact(ctx context.Context, rawEndpoint, roomID string) error`, using a validated HTTP artifact base URL and the expected room ID.
 - Manager keys masters/leases by machine plus Herdr session; routes additionally include room ID. Process handles and control paths never appear in public results.
 
 - [ ] **Step 1: Add direction, allocation, and rollback tests.**
@@ -479,12 +513,14 @@ func TestRouteKind(t *testing.T) {
 
 Fake `Run` records argv. First `-R` returns `51001\n`, second fails: cancel the first allocated forward and report error. Successful acquisition returns protocol port 51001/artifact port 51002, never original server ports. Local bind race retries at most three times. Add malformed allocation, master exit, HTTP/protocol probe failure, cancellation failure retained in status, same-host no SSH, and different remote host rejection.
 
+Add `TestArtifactProbe` using the real `server.ArtifactHandler` backed by an artifact repository that fails the test on any repository method call. Matching room empty POST must return 400 with the exact missing-participant error; a distinct room must return the exact 404 route error. Neither request stages/cleans/fetches an artifact. A generic 200, generic 404, wrong JSON error, identical fake 400 for both IDs, redirect, oversized body, or timeout fails the probe.
+
 Two different bindings sharing the route create two forwards total; one release retains them and final release cancels both. Repeated request for the same binding does not increment refcount again. Distinct Herdr sessions on a single saved host do not share an ownership key.
 
 - [ ] **Step 2: Run failing tests.**
 
 ```sh
-go test ./internal/herdr -run 'TestRouteKind|TestTunnel' -count=1
+go test ./internal/herdr -run 'TestRouteKind|TestTunnel|TestArtifactProbe' -count=1
 ```
 
 - [ ] **Step 3: Implement lazy masters and two-port leases.**
@@ -504,7 +540,21 @@ default:
 
 Validate both source endpoints as loopback with numeric ports and matching room ID. For cross-host acquisition choose the remote side: participant peer for `-R`, hosting peer for `-L`. Create its plugin-owned master lazily, with no initial forwards. Call `-O forward -R 127.0.0.1:0:127.0.0.1:<source-port>` once per endpoint; parse Task 1 allocation output. For `-L`, reserve an ephemeral local port, close the reservation, and retry a failed bind at most three times. Never reuse Herdr's master or weaken host-key checks.
 
-Use `descriptor.Descriptor.String`, `net.JoinHostPort`, and the existing artifact path for returned endpoints. Probe protocol connectivity and HTTP from the participant host through fixed helper operations; do not accept an unrelated HTTP listener as proof of the correct room. Task 6 validates the room ID returned by Join. Roll back the first forward if the second/probes fail. Use actual allocated-port cancellation syntax from Task 1.
+Use `descriptor.Descriptor.String`, `net.JoinHostPort`, and the existing artifact path for returned endpoints. Probe protocol connectivity and artifact routing from the participant host through the fixed `probe-route` helper. `ProbeArtifact` sends an empty POST to `<artifact-base>/staged`, without a participant query or body. The real handler first checks the path's room ID, then rejects the missing participant before touching its repository:
+
+```text
+POST /rooms/<expected-room-id>/artifacts/staged
+HTTP 400; Content-Type: application/json
+{"error":{"code":"bad_request","message":"participant query parameter is required"}}
+
+POST /rooms/<distinct-probe-room-id>/artifacts/staged
+HTTP 404; Content-Type: application/json
+{"error":{"code":"artifact_unavailable","message":"artifact route is not available"}}
+```
+
+Generate a distinct safe negative room ID inside the helper and substitute only the room path component, preserving the same forwarded host/port. Require both exact statuses and decoded JSON errors. Parse Content-Type as `application/json`, reject unknown/extra JSON fields and multiple values, disable redirects, cap each body at 64 KiB, and use five-second request timeouts. Never send a file, participant parameter, DELETE or consuming request. A plain GET to the artifact base, TCP success, or a generic 404 is not enough. This is validation of the existing unauthenticated route, not a new health/authentication endpoint.
+
+Task 6 validates the protocol room ID returned by Join. Roll back newly acquired forwards if allocation or either probe fails. Use actual allocated-port cancellation syntax from Task 1.
 
 Protect lease maps with a mutex and serialize acquisition per key, with finite subprocess deadlines. No lock spans an unbounded process. Refcounts track known distinct bindings, not repeated requests. `Close` reaps only owned children. Expose dead routes as `route_unavailable`; do not automatically recreate participants or promise unread recovery.
 
@@ -513,13 +563,13 @@ Protect lease maps with a mutex and serialize acquisition per key, with finite s
 Using Task 1 hosts, start Parley on each endpoint and Join/message/fetch artifact through both directions. Occupy an original artifact port to prove remapping. Final release closes only acquired ports and leaves Herdr's SSH connection usable.
 
 ```sh
-go test ./internal/herdr -run 'TestRouteKind|TestTunnel' -count=1 -race
+go test ./internal/herdr -run 'TestRouteKind|TestTunnel|TestArtifactProbe' -count=1 -race
 ```
 
 - [ ] **Step 5: Commit.**
 
 ```sh
-git add internal/herdr/ssh.go internal/herdr/ssh_test.go
+git add internal/herdr/ssh.go internal/herdr/ssh_test.go internal/herdr/probe.go internal/herdr/probe_test.go
 git commit -m "feat: open both Parley SSH ports on demand"
 ```
 
@@ -530,7 +580,7 @@ git commit -m "feat: open both Parley SSH ports on demand"
 - Modify: `internal/herdr/store.go`, `client.go`, `cmd/parley/herdr.go`, `herdr_rpc.go`
 
 **Interfaces:**
-- Consumes: Task 3 requests/claims, Task 4 typed host calls/subscriptions, Task 5 `TunnelManager`.
+- Consumes: Task 3 requests/claims, `HostBindingKey` and `Store.WithBinding`; Task 4 typed host calls/subscriptions; Task 5 `TunnelManager` and artifact probe.
 - Produces `HostOperations{Store *Store, Client *Client}` with `Start(ctx context.Context, req Request) (Response,error)` and `Join(ctx context.Context, req Request, endpoints Endpoints) (Response,error)` for host-local journaling/mutation.
 - Produces `Broker{Store *Store, Client *Client, Tunnels *TunnelManager}` with `Handle(ctx context.Context, peer Peer, req Request) (Response,error)`, `Drain(ctx context.Context, peer Peer) error`, `ResolveRoom(ctx context.Context, roomID string) (Room,error)`, and `Reconcile(ctx context.Context) error`.
 - Produces `BindingKey(roomID string, target AgentTarget) string`, based on room/machine/Herdr socket/terminal/native conversation, not pane ID.
@@ -549,7 +599,7 @@ Fake Join response:
 {"status":"joined","room_id":"room-1","session_id":"psn_remote","name":"agent","participant":{"artifact_endpoint":"http://127.0.0.1:51002/rooms/room-1/artifacts","status":"online"}}
 ```
 
-Use real temporary stores and fake `Run`. Start executes only on its selected host, writes room/binding and pane tokens, with no coordinator registration, route, worker, or prompt. Join from an empty coordinator cache discovers the room on demand. Clear tokens/restart Herdr: durable room fallback still validates the live host. Same name/distinct IDs works; identical IDs on different hosts is `room_ambiguous`. Unreachable enabled hosts produce resolution incomplete, not first-match selection.
+Use real temporary stores and fake `Run`. Start executes only on its selected host, writes room/binding and pane tokens, with no coordinator registration, route, worker, or prompt. Join from the original host pane returns that completed host session without launching another adapter. Join from an empty coordinator cache discovers the room on demand. Clear tokens/restart Herdr: durable room fallback still validates the live host. Same name/distinct IDs works; identical IDs on different hosts is `room_ambiguous`. Unreachable enabled hosts produce resolution incomplete, not first-match selection.
 
 ```go
 func TestEmptyQueueDoesNotDiscoverRooms(t *testing.T) {
@@ -565,34 +615,38 @@ func TestEmptyQueueDoesNotDiscoverRooms(t *testing.T) {
 }
 ```
 
-Submit Join twice with one request ID, then another ID for the same binding: exactly one adapter/session and one route lease. Changed body is `request_conflict`. Claim races mutate only once. Two pending requests under one marker both complete; requests before subscription are reconciled; commit-before-marker crash recovers on reconnect/explicit retry. Forged origin fails before any SSH call.
+Submit Join twice with one request ID, then another ID for the same binding: exactly one adapter/session and one route lease. Add `TestConcurrentJoinSameBinding` with different IDs: use a channel barrier to block the first fake CLI Join after intent commit, invoke the second while it is blocked, then release the first. Assert one CLI Join, both responses contain the same session, and only one lease binding reference. Repeat through separate helper processes and with direct `self` Join racing queued controller-normalized Join; both must use one host key/lock. Add crash after intent/CLI success before binding persistence: the next request reconciles the original participant instead of joining. If the first adapter disconnects during that race, the second returns `participant_disconnected` and leaves `LastSeenSeq` unchanged. Changed body is `request_conflict`. Claim races mutate only once. Two pending requests under one marker both complete; requests before subscription are reconciled; commit-before-marker crash recovers on reconnect/explicit retry. Forged origin fails before any SSH call.
 
 Inject lost Start/Join response after mutation, failure of outcome publication, room ID mismatch, and known Join failure after forwarding. No blind retry/duplicate participant. Known failure rolls back; uncertain mutation retains a visible claim and resources. No automatic agent prompt or consuming message command occurs.
 
 - [ ] **Step 2: Run failing tests.**
 
 ```sh
-go test ./internal/herdr -run 'TestHostStart|TestResolveRoom|TestBroker|TestBindingKey|TestQueueRecovery|TestEmptyQueue' -count=1
+go test ./internal/herdr -run 'TestHostStart|TestResolveRoom|TestBroker|TestBindingKey|TestQueueRecovery|TestEmptyQueue|TestConcurrentJoin' -count=1
 ```
 
 - [ ] **Step 3: Implement host-local mutation and on-demand lookup.**
 
-Start captures original native identity, reserves `s_` plus the first eight SHA-256 bytes of its request ID as a 16-hex-digit name, and journals that name/full request digest before host-local `parley start --topic --name`. On a lost response, use `runtime.ListSessions` and `runtime.LoadRoomRuntime` to recover exactly one matching reserved host name; missing or ambiguous runtime evidence remains `operation_uncertain`. Never blindly start again. Persist room plus host binding, advertise `parley_room`, `parley_port`, `parley_artifact_port`, then return the actual room/session and fixed command instructions in the response. Failed metadata reporting retains the room and warns; no worker/prompt is launched.
+Start captures original native identity, reserves `s_` plus the first eight SHA-256 bytes of its request ID as a 16-hex-digit name, and journals that name/full request digest before host-local `parley start --topic --name`. On a lost response, use `runtime.ListSessions` and `runtime.LoadRoomRuntime` to recover exactly one matching reserved host name; missing or ambiguous runtime evidence remains `operation_uncertain`. Never blindly start again. Persist room plus its `HostBindingKey` binding with `JoinPhase:"complete"` and the Start request ID/session, then advertise `parley_room`, `parley_port`, `parley_artifact_port`, then return the actual room/session and fixed command instructions in the response. Failed metadata reporting retains the room and warns; no worker/prompt is launched.
 
 For Join, persist immutable request on the action's host. Local form uses private IPC; remote form calls `workspace.report_metadata` after commit. `Drain` reads **all** pending requests from that origin, normalizes `self` against the trusted peer, validates/claims each request, and calls `Handle`. A dirty wakeup while a read is in flight causes another read. Run Drain after subscription acknowledgement, reconnect/`events_lost`, and marker events. There is no periodic room discovery.
 
 `ResolveRoom` queries local/enabled remote pane metadata when Join needs a room. Validate a matching durable room record, live native host identity, live room status, and both source endpoints. Missing/stale tokens use fixed helper `rooms`/`room` reads; any cache is revalidated before mutation. No token may supply an SSH target, binary path, or state path. Same-host Join can resolve the selected host directly without global lookup/coordinator.
 
-Acquire/probe both endpoints locally, then use the participant host's fixed Join helper with routed descriptor and artifact override. The helper reserves `h_` plus the first eight SHA-256 bytes of the binding key as a 16-hex-digit participant name, journals its full binding key/reserved name, and calls existing `parley join --name`. Reject a reserved-name collision against a different full key; do not overwrite it. Keep private control paths short and validate participant socket path length before launching. Persist returned session/binding before replying. To reconcile a lost result, use `runtime.ListSessions`, `runtime.LoadSession`, and `runtime.ParticipantStore` under the trusted Parley root; accept exactly one matching reserved name/room and a live adapter. Unknown/partial state is `operation_uncertain`, never another blind Join. No new public resume/replay protocol is introduced.
+In `Broker.Handle`, hold `Store.WithBinding(ctx, "route:"+BindingKey(...), ...)` across existing-binding lookup, acquisition/probes, helper Join and result/lease accounting. A completed existing binding returns before acquisition; repeated request IDs do not add references. Use the participant host's fixed Join helper with routed descriptor/artifact override. Direct same-host forms call the exact same `HostOperations.Join` method used by that helper.
 
-Known successful Join with room mismatch or subsequent failure calls existing leave for that session, then cancels newly acquired routes. Uncertain side effects retain intent/lease for explicit recovery. Publish outcome atomically on the request's host. The form reads its own file with a bounded wait and reports pending on timeout. Repeating the request retrieves its stored outcome.
+`HostOperations.Join` computes the controller-independent `HostBindingKey` and enters `Store.WithBinding(ctx, "join:"+hostKey, ...)`. Under this host lock, read/reconcile binding state before invoking any CLI. A completed online binding returns its original session without another Join. Persisted `JoinPhase:"intent"` or `"uncertain"` must reconcile or return `operation_uncertain`; completed-but-offline state is `participant_disconnected`, never automatic rejoin. Reserve `h_` plus the first 16 hex characters of the full SHA-256 host key as the participant name, validate collisions against the full host key, and persist a binding with `JoinPhase:"intent"`, `JoinRequestID`, target, name and routed endpoints before calling existing `parley join --name`. Do not hold the general state lock during that call, but keep the host binding lock until the complete binding/result is durable. Recheck native target identity before mutation. Keep private control paths short and validate the participant socket path length before launch.
+
+To reconcile a lost result, use `runtime.ListSessions`, `runtime.LoadSession`, and `runtime.ParticipantStore` under the trusted Parley root; accept exactly one matching reserved name/room and a live adapter. Save its session with `JoinPhase:"complete"` before responding. If the state cannot prove a live original participant, keep the intent/uncertain binding and fail visibly; never use a fresh Join to reset the cursor. A process crash releases the OS lock but retains the intent for the next holder. Lock ordering is coordinator `route:` then participant `join:`; direct calls acquire only `join:`. No new public resume/replay protocol is introduced.
+
+Known successful Join created by this attempt with room mismatch or subsequent failure calls existing leave for that session, then cancels only this attempt's newly acquired routes. Never leave a binding or release a lease returned from another completed request. Check the persisted `JoinRequestID` and binding membership when deciding rollback ownership. Uncertain side effects retain intent/lease for explicit recovery. Publish outcome atomically on the request's host. The form reads its own file with a bounded wait and reports pending on timeout. Repeating the request retrieves its stored outcome.
 
 `Reconcile` checks only known bindings/uncertain intents and owned route liveness. On confirmed inactive participant/closed room, release its lease. Offline existing adapters are `participant_disconnected`; do not auto-rejoin or consume/reset their state. Status/explicit recovery can trigger queue reconciliation; host silence never creates a replacement room. Preserve existing manual leave/stop behavior.
 
 - [ ] **Step 4: Verify both directions and no deferred behavior.**
 
 ```sh
-go test ./internal/herdr ./cmd/parley -run 'TestHostStart|TestResolveRoom|TestBroker|TestBindingKey|TestQueueRecovery|TestEmptyQueue|TestHerdr' -count=1 -race
+go test ./internal/herdr ./cmd/parley -run 'TestHostStart|TestResolveRoom|TestBroker|TestBindingKey|TestQueueRecovery|TestEmptyQueue|TestHerdr|TestConcurrentJoin' -count=1 -race
 ```
 
 Assert `-R` is created locally for a remote Join to a local room, `-L` locally for local Join to a remote room, and no route on same host. Kill fake SSH at claim/first-forward/Join/outcome boundaries and verify no second participant. Assert no `agent prompt`, `inbox`, `wait`, worker launch, or replay field is issued.
@@ -625,7 +679,7 @@ func TestReadFormCancelAndInput(t *testing.T) {
 }
 ```
 
-Capture pane `w1:p2`/terminal/native identity before popup; submitting a form from another UI pane still targets the original terminal. Escape, EOF, empty ID/topic, and topic over 512 bytes must not mutate. Startup twice launches one coordinator; remote participant role launches none. Activation on an already-running server works immediately. Missing local controller config gives an actionable setup instruction, not a remotely launched second controller.
+Capture pane `w1:p2`/terminal/native identity before popup; submitting a form from another UI pane still targets the original terminal. Escape, EOF, empty ID/topic, and topic over 512 bytes must not mutate. Startup twice launches one coordinator within that canonical socket namespace; a sibling participant session sharing injected roots cannot see its controller role and launches none. Activation on an already-running server works immediately. Missing local controller config gives an actionable setup instruction, not a remotely launched second controller.
 
 Integration tests use real production CLI/adapters with synthetic local/remote roots, fake typed Herdr/SSH control, and loopback proxies. Create on either endpoint, enqueue Join, drive actual subscriber frames, check both routed ports/artifact bytes and exactly one session across duplicate requests. Simulated event loss must resubscribe/read durable state, not replay event payloads as a queue. Startup with an empty queue performs no room scan/forward. Keep real SSH evidence separate from fake argv tests.
 
@@ -674,11 +728,11 @@ command = ["bin/parley", "herdr", "form"]
 
 No manifest `[[events]]` message/readiness hook is installed. The startup hook establishes the coordinator's request stream; workspace marker subscriptions use the socket API.
 
-`action` captures original identity and passes validated `PARLEY_TARGET_JSON`/`PARLEY_ACTION` to `plugin pane open --entrypoint form`. The form runs host-local Start or direct same-host Join; otherwise writes/signals a request and awaits its outcome. Display room ID, session ID, fixed Parley command instructions, and request ID for pending/uncertain work. Do not call `agent.prompt` or install/update harness hooks/skills.
+`action` captures original identity and passes validated `PARLEY_TARGET_JSON`/`PARLEY_ACTION` to `plugin pane open --entrypoint form`. The form runs host-local Start or calls the shared binding transaction for direct same-host Join; otherwise writes/signals a request and awaits its outcome. Derive config/state directories from the captured canonical server socket before any access; popup context must not choose another namespace. Display room ID, session ID, fixed Parley command instructions, and request ID for pending/uncertain work. Do not call `agent.prompt` or install/update harness hooks/skills.
 
 Use fixed `stty` argv to save/restore terminal settings and support Escape/backspace/Enter on macOS/Linux, including exit/signal cleanup. Keep ordinary commands JSON-only. Reject untrusted path/argv fields before any mutation.
 
-`setup` records the explicit local controller role/socket/random ID and starts it immediately. `startup` restores configured local coordinator only; participant/unconfigured sessions are no-op. `LaunchHelper` uses the repository's detached process pattern, private logs, ready socket handshake, no inherited action pipes, and only its new child handle for failure cleanup. Never kill a persisted PID.
+`setup` derives its canonical socket/session key and records the local controller role/socket/random ID in that session's config directory, then starts it immediately. `startup` restores configured local coordinator only; participant/unconfigured sessions are no-op. `LaunchHelper` uses the repository's detached process pattern, private logs, ready socket handshake, no inherited action pipes, and only its new child handle for failure cleanup. Never kill a persisted PID.
 
 Coordinator refreshes enabled profiles every 30 seconds and plugin-enabled status every two seconds. This manages subscriptions, not room discovery. On relay loss reconnect with bounded backoff and read pending requests after acknowledgement. Known-binding status reconciliation may release stale routes; it never starts another adapter. Plugin disable closes only owned event readers and SSH masters. Herdr UI detach must leave them alive. Host-key/auth failures remain visible, never bypassed.
 
@@ -711,6 +765,9 @@ go test ./... -timeout 30s -race
 | Coalesced/lost events | Every durable request handled once after subscribe/reconcile |
 | Missing metadata | Durable room fallback after server restart |
 | Duplicate/lost result | Same session/outcome; no blind participant recreation |
+| Concurrent distinct IDs / direct vs queued | Host binding lock permits one CLI Join; disconnect does not reset the cursor |
+| Shared plugin roots / two named sessions | State, config, startup role and controller ownership remain isolated |
+| Artifact probe | Exact matching/wrong-room errors; zero repository mutations; generic/redirect replies rejected |
 | Partial forward / occupied port | Rollback or bounded remap; no orphan participant |
 | UI detach / disable | Helpers survive detach; only owned resources close on disable |
 | Dead route/adapter | Visible unavailable/disconnected status; no automatic rejoin |
@@ -728,6 +785,7 @@ git commit -m "feat: package Herdr automatic SSH room setup"
 
 - Spec maps to all seven tasks: startup/event transport (1, 4, 7), state/origin/claims (3, 4), routing/endpoint override (2, 5), Start/Join/discovery (6), UX/lifecycle/acceptance (7).
 - Review Focus cases have tests in their owning tasks, including coalesced events, missing tokens, quiet startup, partial forwarding, and lost mutation results.
+- Review fixes specify socket-derived session directories (1, 3, 4, 7), participant-host binding transactions plus coordinator lease serialization (3, 6), and the existing non-mutating artifact route probe (5). Tests explicitly cover two sessions sharing roots, concurrent direct/queued requests, and both HTTP responses without artifact mutations.
 - Shared contracts precede consumers. There are no callback tokens, notification workers, `agent.prompt` calls, or replay protocol changes in the implementation scope.
 - The previous macOS primitive proof is explicitly separated from unverified reactive relay and production Linux behavior.
 - A failed tunnel does not promise transparent participant recovery; that work is deferred alongside message hooks.
