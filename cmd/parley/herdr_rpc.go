@@ -43,7 +43,7 @@ func herdrRPCCmd() *cobra.Command {
 		}
 		r, e := runHerdrRPC(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), &herdr.Client{HerdrBinary: binary})
 		if e != nil {
-			return writeJSONError(cmd, "herdr_rpc_failed", e.Error())
+			return writeJSONError(cmd, herdr.EventFailureCode(e), e.Error())
 		}
 		if r != nil {
 			return writeJSON(cmd, r)
@@ -53,7 +53,7 @@ func herdrRPCCmd() *cobra.Command {
 }
 
 func eventStartupError(out io.Writer, cause error) error {
-	frame := map[string]any{"id": "parley-requests", "error": map[string]string{"code": "helper_startup_failed", "message": cause.Error()}}
+	frame := map[string]any{"id": "parley-requests", "error": map[string]string{"code": herdr.EventFailureCode(cause), "message": cause.Error()}}
 	if e := json.NewEncoder(out).Encode(frame); e != nil {
 		return e
 	}

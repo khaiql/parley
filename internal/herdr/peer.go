@@ -232,7 +232,7 @@ func ResolveHost(ctx context.Context, c *Client, session string) (HostSession, e
 	}
 	b, e := c.runner()(ctx, c.HerdrBinary, []string{"--session", session, "session", "list", "--json"}, nil)
 	if e != nil {
-		return h, e
+		return h, fmt.Errorf("%w: %w", ErrHostUnavailable, e)
 	}
 	var list struct {
 		Sessions []struct {
@@ -254,10 +254,13 @@ func ResolveHost(ctx context.Context, c *Client, session string) (HostSession, e
 		}
 	}
 	if socket == "" {
-		return h, fmt.Errorf("saved session unavailable")
+		return h, fmt.Errorf("%w: saved session unavailable", ErrHostUnavailable)
 	}
 	socket, e = filepath.EvalSymlinks(socket)
 	if e != nil {
+		if errors.Is(e, os.ErrNotExist) {
+			return h, fmt.Errorf("%w: %w", ErrHostUnavailable, e)
+		}
 		return h, e
 	}
 	socket, e = filepath.Abs(socket)
@@ -271,7 +274,14 @@ func ResolveHost(ctx context.Context, c *Client, session string) (HostSession, e
 	// Verify reachability of the exact resolved socket; never fall back to shell defaults.
 	b, e = socketAPI(ctx, socket, "events.subscribe", subscriptionParams())
 	if e != nil {
-		return h, fmt.Errorf("capability_unavailable: %w", e)
+		var api *apiError
+		if errors.As(e, &api) {
+			if api.Code == "events_lost" {
+				return h, fmt.Errorf("%w: %w", ErrHostUnavailable, e)
+			}
+			return h, fmt.Errorf("capability_unavailable: %w", e)
+		}
+		return h, fmt.Errorf("%w: %w", ErrHostUnavailable, e)
 	}
 	var ack struct {
 		Result struct {
@@ -283,14 +293,14 @@ func ResolveHost(ctx context.Context, c *Client, session string) (HostSession, e
 	}
 	b, e = c.runner()(ctx, c.HerdrBinary, []string{"--session", session, "plugin", "list", "--json"}, nil)
 	if e != nil {
-		return h, e
+		return h, fmt.Errorf("%w: %w", ErrHostUnavailable, e)
 	}
 	if _, e = installedHelper(b); e != nil {
 		return h, e
 	}
 	b, e = c.runner()(ctx, c.HerdrBinary, []string{"--session", session, "plugin", "config-dir", PluginID}, nil)
 	if e != nil {
-		return h, e
+		return h, fmt.Errorf("%w: %w", ErrHostUnavailable, e)
 	}
 	configRoot := strings.TrimSpace(string(b))
 	if !filepath.IsAbs(configRoot) || filepath.Clean(configRoot) != configRoot {
