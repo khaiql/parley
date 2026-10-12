@@ -1727,7 +1727,8 @@ func TestJoinLaunchesParticipantDaemon(t *testing.T) {
 			cfg.Name != "alice" ||
 			cfg.Role != "reviewer" ||
 			cfg.Directory != "/tmp/project" ||
-			cfg.Repo != "https://github.com/example/repo" {
+			cfg.Repo != "https://github.com/example/repo" ||
+			cfg.ArtifactEndpoint != "http://127.0.0.1:49002/rooms/room-1/artifacts" {
 			t.Fatalf("participant daemon config = %#v", cfg)
 		}
 		store, err := parleyRuntime.ParticipantStore(p, cfg.Descriptor.RoomID, cfg.Name)
@@ -1753,6 +1754,7 @@ func TestJoinLaunchesParticipantDaemon(t *testing.T) {
 		"--role", "reviewer",
 		"--dir", "/tmp/project",
 		"--repo", "https://github.com/example/repo",
+		"--artifact-endpoint", "http://127.0.0.1:49002/rooms/room-1/artifacts",
 	)
 	if err != nil {
 		t.Fatalf("join: %v\n%s", err, out)

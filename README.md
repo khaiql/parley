@@ -94,7 +94,14 @@ Artifact limits are fixed in v1: 100 MiB per file, 10 files per message, and 250
 
 Use `"$PARLEY" info $SESSION_ARGS` to rediscover artifact endpoint metadata and limits for an active session. `sessions` includes the key artifact endpoint fields for local recovery.
 
-For remote participants, create your own tunnels to both ports returned by `start`, `invite`, `info`, or `sessions`: the room protocol `local_port` and the artifact HTTP `artifact_local_port`. Share a descriptor that uses the room protocol tunnel host and port with the same room id. Parley does not create or manage tunnels.
+For remote participants, create your own tunnels to both ports returned by `start`, `invite`, `info`, or `sessions`: the room protocol `local_port` and the artifact HTTP `artifact_local_port`. Share a descriptor that uses the room protocol tunnel host and port with the same room id. Parley does not create or manage tunnels. If the artifact tunnel uses a different local port, pass its HTTP URL when joining:
+
+```bash
+"$PARLEY" join parley://127.0.0.1:49001/room-1 --name reviewer \
+  --artifact-endpoint http://127.0.0.1:49002/rooms/room-1/artifacts
+```
+
+The override must use `http`, an explicit port from 1 to 65535, and the exact `/rooms/<room-id>/artifacts` path. Credentials, query strings, and fragments are rejected. Without this flag, Parley uses the descriptor host and the room's advertised artifact port. The override applies only to the joining participant; room metadata remains unchanged.
 
 ## Agent Skill
 

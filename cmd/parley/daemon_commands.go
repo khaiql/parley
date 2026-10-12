@@ -16,11 +16,12 @@ type roomDaemonConfig struct {
 }
 
 type participantDaemonConfig struct {
-	Descriptor descriptor.Descriptor
-	Name       string
-	Role       string
-	Directory  string
-	Repo       string
+	Descriptor       descriptor.Descriptor
+	Name             string
+	Role             string
+	Directory        string
+	Repo             string
+	ArtifactEndpoint string
 }
 
 var (
@@ -65,6 +66,11 @@ func participantDaemonCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("invalid descriptor: %w", err)
 			}
+			if cfg.ArtifactEndpoint != "" {
+				if err := validateArtifactEndpoint(cfg.ArtifactEndpoint, desc.RoomID); err != nil {
+					return err
+				}
+			}
 			cfg.Descriptor = desc
 			if cfg.Name == "" {
 				return fmt.Errorf("participant daemon requires --name")
@@ -80,5 +86,6 @@ func participantDaemonCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Role, "role", "participant", "Participant role")
 	cmd.Flags().StringVar(&cfg.Directory, "dir", "", "Participant working directory")
 	cmd.Flags().StringVar(&cfg.Repo, "repo", "", "Participant repository URL")
+	cmd.Flags().StringVar(&cfg.ArtifactEndpoint, "artifact-endpoint", "", "Artifact HTTP endpoint override")
 	return cmd
 }
