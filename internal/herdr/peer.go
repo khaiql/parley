@@ -20,9 +20,12 @@ type ProbeResult struct {
 	Version      int           `json:"version"`
 	Config       SessionConfig `json:"config"`
 	Capabilities []string      `json:"capabilities"`
+	Agent        *AgentTarget  `json:"agent,omitempty"`
+	AgentStatus  string        `json:"agent_status,omitempty"`
 }
 type RPCRequest struct {
 	Operation    string     `json:"operation"`
+	Target       string     `json:"target,omitempty"`
 	Session      string     `json:"session"`
 	SessionKey   string     `json:"session_key,omitempty"`
 	ControllerID string     `json:"controller_id,omitempty"`
@@ -69,6 +72,14 @@ func (r RPCRequest) Validate() error {
 	allowed := RPCRequest{Operation: r.Operation, Session: r.Session}
 	switch r.Operation {
 	case "probe":
+		if r.Target != "" {
+			allowed.Target = r.Target
+			allowed.SessionKey = r.SessionKey
+			allowed.ControllerID = r.ControllerID
+			if e := safeID(r.Target); e != nil {
+				return e
+			}
+		}
 	case "claim-controller":
 		allowed.ControllerID = r.ControllerID
 		allowed.MachineID = r.MachineID
@@ -128,7 +139,7 @@ func (r RPCRequest) Validate() error {
 	default:
 		return fmt.Errorf("unsupported helper operation")
 	}
-	if r.Operation != "probe" {
+	if r.Operation != "probe" || r.Target != "" {
 		if !validDigest(r.SessionKey) {
 			return fmt.Errorf("invalid session key")
 		}
@@ -325,7 +336,7 @@ func (h HostSession) Dispatch(ctx context.Context, r RPCRequest) (any, error) {
 	if e := r.Validate(); e != nil {
 		return nil, e
 	}
-	if r.Operation == "probe" {
+	if r.Operation == "probe" && r.Target == "" {
 		return ProbeResult{Version: 1, Config: h.Config, Capabilities: append([]string(nil), RequiredCapabilities...)}, nil
 	}
 	if r.SessionKey != h.Config.SessionKey {
@@ -357,13 +368,20 @@ func (h HostSession) Dispatch(ctx context.Context, r RPCRequest) (any, error) {
 		if e := ctx.Err(); e != nil {
 			return e
 		}
-		result, e = h.dispatchOwned(r, owner)
+		result, e = h.dispatchOwned(ctx, r, owner)
 		return e
 	})
 	return result, e
 }
-func (h HostSession) dispatchOwned(r RPCRequest, owner SessionConfig) (any, error) {
+func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner SessionConfig) (any, error) {
 	switch r.Operation {
+	case "probe":
+		c := Client{LocalMachineID: owner.MachineID, HerdrSocket: h.Config.HerdrSocket}
+		agent, status, e := c.Agent(ctx, AgentTarget{MachineID: owner.MachineID, HerdrSocket: h.Config.HerdrSocket, PaneID: r.Target})
+		if e != nil {
+			return nil, e
+		}
+		return ProbeResult{Version: 1, Config: owner, Capabilities: append([]string(nil), RequiredCapabilities...), Agent: &agent, AgentStatus: status}, nil
 	case "claim-controller", "release-controller":
 		return owner, nil
 	case "requests":
@@ -420,31 +438,29 @@ func (h HostSession) dispatchOwned(r RPCRequest, owner SessionConfig) (any, erro
 			return nil, fmt.Errorf("outcome_missing")
 		}
 		return o, nil
-	case "rooms", "room", "binding":
-		state, e := h.Store.Read()
+	case "rooms":
+		records, e := h.Store.Rooms()
 		if e != nil {
 			return nil, e
 		}
-		if r.Operation == "rooms" {
-			rooms := make(map[string]Room, len(state.Rooms))
-			for id, room := range state.Rooms {
-				if id != room.ID {
-					return nil, fmt.Errorf("corrupt room id")
-				}
-				room, e = h.validRoom(room, owner)
-				if e != nil {
-					return nil, e
-				}
-				rooms[id] = room
+		for id, room := range records {
+			room, e = h.validRoom(room, owner)
+			if e != nil {
+				return nil, e
 			}
-			return rooms, nil
+			records[id] = room
 		}
-		if r.Operation == "room" {
-			room, ok := state.Rooms[r.RoomID]
-			if !ok {
-				return nil, fmt.Errorf("room_missing")
-			}
-			return h.validRoom(room, owner)
+		return records, nil
+	case "room":
+		room, e := h.Store.Room(r.RoomID)
+		if e != nil {
+			return nil, e
+		}
+		return h.validRoom(room, owner)
+	case "binding":
+		state, e := h.Store.Read()
+		if e != nil {
+			return nil, e
 		}
 		binding, ok := state.Bindings[r.BindingKey]
 		if !ok {

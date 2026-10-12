@@ -98,7 +98,7 @@ func (c *Client) Agent(ctx context.Context, t AgentTarget) (AgentTarget, string,
 		if t.HerdrSocket != "" && t.HerdrSocket != peer.Config.HerdrSocket {
 			return t, "", fmt.Errorf("session_mismatch")
 		}
-		probe, e := c.Call(ctx, peer, RPCRequest{Operation: "probe"})
+		probe, e := c.Call(ctx, peer, RPCRequest{Operation: "probe", Target: target, SessionKey: peer.Config.SessionKey, ControllerID: peer.Config.ControllerID})
 		if e != nil {
 			return t, "", e
 		}
@@ -109,8 +109,23 @@ func (c *Client) Agent(ctx context.Context, t AgentTarget) (AgentTarget, string,
 		if verified.Config.HerdrSocket != peer.Config.HerdrSocket || verified.Config.SessionKey != peer.Config.SessionKey {
 			return t, "", fmt.Errorf("session_mismatch")
 		}
-		t.HerdrSocket = peer.Config.HerdrSocket
-		b, e = c.runner()(ctx, c.HerdrBinary, []string{"--machine", t.MachineID, "agent", "get", target}, nil)
+		if verified.Config.ControllerID != peer.Config.ControllerID || verified.Config.MachineID != peer.Config.MachineID {
+			return t, "", fmt.Errorf("session_mismatch")
+		}
+		if verified.Agent == nil {
+			return t, "", fmt.Errorf("agent_identity_required")
+		}
+		live := *verified.Agent
+		if live.MachineID != peer.Config.MachineID || live.HerdrSocket != peer.Config.HerdrSocket {
+			return t, "", fmt.Errorf("session_mismatch")
+		}
+		if t.TerminalID != "" && t.TerminalID != live.TerminalID || t.Kind != "" && t.Kind != live.Kind || t.NativeSession != "" && t.NativeSession != live.NativeSession {
+			return t, "", fmt.Errorf("agent_replaced")
+		}
+		if e := validateRequest(Request{ID: "identity", Op: "join", RoomID: "identity", Target: live}); e != nil {
+			return t, "", fmt.Errorf("agent_identity_required: %w", e)
+		}
+		return live, verified.AgentStatus, nil
 	}
 	if e != nil {
 		return t, "", e
@@ -306,7 +321,7 @@ func (c *Client) SignalRequest(ctx context.Context, t AgentTarget, id string) er
 	if _, e := rand.Read(marker); e != nil {
 		return e
 	}
-	_, e := socketAPI(ctx, c.HerdrSocket, "workspace.report_metadata", map[string]any{"workspace_id": t.WorkspaceID, "source": "plugin:parley", "tokens": map[string]string{"parley_request": id + ":" + hex.EncodeToString(marker)}})
+	_, e := socketAPI(ctx, c.HerdrSocket, "workspace.report_metadata", map[string]any{"workspace_id": t.WorkspaceID, "source": "plugin:parley", "tokens": map[string]string{"parley_request": hex.EncodeToString(marker)}})
 	if e != nil {
 		return fmt.Errorf("pending_signal: %w", e)
 	}

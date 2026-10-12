@@ -27,18 +27,19 @@ func TestMachines(t *testing.T) {
 }
 func TestAgentIdentity(t *testing.T) {
 	target := AgentTarget{MachineID: "peer", HerdrSocket: "/tmp/herdr.sock", PaneID: "w1:p2", TerminalID: "term_a", Kind: "codex", NativeSession: "conversation_a"}
-	c := Client{HerdrBinary: "herdr", LocalMachineID: "local", Run: func(_ context.Context, _ string, a []string, in []byte) ([]byte, error) {
-		if len(a) > 0 && a[0] == "-T" {
-			key, _ := SessionKey("/tmp/herdr.sock")
-			return json.Marshal(ProbeResult{Config: SessionConfig{HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
-		}
-		if !reflect.DeepEqual(a, []string{"--machine", "peer", "agent", "get", "term_a"}) {
-			t.Fatal(a)
-		}
-		return []byte(`{"result":{"agent":{"pane_id":"w2:p9","workspace_id":"w2","terminal_id":"term_a","agent":"codex","agent_status":"idle","agent_session":{"kind":"id","value":"conversation_a"}}}}`), nil
-	}}
 	key, _ := SessionKey("/tmp/herdr.sock")
-	c.managed.Store("peer", Peer{Machine: Machine{ID: "peer", Target: "host", Session: "agents"}, Binary: "/opt/parley", Config: SessionConfig{HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
+	c := Client{HerdrBinary: "herdr", LocalMachineID: "local", Run: func(_ context.Context, binary string, a []string, in []byte) ([]byte, error) {
+		if binary != "ssh" {
+			t.Fatal("mutable native lookup", binary, a)
+		}
+		var r RPCRequest
+		if e := json.Unmarshal(in, &r); e != nil || r.Target != "term_a" || r.ControllerID != "controller" {
+			t.Fatal(r, e)
+		}
+		live := AgentTarget{MachineID: "peer", HerdrSocket: "/tmp/herdr.sock", WorkspaceID: "w2", PaneID: "w2:p9", TerminalID: "term_a", Kind: "codex", NativeSession: "conversation_a"}
+		return json.Marshal(ProbeResult{Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/herdr.sock", SessionKey: key}, Agent: &live, AgentStatus: "idle"})
+	}}
+	c.managed.Store("peer", Peer{Machine: Machine{ID: "peer", Target: "host", Session: "agents"}, Binary: "/opt/parley", Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
 	got, state, e := c.Agent(context.Background(), target)
 	if e != nil || state != "idle" || got.PaneID != "w2:p9" {
 		t.Fatal(got, state, e)
@@ -139,16 +140,76 @@ func TestAgentIdentityLocalPinned(t *testing.T) {
 	}
 }
 func TestAgentIdentityAbsent(t *testing.T) {
-	c := Client{LocalMachineID: "local", Run: func(_ context.Context, _ string, a []string, _ []byte) ([]byte, error) {
-		if a[0] == "-T" {
-			key, _ := SessionKey("/tmp/herdr.sock")
-			return json.Marshal(ProbeResult{Config: SessionConfig{HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
-		}
-		return []byte(`{"result":{"agent":{"terminal_id":"term","agent":"codex"}}}`), nil
-	}}
 	key, _ := SessionKey("/tmp/herdr.sock")
-	c.managed.Store("peer", Peer{Machine: Machine{ID: "peer", Target: "host", Session: "agents"}, Binary: "/opt/parley", Config: SessionConfig{HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
+	c := Client{LocalMachineID: "local", Run: func(context.Context, string, []string, []byte) ([]byte, error) {
+		return json.Marshal(ProbeResult{Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
+	}}
+	c.managed.Store("peer", Peer{Machine: Machine{ID: "peer", Target: "host", Session: "agents"}, Binary: "/opt/parley", Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
 	if _, _, e := c.Agent(context.Background(), AgentTarget{MachineID: "peer", PaneID: "w1:p1"}); e == nil || !strings.Contains(e.Error(), "agent_identity_required") {
 		t.Fatal(e)
+	}
+}
+func TestAgentIdentityProfileRetarget(t *testing.T) {
+	key, _ := SessionKey("/tmp/old.sock")
+	p := Peer{Machine: Machine{ID: "peer", Target: "old-host", Session: "old-session"}, Binary: "/opt/parley", Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/old.sock", SessionKey: key}}
+	mutableReads := 0
+	c := Client{LocalMachineID: "local", Run: func(_ context.Context, binary string, args []string, in []byte) ([]byte, error) {
+		if binary == "ssh" {
+			if !strings.Contains(strings.Join(args, " "), "old-host") {
+				t.Fatal(args)
+			}
+			return []byte(`{"config":{"machine_id":"peer","controller_id":"controller","herdr_socket":"/tmp/old.sock","session_key":"` + key + `"},"agent":{"machine_id":"peer","herdr_socket":"/tmp/old.sock","workspace_id":"w1","pane_id":"w1:p1","terminal_id":"old-terminal","kind":"codex","native_session":"old-conversation"},"agent_status":"idle"}`), nil
+		}
+		mutableReads++
+		return []byte(`{"result":{"agent":{"pane_id":"w1:p1","workspace_id":"w1","terminal_id":"new-terminal","agent":"codex","agent_status":"idle","agent_session":{"kind":"id","value":"new-conversation"}}}}`), nil
+	}}
+	c.managed.Store("peer", p)
+	live, _, e := c.Agent(context.Background(), AgentTarget{MachineID: "peer", PaneID: "w1:p1"})
+	if e != nil || live.NativeSession != "old-conversation" || live.HerdrSocket != "/tmp/old.sock" || mutableReads != 0 {
+		t.Fatal(live, e, mutableReads)
+	}
+}
+func TestSignalRequestMaximumID(t *testing.T) {
+	root, e := os.MkdirTemp("/tmp", "parley-marker-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer os.RemoveAll(root)
+	root, _ = filepath.EvalSymlinks(root)
+	socket := filepath.Join(root, "h.sock")
+	listener, e := net.Listen("unix", socket)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer listener.Close()
+	markers := make(chan string, 2)
+	go func() {
+		for i := 0; i < 2; i++ {
+			conn, e := listener.Accept()
+			if e != nil {
+				return
+			}
+			var wire struct {
+				Params struct {
+					Tokens map[string]string `json:"tokens"`
+				} `json:"params"`
+			}
+			json.NewDecoder(conn).Decode(&wire)
+			markers <- wire.Params.Tokens["parley_request"]
+			io.WriteString(conn, `{"result":{"type":"ok"}}`+"\n")
+			conn.Close()
+		}
+	}()
+	c := Client{LocalMachineID: "local", HerdrSocket: socket}
+	target := AgentTarget{MachineID: "local", HerdrSocket: socket, WorkspaceID: "w1"}
+	id := strings.Repeat("a", 128)
+	for i := 0; i < 2; i++ {
+		if e = c.SignalRequest(context.Background(), target, id); e != nil {
+			t.Fatal(e)
+		}
+	}
+	first, second := <-markers, <-markers
+	if len(first) > 80 || len(second) > 80 || first == second || strings.Contains(first, id) {
+		t.Fatal("invalid metadata markers", len(first), len(second), first == second)
 	}
 }
