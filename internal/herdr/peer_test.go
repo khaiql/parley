@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,12 +115,150 @@ func TestHerdrRPCRejectCorruptRoom(t *testing.T) {
 	if _, e := h.Dispatch(context.Background(), r); e != nil {
 		t.Fatal(e)
 	}
-	if e := h.Store.Update(func(s *State) error { s.Rooms["room"] = Room{ID: "../outside"}; return nil }); e != nil {
+	dir, e := h.Store.recordDir("rooms")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = writeJSON(filepath.Join(dir, "room.json"), Room{ID: "../outside"}); e != nil {
 		t.Fatal(e)
 	}
 	r.Operation = "rooms"
 	r.MachineID = ""
 	if _, e := h.Dispatch(context.Background(), r); e == nil {
 		t.Fatal("invalid plugin record exposed")
+	}
+}
+
+func TestHerdrRPCAuthoritativeRooms(t *testing.T) {
+	h := testHost(t)
+	ctx := context.Background()
+	r := RPCRequest{Operation: "claim-controller", Session: "agents", SessionKey: h.Config.SessionKey, ControllerID: "local", MachineID: "peer"}
+	if _, e := h.Dispatch(ctx, r); e != nil {
+		t.Fatal(e)
+	}
+	room := Room{ID: "room", Topic: "authoritative", Host: AgentTarget{MachineID: "self", HerdrSocket: h.Config.HerdrSocket, PaneID: "w1:p1", WorkspaceID: "w1", TerminalID: "term", Kind: "codex", NativeSession: "native"}, HostSessionID: "psn_host", Source: Endpoints{Descriptor: "parley://127.0.0.1:4001/room", ArtifactURL: "http://127.0.0.1:4002/rooms/room/artifacts"}}
+	dir := filepath.Join(h.Store.dir, "rooms")
+	if e := os.MkdirAll(dir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := writeJSON(filepath.Join(dir, "room.json"), room); e != nil {
+		t.Fatal(e)
+	}
+	r.MachineID = ""
+	r.Operation = "room"
+	r.RoomID = "room"
+	v, e := h.Dispatch(ctx, r)
+	if e != nil || v.(Room).Topic != "authoritative" {
+		t.Fatal(v, e)
+	}
+	stale := room
+	stale.Topic = "stale"
+	if e = h.Store.Update(func(s *State) error { s.Rooms["room"] = stale; return nil }); e != nil {
+		t.Fatal(e)
+	}
+	r.Operation = "rooms"
+	r.RoomID = ""
+	v, e = h.Dispatch(ctx, r)
+	if e != nil || v.(map[string]Room)["room"].Topic != "authoritative" {
+		t.Fatal(v, e)
+	}
+	if e = os.Remove(filepath.Join(dir, "room.json")); e != nil {
+		t.Fatal(e)
+	}
+	r.Operation = "room"
+	r.RoomID = "room"
+	if _, e = h.Dispatch(ctx, r); !os.IsNotExist(e) {
+		t.Fatal("stale cache used", e)
+	}
+}
+func TestHerdrRPCRoomRecordBoundary(t *testing.T) {
+	for _, kind := range []string{"mismatch", "corrupt", "symlink", "unsafe-filename"} {
+		t.Run(kind, func(t *testing.T) {
+			h := testHost(t)
+			r := RPCRequest{Operation: "claim-controller", Session: "agents", SessionKey: h.Config.SessionKey, ControllerID: "local", MachineID: "peer"}
+			if _, e := h.Dispatch(context.Background(), r); e != nil {
+				t.Fatal(e)
+			}
+			dir := filepath.Join(h.Store.dir, "rooms")
+			if e := os.MkdirAll(dir, 0700); e != nil {
+				t.Fatal(e)
+			}
+			path := filepath.Join(dir, "room.json")
+			switch kind {
+			case "mismatch":
+				writeJSON(path, Room{ID: "other"})
+			case "corrupt":
+				os.WriteFile(path, []byte(`{"bad":true}`), 0600)
+			case "symlink":
+				target := filepath.Join(t.TempDir(), "room")
+				os.WriteFile(target, []byte(`{"id":"room"}`), 0600)
+				os.Symlink(target, path)
+			case "unsafe-filename":
+				os.WriteFile(filepath.Join(dir, "bad name.json"), []byte(`{"id":"room"}`), 0600)
+			}
+			r.Operation = "rooms"
+			r.MachineID = ""
+			if _, e := h.Dispatch(context.Background(), r); e == nil {
+				t.Fatal("bad authoritative room accepted")
+			}
+			if kind != "unsafe-filename" {
+				r.Operation = "room"
+				r.RoomID = "room"
+				if _, e := h.Dispatch(context.Background(), r); e == nil {
+					t.Fatal("bad individual room accepted")
+				}
+			}
+		})
+	}
+}
+func TestHerdrRPCTargetedProbePinned(t *testing.T) {
+	root, e := os.MkdirTemp("/tmp", "parley-probe-")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer os.RemoveAll(root)
+	root, _ = filepath.EvalSymlinks(root)
+	socket := filepath.Join(root, "h.sock")
+	listener, e := net.Listen("unix", socket)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer listener.Close()
+	called := make(chan string, 1)
+	go func() {
+		conn, e := listener.Accept()
+		if e != nil {
+			return
+		}
+		defer conn.Close()
+		var r struct {
+			Method string            `json:"method"`
+			Params map[string]string `json:"params"`
+		}
+		json.NewDecoder(conn).Decode(&r)
+		called <- r.Method + ":" + r.Params["target"]
+		io.WriteString(conn, `{"result":{"agent":{"pane_id":"w1:p1","workspace_id":"w1","terminal_id":"term","agent":"codex","agent_status":"idle","agent_session":{"kind":"id","value":"native"}}}}`+"\n")
+	}()
+	h := testHost(t)
+	h.Config.HerdrSocket = socket
+	h.Config.SessionKey, _ = SessionKey(socket)
+	r := RPCRequest{Operation: "claim-controller", Session: "agents", SessionKey: h.Config.SessionKey, ControllerID: "local", MachineID: "peer"}
+	if _, e = h.Dispatch(context.Background(), r); e != nil {
+		t.Fatal(e)
+	}
+	r.Operation = "probe"
+	r.MachineID = ""
+	r.Target = "w1:p1"
+	v, e := h.Dispatch(context.Background(), r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	probe := v.(ProbeResult)
+	if probe.Agent == nil || probe.Agent.MachineID != "peer" || probe.Agent.HerdrSocket != socket || probe.Agent.NativeSession != "native" || <-called != "agent.get:w1:p1" {
+		t.Fatal(probe)
+	}
+	r.ControllerID = "other"
+	if _, e = h.Dispatch(context.Background(), r); e == nil || !strings.Contains(e.Error(), "controller_conflict") {
+		t.Fatal(e)
 	}
 }

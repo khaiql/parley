@@ -2,6 +2,7 @@ package herdr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -120,5 +121,24 @@ func TestEventsReconnectBeforeRead(t *testing.T) {
 	})
 	if e != context.Canceled || reads.Load() != 2 {
 		t.Fatal(e, reads.Load())
+	}
+}
+func TestEventsSSHDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	if e := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nprintf '%s\\n' 'fixture SSH refused' >&2\nexit 255\n"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	key, _ := SessionKey("/tmp/a.sock")
+	p := Peer{Machine: Machine{ID: "peer", Target: "host", Session: "agents"}, Binary: "/opt/parley", Config: SessionConfig{SessionKey: key, ControllerID: "local"}}
+	c := Client{}
+	stream, e := c.OpenEvents(context.Background(), p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer stream.Close()
+	_, e = io.ReadAll(stream)
+	if !errors.Is(e, errEventProcess) || !strings.Contains(e.Error(), "fixture SSH refused") {
+		t.Fatal(e)
 	}
 }

@@ -223,7 +223,15 @@ func (p *processStream) Read(b []byte) (int, error) {
 	if e == io.EOF {
 		wait := p.Close()
 		if wait != nil {
-			e = fmt.Errorf("%w: %v", errEventProcess, wait)
+			var helper struct {
+				Status string    `json:"status"`
+				Error  *apiError `json:"error"`
+			}
+			if json.Unmarshal(p.stderr.Bytes(), &helper) == nil && helper.Status == "error" && helper.Error != nil {
+				e = helper.Error
+			} else {
+				e = fmt.Errorf("%w: %v: %s", errEventProcess, wait, p.stderr.String())
+			}
 		}
 	}
 	return n, e

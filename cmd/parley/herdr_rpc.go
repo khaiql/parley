@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/khaiql/parley/internal/herdr"
 	"github.com/spf13/cobra"
 	"io"
@@ -21,11 +22,14 @@ func runHerdrRPC(ctx context.Context, in io.Reader, out io.Writer, c *herdr.Clie
 	}
 	h, e := herdr.ResolveHost(ctx, c, r.Session)
 	if e != nil {
+		if r.Operation == "events" {
+			return nil, eventStartupError(out, e)
+		}
 		return nil, e
 	}
 	if r.Operation == "events" {
 		if e = h.VerifyController(ctx, r); e != nil {
-			return nil, e
+			return nil, eventStartupError(out, e)
 		}
 		return nil, herdr.RelayEvents(ctx, h.Config.HerdrSocket, out)
 	}
@@ -46,4 +50,12 @@ func herdrRPCCmd() *cobra.Command {
 		}
 		return nil
 	}}
+}
+
+func eventStartupError(out io.Writer, cause error) error {
+	frame := map[string]any{"id": "parley-requests", "error": map[string]string{"code": "helper_startup_failed", "message": cause.Error()}}
+	if e := json.NewEncoder(out).Encode(frame); e != nil {
+		return e
+	}
+	return cause
 }
