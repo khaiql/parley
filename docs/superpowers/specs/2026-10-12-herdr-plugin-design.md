@@ -1,127 +1,134 @@
-# Parley Herdr plugin design
+# Parley Herdr automatic SSH routing design
 
-Status: proposed design accompanying the implementation plan. Review both documents before implementation. The user requested the plan directly after discussing this architecture; the transport proof below has not been run.
+Status: proposed implementation design, revised 2026-10-13. Scope narrowed to room Start/Join and automatic SSH port opening. Listener startup remains background infrastructure for remote Join. Message send/receive hooks and notification automation are deferred.
 
-## Intended outcome
+## Intended outcome and scope
 
-Create a named Parley room from an existing Herdr agent, get a room ID, and attach another existing agent using that ID. Start the server on the initiating agent's machine. Install Parley and its plugin/helper once on each participating machine. Joining should resolve machine identity, arrange SSH access, create the participant adapter, deliver its session instructions, and listen for messages without repeated human prompts.
+From an existing Herdr agent pane, Start creates a named Parley room on that pane's machine and returns its room ID. Join takes that ID, finds the hosting machine, opens both required SSH ports automatically, and starts the participant adapter on the joining pane's machine. Return the participant session and its existing Parley command instructions in the popup; do not automatically prompt the agent in this phase.
 
-The two cross-machine cases are a local room with a remote collaborator and a remote room with a local collaborator. Both SSH connections originate on the local machine. Closing the Herdr UI must not kill the helpers. Suspending either endpoint can interrupt connectivity; the feature does not promise collaboration with an unavailable room host.
+Install Parley and its helper/plugin on each participating machine. The two main cases are a local room with a remote collaborator and a remote room with a local collaborator. The local machine originates SSH in both cases. Herdr's selected remote server runs the action; it cannot directly launch a local SSH process.
 
 ## Constraints
 
 - Go 1.26.1; existing Cobra dependency; no new production dependencies.
 - Initial platforms: macOS and Linux.
-- Initial Herdr minimum: 0.9.3; additionally verify required CLI/schema capabilities during setup.
-- Use the initiating agent's machine as the room host.
-- Attach existing agents; do not launch or restart agents.
-- Support local/local, local/remote, remote/local, and same-remote-machine participants. Reject different-remote-machine routing with `unsupported_route`.
-- One local controller per paired remote Herdr session. Reject a second active controller with `controller_conflict`.
-- Keep existing Parley CLI behavior, JSON status conventions, descriptors, and non-consuming `wait` behavior.
-- Bind TCP forwards to `127.0.0.1`; never expose Parley's unauthenticated endpoints publicly.
-- Retain unread events and participant session identity across transport recovery.
-- Plugin actions do not execute arbitrary commands supplied by remote requests.
+- Initial Herdr minimum: 0.9.3; verify required CLI/socket capabilities during activation.
+- Host the room on the initiating agent's machine; attach existing panes without launching or restarting agents.
+- Support local/local, local/remote, remote/local, and same-remote-machine joins. Reject different-remote-machine routing with `unsupported_route`.
+- One local controller per managed remote Herdr session; reject conflicting ownership with `controller_conflict`.
+- SSH always originates on the local machine. Bind both forwarded endpoints to `127.0.0.1`.
+- Preserve existing Parley CLI, descriptors, JSON conventions, and message/cursor behavior.
+- No message hooks, automatic agent prompts, notification workers, or participant replay/resume changes in this phase.
 
-## Architecture
+## Components
 
-Ship `herdr-plugin.toml` at the repository root. Build the existing binary to `bin/parley` during plugin installation. Add the `parley herdr` command family; keep integration code in `internal/herdr`. No change to Herdr itself is assumed.
+- **Host-local action/form:** captures the original pane's terminal/native conversation before opening a popup. Start runs locally on that selected server. Cross-machine Join commits a request in that server's plugin state directory.
+- **Local coordinator:** runs detached on the user's local machine. Owns remote event subscriptions, request processing, and plugin-owned tunnel masters. It resolves room metadata when Join is requested, not during startup or periodic room discovery.
+- **Fixed SSH helper:** installed on each remote host. Exposes typed state/Parley operations and a read-only Herdr event relay over SSH initiated locally. It never accepts arbitrary commands, paths, environment overrides, or raw API methods.
 
-There are three process roles:
+There is no reverse callback socket, peer-token exchange, or room-independent `-R` control forward. Herdr's own UI SSH stream is not exposed automatically to plugins; we must build and own the subscriber/relay.
 
-1. **Action/form:** a short-lived command or a terminal popup on the selected Herdr server. Captures the original agent identity before opening a popup, then sends a structured room operation.
-2. **Local broker:** a detached process started by explicit local setup and restored by the local plugin startup hook. Owns the room registry, pairings, SSH masters, and forwards. Periodically reconciles enabled saved machine profiles. It does not rely on the visible Herdr UI remaining open.
-3. **Participant worker:** a detached process on each participant's machine. Owns message waiting, readiness checks, notification deduplication, and participant adapter recovery. It uses that participant's Herdr socket, not whichever machine the UI later selects.
+## Listener startup, not startup room discovery
 
-Herdr plugin hooks execute on the selected server. A remote action therefore calls the local broker through a separate private SSH callback channel. The callback exposes only the Parley operation protocol, never the local Herdr API socket.
+The configured local plugin session's `[[startup]]` hook launches one coordinator. It reads enabled saved profiles, resolves installed helper capabilities and the correct remote Herdr session socket, then establishes `events.subscribe` connections. It creates no room forwards and performs no room metadata scan. Previously known active bindings may be checked during recovery; that is not discovery of new rooms.
 
-## Bootstrap and callback channel
+Remote startup hooks do not launch another coordinator. The local role/socket/controller ID are explicitly configured once through `parley herdr setup`; startup then restores them automatically. On an already-running Herdr server, setup activates the coordinator immediately because linking/enabling does not invoke startup hooks. Local Start/Join can ensure an already-configured coordinator is running. A remote-only UI still needs a configured local coordinator session.
 
-Run `parley herdr setup` once from a local Herdr shell after installation. Record the local Herdr socket, plugin directories, binary paths, and a random controller ID. The broker reads `herdr machine list --json`; the documented implementation returns an array containing `id`, `label`, `target`, `session`, `enabled`, and `selected`.
+One managed remote session has one durable controller owner record. Claim it via a locked fixed helper call. Reject another controller and require explicit ownership release before changing controllers; do not infer ownership from the UI's selected machine or an apparently offline controller.
 
-For each enabled machine with the matching Parley helper installed, obtain its absolute helper path and session socket through the fixed remote `parley herdr rpc` entrypoint. Resolve that executable from the registered plugin root using Herdr's remote plugin listing; do not assume `bin/parley` is on the SSH PATH. Exchange structured JSON on stdin/stdout. Quote the trusted absolute executable path for the remote login shell; never interpolate request JSON into a shell command.
+Subscribe to `workspace.metadata_updated`. This native API event does **not** invoke manifest event hooks. Implement `parley herdr rpc events` to connect to the pinned remote Unix socket, send the fixed subscription, and relay acknowledgement/events through outbound SSH. Herdr's internal `remote-api-bridge` shows the transport is possible but is not a stable public plugin streaming command to depend on.
 
-Create a per-controller private directory on each side, mode `0700`. Its short absolute path must fit both Unix socket and OpenSSH control-path limits. Local broker binds a per-peer Unix socket and starts an owned OpenSSH master with a reverse stream-local forward:
+On startup, reconnect, or `events_lost`, subscribe first and keep draining events while reading pending requests through a separate SSH call. Events are invalidation signals, not the queue. Coalesce wakeups; repeat a read if another event arrived while it was in flight. Refresh saved profiles for new/disabled hosts, without timer-based room discovery.
 
-```text
-ssh -M -S <private-control-path> -N
-    -o BatchMode=yes -o ExitOnForwardFailure=yes
-    -o ControlPersist=no -o StreamLocalBindMask=0177
-    -o ServerAliveInterval=30 -o ServerAliveCountMax=3
-    -R <remote-private-callback.sock>:<local-private-callback.sock>
-    <saved-ssh-target>
-```
+## State placement
 
-The initial callback channel is created independently of any room. A pairing record on the remote session stores its controller ID, callback path, and a 256-bit random peer token in a mode `0600` file. The local broker derives the requesting machine/session from the listener and pairing; the request cannot choose a different SSH target. Constant-time token comparison and operation validation precede mutation. Duplicate setup is idempotent. An unreachable or incompatible machine is marked unavailable without stopping other machines.
+State is per Herdr server, not globally shared by the local UI. On each host use session-scoped `HERDR_PLUGIN_STATE_DIR` files:
 
-An unconfigured startup hook exits without becoming a controller. Remote startup hooks preserve pairing state but never start a local broker. Pairing a second active controller is rejected rather than silently overwriting a callback destination. Host-key and authentication failures require normal SSH recovery; do not weaken checking or automatically install/update/restart Herdr.
+- `rooms/<room-id>.json`: room name/ID, hosting Herdr socket, terminal/native identity, host participant session, both source ports, closed status.
+- `requests/<request-id>.json`: immutable Join request, original pane/workspace/terminal/conversation identity.
+- `outcomes/<request-id>.json`: normalized request digest, controller claim, mutation intent, and complete/uncertain result.
+- `state.json`: managed peers, discovered room cache, and known bindings/routes. The cache is not the authoritative room registry.
 
-The first implementation task proves this flow against a real Herdr remote server and OpenSSH. If it fails, update this design and the plan before building the dependent integration. Capability verification is not evidence that the proof already passed.
+`HERDR_PLUGIN_CONFIG_DIR` stores the local coordinator role and managed-session ownership. Pin the selected host's `PARLEY_STATE_DIR` for every Parley operation. Directories are `0700`, records `0600`, with locked atomic replacement and symlink/corruption rejection.
 
-## Room identity and routing
+Start advertises `parley_room`, `parley_port`, and `parley_artifact_port` via `pane.report_metadata`. Remote Join changes the workspace's `parley_request` token to a fresh random marker. All values fit the 80-character token limit; no payload, file path, or SSH target is stored in a marker. Tokens disappear after Herdr restart and cannot replace durable files.
 
-The broker stores the existing Parley room ID, display name/topic, hosting machine/session, host participant session, protocol endpoint, artifact endpoint, and owning bindings. IDs are controller-scoped discovery keys, not global addresses. `start` runs on the initiating machine and registers returned endpoint metadata. Remote-created rooms register through the callback broker. Two rooms may have the same display name; IDs remain distinct.
+A marker wakes a read of **all** pending requests for that managed session, so coalesced events cannot erase requests. Write the request before signalling. A failed signal retains the request and reports `pending_signal`; retry the same request with a fresh marker. A crash before signalling is recovered by a later wakeup, reconnect, or explicit retry/status recovery. Form timeout reports pending with its request ID; it does not cancel an uncertain mutation.
 
-| Host | Participant | Transport |
+## Start sequence
+
+1. Capture and validate the original existing agent identity on the selected server.
+2. Journal intent, run host-local `parley start --topic`, and persist returned room/session/endpoints.
+3. Advertise room metadata on that host pane.
+4. Return room ID and existing session command instructions in the popup.
+
+Start needs no central registration, callback, worker, or tunnel. Failed metadata reporting retains the room and warns that discovery will use the durable fallback. Unknown Start outcomes must reconcile local runtime state, never blindly create another room.
+
+## Join sequence
+
+**Local Join:** save a durable request and notify the local coordinator via private local IPC. It fetches local and enabled remote pane metadata on demand, validates the matching durable room record and live host identity, acquires/probes both routes, and calls participant-host `parley join` with the remapped artifact endpoint. Persist the binding/outcome and display session instructions.
+
+**Remote Join:** the form saves its request in the remote server's plugin state directory and reports the workspace marker. The local listener receives the event over its own outbound SSH relay, fetches pending requests through a separate fixed helper call, validates/claims the request, and resolves the room on demand. It creates SSH forwards locally, then calls the remote helper to Join. Publish the result back through outbound SSH; the form reads only its own outcome file.
+
+Same-host Join can run directly on the selected server without the coordinator or SSH. A local room may therefore join locally even if no remote subscriptions exist.
+
+Lookup uses room ID and authoritative machine/Herdr session/terminal/native conversation identity. Pane IDs are server-scoped and can change after moves. Normalize host-local `machine_id:"self"` records to the saved-profile peer, never trust submitted machine/socket claims. Missing/stale pane tokens trigger host-specific helper reads of durable room records. Verify live room status and both source endpoints before forwarding. Duplicate IDs across hosts fail as `room_ambiguous`; unavailable enabled hosts make global resolution incomplete rather than silently picking a first match.
+
+## Routing
+
+| Room host | Joining participant | Route |
 | --- | --- | --- |
 | Local | Local | Direct loopback |
 | Remote A | Remote A | Direct loopback |
-| Local | Remote A | Local broker adds two `-R` forwards to A |
-| Remote A | Local | Local broker adds two `-L` forwards from A |
-| Remote A | Remote B | Reject with `unsupported_route` |
+| Local | Remote A | Local coordinator starts two `-R` forwards to A |
+| Remote A | Local | Local coordinator starts two `-L` forwards from A |
+| Remote A | Remote B | `unsupported_route` |
 
-Use the SSH master owned by this plugin, not Herdr's shared master. Add forwards with `ssh -S <path> -O forward`. Remote forwards request port `0` and parse the assigned port returned by OpenSSH. Local forwards select an ephemeral local port, release the reservation, and attempt forwarding; retry a bind race at most three times. Keep actual allocated ports in the lease, not the requested zero port. The live proof must verify how the supported OpenSSH build cancels dynamically allocated forwards.
+Forward both Parley's TCP protocol port and artifact HTTP port. Create a plugin-owned SSH master lazily for a cross-machine Join; never use Herdr's shared master. Use a short private control path, `BatchMode=yes`, `ExitOnForwardFailure=yes`, `ControlPersist=no`, and server keepalives. No forwards are attached during listener startup.
 
-Acquire both forwards before joining. Probe protocol reachability and artifact HTTP connectivity, not just process liveness. On a partial failure, cancel the first forward and leave no participant behind. Reuse a lease for the same room and participant machine/session. Reference-count bindings; cancel only after the final binding leaves. Broker shutdown closes only its own masters.
+```text
+# Local room, remote collaborator: expose local endpoints on remote loopback.
+ssh -S <owned-master> -O forward -R 127.0.0.1:0:127.0.0.1:<local-source-port> <target>
+# Remote room, local collaborator: expose remote endpoints on local loopback.
+ssh -S <owned-master> -O forward -L 127.0.0.1:<local-port>:127.0.0.1:<remote-source-port> <target>
+```
 
-An additive `parley join --artifact-endpoint <http-url>` override carries the remapped artifact port to the adapter. Without it, existing derivation remains unchanged. Accept only an absolute HTTP URL with a host and numeric port, no credentials/query/fragment, and exactly `/rooms/<room-id>/artifacts`. The broker supplies loopback URLs. Never rewrite room metadata to pretend a tunnel port is a server port.
+Apply once per endpoint. Parse allocated remote ports; for local ports retry a bind race at most three times. Probe from the participant host, then join and verify room ID. If the second forward or Join fails with a known outcome, cancel newly acquired forwards and leave no orphan participant. Retain claims/resources if mutation is uncertain until explicit recovery.
 
-## Action flow and trusted boundaries
+Reuse/ref-count routes for a room plus participant machine/Herdr session. Release owned routes on rollback, confirmed inactive bindings, coordinator shutdown, or plugin disable. Existing `parley leave`/`stop` remain available; coordinator status/reconciliation checks known bindings for stale leases without discovering rooms. Detaching the UI leaves the coordinator/masters running. Never stop existing agents or unrelated tunnels.
 
-Actions `parley.start`, `parley.join`, `parley.leave`, and `parley.stop` use a terminal popup for input and visible results. The action captures pane context before opening the popup; a popup has no agent pane identity of its own. Forms preserve terminal settings, support Escape cancellation, and show structured failures in plain language. Do not use a new TUI dependency.
+## Required Parley change
 
-Resolve the target using the captured Herdr session socket and `agent get`. Store machine ID, terminal ID, agent kind, and native agent session value when present. Re-resolve pane ID from terminal ID after pane moves. Existing Claude/Codex integrations provide native session identity; if it is absent, require it before enabling automatic prompting and show `agent_identity_required`. A pane ID or label alone is not a safe persistent binding.
+Add `parley join --artifact-endpoint <http-url>` and pass it through public Join, hidden participant daemon, daemon argv, and adapter initialization. Otherwise the adapter uses the room's original artifact port, which may not be the forwarded port.
 
-Remote callback operations are `start`, `join`, `leave`, `stop`, and `status`. Every mutation includes a random request ID. Reject unknown fields, unknown operations, oversized requests, invalid IDs, mismatched agent identity, unregistered rooms, and stop requests from a non-owner. A token permits only operations originating from its paired machine/session. No request accepts a binary path, SSH target, shell text, environment overrides, or raw Herdr method.
+Keep existing derivation when the flag is absent. Validate absolute HTTP, host/numeric port, no credentials/query/fragment, and exactly `/rooms/<room-id>/artifacts`. Supply loopback URLs from the coordinator; retain original server endpoint metadata.
 
-Keep a durable request journal before invoking mutating subprocesses. A repeated request ID with the same body returns the stored outcome; a different body is `request_conflict`. If a crash makes a mutation's outcome uncertain, reconcile its recorded intent with existing Parley sessions and binding/room records. Do not blindly repeat `start`, `join`, or prompts. An irreconcilable result is `operation_uncertain` and visible for explicit recovery.
+## Trusted boundaries and failures
 
-## Messages and recovery
+Accept fixed structured Start/Join/status requests with random IDs; internal rollback may call existing leave. Reject unknown fields/operations, malformed or oversized JSON, unsafe IDs, forged origin, and corrupt records. Origin comes from the local socket or the SSH-managed host/session from which the coordinator fetched a request.
 
-The participant worker calls local `parley wait --session <id> --timeout 30s`. When unread external messages exist, it records the highest unread sequence and waits for the same agent to be `idle` or `done`. Recheck identity and state immediately before `agent prompt`. The prompt is a constant instruction containing only the validated session ID: read `inbox` and treat room messages as collaborator input. Do not paste room text as shell code or control instructions.
+Resolve the trusted installed executable and session socket from the plugin registry/probe. Quote only that executable for the remote shell; send user fields as stdin JSON. The helper derives state paths internally and exposes only integration records. No callback authentication protocol is needed.
 
-While working, blocked, or unknown, keep one pending notification. Native Herdr status hooks signal the local worker; also reconcile state every two seconds so missed hooks cannot strand work. A listener must detect arrival while the agent is already idle. `wait` and `inbox --peek` never advance the seen cursor. Only the agent consumes `inbox` or the existing `send` response. Avoid a tight loop when `wait` repeatedly returns the same unread batch.
+Claim a request before any route/participant mutation. Same ID/body replays the outcome; changed body is `request_conflict`. Journal host-local CLI intent before mutation and persist results before returning them. Use a reserved participant name and existing runtime session records to reconcile a lost Join response. If the state cannot prove the outcome, return `operation_uncertain`, never auto-create another participant.
 
-After a successful prompt submission, persist the notified sequence. Repeated unchanged unread messages do not generate another prompt. If submission is ambiguous (timeout/crash), mark notification uncertain and show it in status; do not auto-submit the same batch again. New messages arriving during a turn may produce one subsequent notification after readiness. Removing/replacing the agent or changing its native conversation suspends delivery until explicit reattachment.
+A dead event relay reconnects and rereads the queue. A dead route is reported `route_unavailable`; an offline adapter is `participant_disconnected`. This phase does not promise adapter auto-resume, complete unread replay, or transparent collaboration across tunnel outages. Explicit recovery must not silently discard a participant's existing state.
 
-Add `parley resume --session <id>` with descriptor/artifact endpoint overrides. It reuses the saved participant name and session record, refuses a live adapter or a participant that explicitly left, and requests server replay after the persisted seen cursor. Add an optional `replay_after_seq` join field, absent for ordinary joins. Under the server join lock, replay all events after that sequence without the fresh-join 50-event limit. Resume never calls `MarkReceivedSeen`; duplicate events use existing adapter deduplication. The plugin requires compatible helpers on both endpoints before using replay.
+## Verification boundary and acceptance
 
-When the broker restores forwards with new ports, the worker reads the current binding endpoint and resumes using it. Retry transport failures with exponential backoff from one to 30 seconds and cancellation on leave/stop; do not retry validation failures. An explicit room stop is terminal. An unavailable host is reported as unavailable; never silently create a replacement room. Keep room and binding records for recovery after broker restart. Host participant leave currently ends the room; preserve that behavior and make it clear in the form.
+The prior 13-check fixture used two isolated macOS Herdr 0.9.3 servers over loopback OpenSSH. It proved metadata reads, remote plugin state writes, restart persistence/startup hooks, outbound request/result exchange without a callback, and actual Parley messages/direct HTTP artifact bytes over both `-L` and `-R`. It did not prove the reactive event relay, Linux/user SSH policies, complete claims/orchestration, supervision, or the CLI artifact override.
 
-## Storage and lifecycle
+Before dependent implementation, prove a remote action's workspace marker reaches a plugin-owned local subscriber and that pending requests survive subscription reconnect. Record `events_lost` framing/recovery and ephemeral metadata fallback. No room scan or route may occur at quiet startup.
 
-Use `HERDR_PLUGIN_CONFIG_DIR` for controller/session pairing config and `HERDR_PLUGIN_STATE_DIR` for room records, bindings, request outcomes, and notification cursors. Namespace records by controller and Herdr session. Paths and directories are not automatically shared between hosts. Pin the same `PARLEY_STATE_DIR` used by the participant so worker and agent see the same adapter metadata.
+Acceptance: Start on either host; Join an existing opposite-host pane by room ID; create both correct loopback forwards automatically; exchange a message and fetch artifact bytes through remapped ports; handle duplicate requests and partial failures without duplicate participants/orphan forwards; survive UI detach; and clean up only owned routes. Message exchange is a transport check, not a new hook feature.
 
-Use locked, atomic file replacement like existing Parley runtime stores. Refuse symlinks and malformed records; never reset corrupt state to empty and lose ownership. Use socket handshakes and child-process handles instead of killing stored PIDs. Shutdown workers and forwarding leases on leave/stop. Detaching a TUI does not shut them down. Disabling the plugin suppresses further prompts and releases helper resources without stopping agents or unrelated rooms; detect disabled state during reconciliation. Explicit setup/pairing also works after plugin installation on an already-running Herdr server because startup hooks do not run on link/enable.
+## Deferred work
 
-## Verification and completion criteria
+Message send/receive hooks, automatic prompting, readiness gating, notification workers, participant resume/unread replay, automatic adapter recovery after a tunnel outage, new-agent launch, different-remote-host relay, hosted discovery, concurrent controllers, and Windows support.
 
-Automated tests cover endpoint validation/remapping, replay beyond 50 events, lost response deduplication, identity replacement, both forwarding directions, partial acquisition rollback, and reader-only notification behavior. Real OpenSSH tests prove stream-local callback forwarding, dynamic remote port allocation/cancellation, two-port routing, and tunnel restoration. Real Herdr checks prove invoking join from a remote selected pane reaches the local helper and that closing the UI leaves processes running.
+## Sources
 
-Acceptance: create a room on either endpoint; join an existing agent on the opposite endpoint by ID; exchange messages and fetch an artifact despite remapped ports; notify an already-idle agent once; defer while busy/blocked; recover a tunnel without losing unread events or changing session ID; leave/stop clean up only owned resources. Record missing credentials or tools as unverified, not as success.
-
-## Deferred scope
-
-No new-agent launch, remote-to-remote relay, hosted discovery service, multiple simultaneous local controllers, Windows transport, agent-specific mid-turn injection, or generic remote command runner. These are excluded from this first release.
-
-## Sources and repository evidence
-
-- [Herdr plugins](https://herdr.dev/docs/plugins/): executable manifests, startup lifecycle, popup context, config/state directories.
-- [Herdr connecting machines](https://herdr.dev/docs/connecting-machines/): selected-server execution and server-scoped IDs.
-- [Herdr CLI](https://herdr.dev/docs/cli-reference/): machine listing and remote API forwarding.
-- [Herdr socket API](https://herdr.dev/docs/socket-api/): agent identity, subscriptions, authoritative reconciliation.
-- [OpenSSH ssh(1)](https://man.openbsd.org/ssh): stream-local forwarding, multiplex forwarding, dynamic remote port allocation.
-- [OpenSSH ssh_config(5)](https://man.openbsd.org/ssh_config): control paths, bind modes, failure and keepalive behavior.
-- `cmd/parley/participant_artifacts.go`: artifact endpoint currently uses descriptor host and original artifact port.
-- `cmd/parley/participant_daemon.go`: adapters exit on connection loss; fresh join marks snapshot seen.
-- `internal/server/server.go`: fresh join history is limited to 50 events.
-- `internal/adapter/adapter.go`: locked event deduplication and cursor-preserving metadata merge.
+- [Herdr plugins](https://herdr.dev/docs/plugins/) and [connecting machines](https://herdr.dev/docs/connecting-machines/): host-local actions, startup and plugin state.
+- [Herdr socket API](https://herdr.dev/docs/socket-api/): metadata persistence/limits, API-only workspace events, subscriptions and `events_lost` recovery.
+- [Herdr CLI](https://herdr.dev/docs/cli-reference/): saved profiles and remote metadata reads.
+- [OpenSSH ssh(1)](https://man.openbsd.org/ssh) and [ssh_config(5)](https://man.openbsd.org/ssh_config): forwarding, owned masters and bind/failure behavior.
+- Repository: `cmd/parley/join.go`, `daemon_commands.go`, `daemon_process.go`, `participant_daemon.go`, `participant_artifacts.go`; `internal/runtime/runtime.go` for existing session reconciliation.
