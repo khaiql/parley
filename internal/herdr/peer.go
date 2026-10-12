@@ -7,14 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/khaiql/parley/internal/descriptor"
 )
 
 type ProbeResult struct {
@@ -135,7 +132,18 @@ func (r RPCRequest) Validate() error {
 		if !validDigest(r.BindingKey) {
 			return fmt.Errorf("invalid binding key")
 		}
-	case "start", "join", "leave", "probe-route":
+	case "probe-route":
+		allowed.ControllerID = r.ControllerID
+		allowed.SessionKey = r.SessionKey
+		allowed.RoomID = r.RoomID
+		allowed.Endpoints = r.Endpoints
+		if r.Endpoints == nil {
+			return fmt.Errorf("route endpoints required")
+		}
+		if _, _, e := validateEndpoints(*r.Endpoints, r.RoomID); e != nil {
+			return e
+		}
+	case "start", "join", "leave":
 		return fmt.Errorf("capability_unavailable: %s", r.Operation)
 	default:
 		return fmt.Errorf("unsupported helper operation")
@@ -489,6 +497,13 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 		}
 		binding.Target = target
 		return binding, nil
+	case "probe-route":
+		if e := probeRoute(ctx, *r.Endpoints, r.RoomID); e != nil {
+			return nil, e
+		}
+		return struct {
+			Status string `json:"status"`
+		}{Status: "ready"}, nil
 	case "events":
 		return nil, fmt.Errorf("stream operation requires RelayEvents")
 	}
@@ -529,13 +544,8 @@ func (h HostSession) validRoom(room Room, owner SessionConfig) (Room, error) {
 		return room, e
 	}
 	room.Host = target
-	parsed, e := descriptor.Parse(room.Source.Descriptor)
-	if e != nil || parsed.RoomID != room.ID || parsed.Host != "127.0.0.1" {
-		return room, fmt.Errorf("corrupt room descriptor")
-	}
-	u, e := url.Parse(room.Source.ArtifactURL)
-	if e != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.Port() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "/rooms/"+room.ID+"/artifacts" {
-		return room, fmt.Errorf("corrupt room artifact endpoint")
+	if _, _, e := validateEndpoints(room.Source, room.ID); e != nil {
+		return room, fmt.Errorf("corrupt room endpoints: %w", e)
 	}
 	return room, nil
 }
