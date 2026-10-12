@@ -34,7 +34,7 @@ func privateDir(dir string) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("private directory is not a directory: %s", dir)
 	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || stat.Uid != uint32(os.Getuid()) {
+	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || int64(stat.Uid) != int64(os.Getuid()) {
 		return fmt.Errorf("private directory is not owned by current user: %s", dir)
 	}
 	return os.Chmod(dir, 0700)
@@ -51,7 +51,7 @@ func privateFile(path string, flags int) (*os.File, error) {
 		return nil, err
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !info.Mode().IsRegular() || !ok || stat.Uid != uint32(os.Getuid()) || info.Mode().Perm()&0077 != 0 {
+	if !info.Mode().IsRegular() || !ok || int64(stat.Uid) != int64(os.Getuid()) || info.Mode().Perm()&0077 != 0 {
 		f.Close()
 		return nil, fmt.Errorf("record must be private, regular, and owned by current user: %s", path)
 	}
@@ -62,6 +62,7 @@ func lockFile(ctx context.Context, path string, fn func() error) error {
 	if err != nil {
 		return err
 	}
+	// Closing this owned descriptor releases its flock.
 	defer f.Close()
 	for {
 		if err := ctx.Err(); err != nil {
@@ -82,7 +83,6 @@ func lockFile(ctx context.Context, path string, fn func() error) error {
 		case <-timer.C:
 		}
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return fn()
 }
 func (s *Store) locked(fn func() error) error {
