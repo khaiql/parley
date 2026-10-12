@@ -539,3 +539,118 @@ func TestStoreReadHydratesOutcomesAndRejectsIndexMutation(t *testing.T) {
 		t.Fatal("corrupt outcome destroyed")
 	}
 }
+
+func TestStoreRejectsMalformedUTF8AndPreservesRecords(t *testing.T) {
+	actions := []struct {
+		name, record string
+		run          func(*Store, Outcome) error
+	}{
+		{"state-read", "state", func(s *Store, _ Outcome) error { _, err := s.Read(); return err }},
+		{"state-update", "state", func(s *Store, _ Outcome) error { return s.Update(func(*State) error { return nil }) }},
+		{"outcome-read", "outcome", func(s *Store, _ Outcome) error { _, err := s.Read(); return err }},
+		{"outcome-update", "outcome", func(s *Store, _ Outcome) error { return s.Update(func(*State) error { return nil }) }},
+		{"outcome-claim", "outcome", func(s *Store, _ Outcome) error { _, err := s.Claim("one", fixtureDigest(), "owner"); return err }},
+		{"outcome-complete", "outcome", func(s *Store, o Outcome) error { o.Phase = "complete"; return s.Complete("one", o) }},
+	}
+	for _, action := range actions {
+		t.Run(action.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := NewStore(dir)
+			if err := s.Enqueue(request("one")); err != nil {
+				t.Fatal(err)
+			}
+			outcome, err := s.Claim("one", fixtureDigest(), "owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "state.json")
+			var data []byte
+			if action.record == "state" {
+				data = []byte(`{"rooms":{"room-a":{"id":"room-a","topic":"broken_utf8"}}}`)
+			} else {
+				path = filepath.Join(dir, "outcomes", "one.json")
+				outcome.Response.Message = "broken_utf8"
+				data, err = json.Marshal(outcome)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			data = bytes.ReplaceAll(data, []byte("broken_utf8"), []byte{'b', 0xff})
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := action.run(s, outcome); err == nil {
+				t.Error("malformed UTF-8 accepted")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, data) {
+				t.Error("corrupt record bytes changed")
+			}
+		})
+	}
+}
+
+func TestCompletePhaseMatrixPreservesRejectedOutcomes(t *testing.T) {
+	transitions := []struct {
+		from, to string
+		allowed  bool
+	}{
+		{"claimed", "claimed", false}, {"claimed", "intent", true}, {"claimed", "uncertain", true}, {"claimed", "complete", true},
+		{"intent", "claimed", false}, {"intent", "intent", true}, {"intent", "uncertain", true}, {"intent", "complete", true},
+		{"uncertain", "claimed", false}, {"uncertain", "intent", false}, {"uncertain", "uncertain", true}, {"uncertain", "complete", true},
+		{"complete", "claimed", false}, {"complete", "intent", false}, {"complete", "uncertain", false}, {"complete", "complete", true},
+	}
+	for _, transition := range transitions {
+		t.Run(transition.from+"-to-"+transition.to, func(t *testing.T) {
+			dir := t.TempDir()
+			s := NewStore(dir)
+			if err := s.Enqueue(request("one")); err != nil {
+				t.Fatal(err)
+			}
+			outcome, err := s.Claim("one", fixtureDigest(), "owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if transition.from != "claimed" {
+				outcome.Phase = transition.from
+				if err := s.Complete("one", outcome); err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := filepath.Join(dir, "outcomes", "one.json")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outcome.Phase = transition.to
+			err = s.Complete("one", outcome)
+			if transition.allowed {
+				if err != nil {
+					t.Fatal(err)
+				}
+				state, err := NewStore(dir).Read()
+				if err != nil || state.Requests["one"].Phase != transition.to {
+					t.Fatal(state, err)
+				}
+			} else {
+				if err == nil {
+					t.Error("forbidden phase transition accepted")
+				}
+				after, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(before, after) {
+					t.Error("rejected transition changed persisted outcome")
+				}
+				state, err := NewStore(dir).Read()
+				if err != nil || state.Requests["one"].Phase != transition.from {
+					t.Error("prior phase not retained after restart", state, err)
+				}
+			}
+		})
+	}
+}
