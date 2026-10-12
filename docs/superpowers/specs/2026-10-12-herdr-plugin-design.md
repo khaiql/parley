@@ -99,7 +99,7 @@ ssh -S <owned-master> -O forward -R 127.0.0.1:0:127.0.0.1:<local-source-port> <t
 ssh -S <owned-master> -O forward -L 127.0.0.1:<local-port>:127.0.0.1:<remote-source-port> <target>
 ```
 
-Apply once per endpoint. Parse allocated remote ports; for local ports retry a bind race at most three times. Probe from the participant host, then join and verify room ID.
+Apply once per endpoint. Parse allocated remote ports. Retry local candidates at most three times only after authoritative no-effect evidence or successful cancellation of the exact attempted candidate. A generic mux exit255 or failed cancellation never proves absence; retain uncertain owned routes as `route_unavailable` for explicit recovery instead of retrying. Probe from the participant host, then join and verify room ID.
 
 For artifact HTTP, send an empty `POST /rooms/<room-id>/artifacts/staged` with no query string, credentials, or request body. The existing route validates the room first, then rejects the missing participant before invoking artifact storage. Require HTTP 400, JSON content type, and exactly `{"error":{"code":"bad_request","message":"participant query parameter is required"}}`. As a negative control, send the same request with a distinct helper-generated room ID; require HTTP 404 and exactly `{"error":{"code":"artifact_unavailable","message":"artifact route is not available"}}`. Generic responses, redirects, or identical replies to both IDs fail the probe. Disable redirects, use five-second timeouts, and bound each response to 64 KiB. This verifies expected room routing through the existing unauthenticated API without staging/consuming artifacts or adding an endpoint.
 
