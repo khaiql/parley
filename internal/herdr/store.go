@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 type Store struct{ dir string }
@@ -119,6 +120,9 @@ func readJSON(path string, v any) error {
 	b, err := io.ReadAll(f)
 	if err != nil {
 		return err
+	}
+	if !utf8.Valid(b) {
+		return fmt.Errorf("corrupt record %s: invalid UTF-8", path)
 	}
 	if len(bytes.TrimSpace(b)) == 0 || bytes.TrimSpace(b)[0] != '{' {
 		return fmt.Errorf("invalid record: %s", path)
@@ -412,8 +416,8 @@ func (s *Store) Complete(requestID string, out Outcome) error {
 			}
 			return nil
 		}
-		if out.Phase == "claimed" && prior.Phase != "claimed" {
-			return fmt.Errorf("outcome cannot regress to claimed")
+		if out.Phase == "claimed" || prior.Phase == "uncertain" && out.Phase == "intent" {
+			return fmt.Errorf("invalid outcome phase transition: %s to %s", prior.Phase, out.Phase)
 		}
 		return writeJSON(filepath.Join(s.dir, "outcomes", requestID+".json"), out)
 	})
