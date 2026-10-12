@@ -163,7 +163,7 @@ func privateSocketDir(path string) error {
 		return err
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !info.IsDir() || !ok || stat.Uid != uint32(os.Getuid()) || info.Mode().Perm()&0077 != 0 {
+	if !info.IsDir() || !ok || int64(stat.Uid) != int64(os.Getuid()) || info.Mode().Perm()&0077 != 0 {
 		return fmt.Errorf("socket directory must be private and owned by current user")
 	}
 	return nil
@@ -298,7 +298,7 @@ func CallLocal(ctx context.Context, path string, req Request) (Response, error) 
 		return Response{}, err
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	if info.Mode()&os.ModeSocket == 0 || !ok || stat.Uid != uint32(os.Getuid()) || info.Mode().Perm()&0077 != 0 {
+	if info.Mode()&os.ModeSocket == 0 || !ok || int64(stat.Uid) != int64(os.Getuid()) || info.Mode().Perm()&0077 != 0 {
 		return Response{}, fmt.Errorf("unsafe local socket")
 	}
 	dialer := net.Dialer{Timeout: 5 * time.Second}
