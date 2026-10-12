@@ -109,13 +109,13 @@
   },
   "contexts": [
     {
-      "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
-      "key": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49",
+      "socket": "<fixture>/config/herdr/sessions/beta/herdr.sock",
+      "key": "b432e929bbf9ea086d6ccf5821f1ad79e4f59b1eb714a4779bbcd73c603636f7",
       "state_root": "<fixture>/state/herdr/plugins/parley-reactive-proof",
       "config_root": "<fixture>/config/herdr/plugins/config/parley-reactive-proof",
       "context": {
         "workspace_id": "w1",
-        "workspace_label": "alpha",
+        "workspace_label": "beta",
         "workspace_cwd": "<fixture>",
         "tab_id": "w1:t1",
         "tab_label": "1",
@@ -129,13 +129,13 @@
       "mode": "enqueue"
     },
     {
-      "socket": "<fixture>/config/herdr/sessions/beta/herdr.sock",
-      "key": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac",
+      "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
+      "key": "d6b047ca318a2181af6710ae19a72946b1340a053725c3b5f9fa9231b14cd99c",
       "state_root": "<fixture>/state/herdr/plugins/parley-reactive-proof",
       "config_root": "<fixture>/config/herdr/plugins/config/parley-reactive-proof",
       "context": {
         "workspace_id": "w1",
-        "workspace_label": "beta",
+        "workspace_label": "alpha",
         "workspace_cwd": "<fixture>",
         "tab_id": "w1:t1",
         "tab_label": "1",
@@ -151,34 +151,8 @@
   ],
   "startup-contexts": [
     {
-      "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
-      "key": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49",
-      "state_root": "<fixture>/state/herdr/plugins/parley-reactive-proof",
-      "config_root": "<fixture>/config/herdr/plugins/config/parley-reactive-proof",
-      "context": {
-        "workspace_id": "w1",
-        "workspace_label": "alpha",
-        "workspace_cwd": "<fixture>",
-        "tab_id": "w1:t1",
-        "tab_label": "1",
-        "focused_pane_id": "w1:p1",
-        "focused_pane_cwd": "<fixture>",
-        "focused_pane_status": "unknown",
-        "invocation_source": "startup",
-        "correlation_id": "plugin.startup"
-      },
-      "workspace": "w1",
-      "mode": "startup",
-      "role": {
-        "role": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49"
-      },
-      "controller": {
-        "owner": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49"
-      }
-    },
-    {
       "socket": "<fixture>/config/herdr/sessions/beta/herdr.sock",
-      "key": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac",
+      "key": "b432e929bbf9ea086d6ccf5821f1ad79e4f59b1eb714a4779bbcd73c603636f7",
       "state_root": "<fixture>/state/herdr/plugins/parley-reactive-proof",
       "config_root": "<fixture>/config/herdr/plugins/config/parley-reactive-proof",
       "context": {
@@ -196,22 +170,48 @@
       "workspace": "w1",
       "mode": "startup",
       "role": {
-        "role": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac"
+        "role": "b432e929bbf9ea086d6ccf5821f1ad79e4f59b1eb714a4779bbcd73c603636f7"
       },
       "controller": {
-        "owner": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac"
+        "owner": "b432e929bbf9ea086d6ccf5821f1ad79e4f59b1eb714a4779bbcd73c603636f7"
+      }
+    },
+    {
+      "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
+      "key": "d6b047ca318a2181af6710ae19a72946b1340a053725c3b5f9fa9231b14cd99c",
+      "state_root": "<fixture>/state/herdr/plugins/parley-reactive-proof",
+      "config_root": "<fixture>/config/herdr/plugins/config/parley-reactive-proof",
+      "context": {
+        "workspace_id": "w1",
+        "workspace_label": "alpha",
+        "workspace_cwd": "<fixture>",
+        "tab_id": "w1:t1",
+        "tab_label": "1",
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": "<fixture>",
+        "focused_pane_status": "unknown",
+        "invocation_source": "startup",
+        "correlation_id": "plugin.startup"
+      },
+      "workspace": "w1",
+      "mode": "startup",
+      "role": {
+        "role": "d6b047ca318a2181af6710ae19a72946b1340a053725c3b5f9fa9231b14cd99c"
+      },
+      "controller": {
+        "owner": "d6b047ca318a2181af6710ae19a72946b1340a053725c3b5f9fa9231b14cd99c"
       }
     }
   ],
   "ack": {
-    "id": "join-events",
+    "id": "join-events-1",
     "result": {
       "type": "subscription_started"
     }
   },
   "events": [
     {
-      "id": "join-events",
+      "id": "join-events-1",
       "result": {
         "type": "subscription_started"
       }
@@ -228,7 +228,7 @@
           "pane_count": 1,
           "tab_count": 1,
           "tokens": {
-            "parley_request": "f400f24f17f34781b1c28c8fb3df5c0c"
+            "parley_request": "09d768e5f4ea4f1eb16af46f127f9628"
           },
           "workspace_id": "w1"
         }
@@ -247,7 +247,7 @@
           "pane_count": 1,
           "tab_count": 1,
           "tokens": {
-            "parley_request": "3063f108117144a2876dc9ee6d62e24d"
+            "parley_request": "a1251b5610a048c8a0418091c87fb8d5"
           },
           "workspace_id": "w1"
         }
@@ -270,7 +270,7 @@
           "active_tab_id": "w1:t1",
           "agent_status": "unknown",
           "tokens": {
-            "parley_request": "3063f108117144a2876dc9ee6d62e24d"
+            "parley_request": "a1251b5610a048c8a0418091c87fb8d5"
           }
         }
       ]
@@ -296,91 +296,91 @@
   },
   "pending-after-subscribe": {
     "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
-    "session_key": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49",
+    "session_key": "d6b047ca318a2181af6710ae19a72946b1340a053725c3b5f9fa9231b14cd99c",
     "requests": [
       {
-        "id": "3063f108117144a2876dc9ee6d62e24d",
+        "id": "09d768e5f4ea4f1eb16af46f127f9628",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       },
       {
-        "id": "f400f24f17f34781b1c28c8fb3df5c0c",
+        "id": "67fd0b0ea137418294e9b6bdda40a2ee",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       },
       {
-        "id": "1a7b027e60924eb990b6313d8335fd9a",
+        "id": "a1251b5610a048c8a0418091c87fb8d5",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       }
     ],
     "room": {
-      "session": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49"
+      "session": "d6b047ca318a2181af6710ae19a72946b1340a053725c3b5f9fa9231b14cd99c"
     }
   },
   "recovery": {
     "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
-    "session_key": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49",
+    "session_key": "d6b047ca318a2181af6710ae19a72946b1340a053725c3b5f9fa9231b14cd99c",
     "requests": [
       {
-        "id": "3063f108117144a2876dc9ee6d62e24d",
+        "id": "09d768e5f4ea4f1eb16af46f127f9628",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       },
       {
-        "id": "f400f24f17f34781b1c28c8fb3df5c0c",
+        "id": "67fd0b0ea137418294e9b6bdda40a2ee",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       },
       {
-        "id": "1a7b027e60924eb990b6313d8335fd9a",
+        "id": "a1251b5610a048c8a0418091c87fb8d5",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       }
     ],
     "room": {
-      "session": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49"
+      "session": "d6b047ca318a2181af6710ae19a72946b1340a053725c3b5f9fa9231b14cd99c"
     }
   },
   "beta-isolation": {
     "socket": "<fixture>/config/herdr/sessions/beta/herdr.sock",
-    "session_key": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac",
+    "session_key": "b432e929bbf9ea086d6ccf5821f1ad79e4f59b1eb714a4779bbcd73c603636f7",
     "requests": [
       {
-        "id": "347fb5f4bd8c498a8134e7f729d2f662",
+        "id": "cf20e77b057b4d9292762f851ac3c759",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       }
     ],
     "room": {
-      "session": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac"
+      "session": "b432e929bbf9ea086d6ccf5821f1ad79e4f59b1eb714a4779bbcd73c603636f7"
     }
   },
   "beta-restart": {
     "socket": "<fixture>/config/herdr/sessions/beta/herdr.sock",
-    "session_key": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac",
+    "session_key": "b432e929bbf9ea086d6ccf5821f1ad79e4f59b1eb714a4779bbcd73c603636f7",
     "requests": [
       {
-        "id": "347fb5f4bd8c498a8134e7f729d2f662",
+        "id": "cf20e77b057b4d9292762f851ac3c759",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       }
     ],
     "room": {
-      "session": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac"
+      "session": "b432e929bbf9ea086d6ccf5821f1ad79e4f59b1eb714a4779bbcd73c603636f7"
     }
   },
   "events-lost-force": {
     "updates": 2400,
-    "received_frames": 1,
+    "received_frames": 294,
     "ack": {
       "id": "slow-events",
       "result": {
@@ -398,79 +398,79 @@
   },
   "loss-recovery": {
     "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
-    "session_key": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49",
+    "session_key": "d6b047ca318a2181af6710ae19a72946b1340a053725c3b5f9fa9231b14cd99c",
     "requests": [
       {
-        "id": "3063f108117144a2876dc9ee6d62e24d",
+        "id": "09d768e5f4ea4f1eb16af46f127f9628",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       },
       {
-        "id": "f400f24f17f34781b1c28c8fb3df5c0c",
+        "id": "67fd0b0ea137418294e9b6bdda40a2ee",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       },
       {
-        "id": "1a7b027e60924eb990b6313d8335fd9a",
+        "id": "a1251b5610a048c8a0418091c87fb8d5",
         "op": "join",
         "room_id": "room-proof",
         "pane_id": "w1:p1"
       }
     ],
     "room": {
-      "session": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49"
+      "session": "d6b047ca318a2181af6710ae19a72946b1340a053725c3b5f9fa9231b14cd99c"
     }
   },
   "allocate-R": {
     "routes": [
       [
-        "127.0.0.1:0:127.0.0.1:51791",
-        51794,
-        51791
+        "127.0.0.1:0:127.0.0.1:54394",
+        54396,
+        54394
       ],
       [
-        "127.0.0.1:0:127.0.0.1:51790",
-        51795,
-        51790
+        "127.0.0.1:0:127.0.0.1:54393",
+        54397,
+        54393
       ]
     ],
     "ports": [
-      51794,
-      51795
+      54396,
+      54397
     ]
   },
   "allocate-L": {
     "routes": [
       [
-        "127.0.0.1:51806:127.0.0.1:51804",
-        51806,
-        51804
+        "127.0.0.1:54406:127.0.0.1:54404",
+        54406,
+        54404
       ],
       [
-        "127.0.0.1:51807:127.0.0.1:51803",
-        51807,
-        51803
+        "127.0.0.1:54407:127.0.0.1:54403",
+        54407,
+        54403
       ]
     ],
     "ports": [
-      51806,
-      51807
+      54406,
+      54407
     ]
   },
   "cancel-R": [
-    "127.0.0.1:51794:127.0.0.1:51791",
-    "127.0.0.1:51795:127.0.0.1:51790"
+    "127.0.0.1:54396:127.0.0.1:54394",
+    "127.0.0.1:54397:127.0.0.1:54393"
   ],
   "cancel-L": [
-    "127.0.0.1:51806:127.0.0.1:51804",
-    "127.0.0.1:51807:127.0.0.1:51803"
+    "127.0.0.1:54406:127.0.0.1:54404",
+    "127.0.0.1:54407:127.0.0.1:54403"
   ],
   "partial-failure-R": {
-    "allocated": "51817",
+    "allocated": "54418",
     "exit": 255,
-    "stderr": "mux_client_forward: forwarding request failed: remote port forwarding failed for listen port 51816\nmuxclient: master forward request failed\n",
+    "stderr": "mux_client_forward: forwarding request failed: remote port forwarding failed for listen port 54417\nmuxclient: master forward request failed\n",
     "rolled_back": true
   },
   "partial-failure-L": {
@@ -482,8 +482,8 @@
     "ui_exit": -9,
     "close_method": "PTY UI killed after detach key did not exit",
     "subscriber_alive": true,
-    "master_check": "Master running (pid=45885)\n",
-    "event_after_detach": "{\"data\":{\"type\":\"workspace_metadata_updated\",\"workspace\":{\"active_tab_id\":\"w1:t1\",\"agent_status\":\"unknown\",\"focused\":true,\"label\":\"alpha\",\"number\":1,\"pane_count\":1,\"tab_count\":1,\"tokens\":{\"flood\":\"2399\",\"parley_request\":\"74620dce34cc42ab8bb542c9adf7359d\"},\"workspace_id\":\"w1\"}},\"event\":\"workspace_metadata_updated\"}"
+    "master_check": "Master running (pid=70392)\n",
+    "event_after_detach": "{\"data\":{\"type\":\"workspace_metadata_updated\",\"workspace\":{\"active_tab_id\":\"w1:t1\",\"agent_status\":\"unknown\",\"focused\":true,\"label\":\"alpha\",\"number\":1,\"pane_count\":1,\"tab_count\":1,\"tokens\":{\"flood\":\"2399\",\"parley_request\":\"5acef619a2ca428b835be78dc528e15f\"},\"workspace_id\":\"w1\"}},\"event\":\"workspace_metadata_updated\"}"
   },
   "cleanup": "Owned children reaped; keys, authorized_keys, known_hosts and ssh_config removed; plugin unlinked",
   "schema_contract": {
@@ -523,5 +523,130 @@
       ],
       "type": "object"
     }
-  }
+  },
+  "recovery-order": [
+    {
+      "order": 1,
+      "monotonic_ns": 1361688794368250,
+      "event": "subscription_started_process",
+      "subscription_id": "join-events-1",
+      "stream": "alpha-stream-1.jsonl"
+    },
+    {
+      "order": 2,
+      "monotonic_ns": 1361688909289083,
+      "event": "fresh_subscription_ack",
+      "subscription_id": "join-events-1",
+      "stream": "alpha-stream-1.jsonl",
+      "acknowledgement": {
+        "id": "join-events-1",
+        "result": {
+          "type": "subscription_started"
+        }
+      }
+    },
+    {
+      "order": 3,
+      "monotonic_ns": 1361690403182041,
+      "event": "queue_read_started",
+      "subscription_id": "join-events-1",
+      "stream": "alpha-stream-1.jsonl",
+      "stage": "initial-reconcile"
+    },
+    {
+      "order": 4,
+      "monotonic_ns": 1361690492631666,
+      "event": "queue_read_completed",
+      "subscription_id": "join-events-1",
+      "stream": "alpha-stream-1.jsonl",
+      "stage": "initial-reconcile",
+      "request_ids": [
+        "09d768e5f4ea4f1eb16af46f127f9628",
+        "67fd0b0ea137418294e9b6bdda40a2ee",
+        "a1251b5610a048c8a0418091c87fb8d5"
+      ]
+    },
+    {
+      "order": 5,
+      "monotonic_ns": 1361691253484083,
+      "event": "subscription_started_process",
+      "subscription_id": "join-events-2",
+      "stream": "alpha-stream-2.jsonl"
+    },
+    {
+      "order": 6,
+      "monotonic_ns": 1361691368905208,
+      "event": "fresh_subscription_ack",
+      "subscription_id": "join-events-2",
+      "stream": "alpha-stream-2.jsonl",
+      "acknowledgement": {
+        "id": "join-events-2",
+        "result": {
+          "type": "subscription_started"
+        }
+      }
+    },
+    {
+      "order": 7,
+      "monotonic_ns": 1361691368961708,
+      "event": "queue_read_started",
+      "subscription_id": "join-events-2",
+      "stream": "alpha-stream-2.jsonl",
+      "stage": "restart-reconcile"
+    },
+    {
+      "order": 8,
+      "monotonic_ns": 1361691461175916,
+      "event": "queue_read_completed",
+      "subscription_id": "join-events-2",
+      "stream": "alpha-stream-2.jsonl",
+      "stage": "restart-reconcile",
+      "request_ids": [
+        "09d768e5f4ea4f1eb16af46f127f9628",
+        "67fd0b0ea137418294e9b6bdda40a2ee",
+        "a1251b5610a048c8a0418091c87fb8d5"
+      ]
+    },
+    {
+      "order": 9,
+      "monotonic_ns": 1361692902063125,
+      "event": "subscription_started_process",
+      "subscription_id": "join-events-3",
+      "stream": "alpha-stream-3.jsonl"
+    },
+    {
+      "order": 10,
+      "monotonic_ns": 1361693016434500,
+      "event": "fresh_subscription_ack",
+      "subscription_id": "join-events-3",
+      "stream": "alpha-stream-3.jsonl",
+      "acknowledgement": {
+        "id": "join-events-3",
+        "result": {
+          "type": "subscription_started"
+        }
+      }
+    },
+    {
+      "order": 11,
+      "monotonic_ns": 1361693016491208,
+      "event": "queue_read_started",
+      "subscription_id": "join-events-3",
+      "stream": "alpha-stream-3.jsonl",
+      "stage": "history-loss-reconcile"
+    },
+    {
+      "order": 12,
+      "monotonic_ns": 1361693111717166,
+      "event": "queue_read_completed",
+      "subscription_id": "join-events-3",
+      "stream": "alpha-stream-3.jsonl",
+      "stage": "history-loss-reconcile",
+      "request_ids": [
+        "09d768e5f4ea4f1eb16af46f127f9628",
+        "67fd0b0ea137418294e9b6bdda40a2ee",
+        "a1251b5610a048c8a0418091c87fb8d5"
+      ]
+    }
+  ]
 }

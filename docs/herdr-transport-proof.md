@@ -51,7 +51,7 @@ The saved fixture profile is enabled, targets `proof-host`, and explicitly names
 
 The subscriber pins the selected inventory socket and canonicalizes it while reachable. The default socket is deliberately absent. The profile's `session:"alpha"`, explicit session inventory, action's injected `HERDR_SOCKET_PATH`, and helper probe canonical path/key agree. A helper must persist this verified path, compare its probe key before reading state, and reject a mismatch. It must not let the remote login shell select a default session.
 
-Remote `plugin list --json` returns `result.type:"plugin_list"`, `plugin_root:"<fixture>/plugin"`, and `manifest_path:"<fixture>/plugin/herdr-plugin.toml"`. The prototype helper is a fixture script reached through that known install root; it accepts fixture-only test arguments. Production must resolve its fixed installed executable from trusted registry/probe information and derive plugin roots internally, never expose that prototype's arbitrary path arguments.
+Remote `plugin list --json` returns `result.type:"plugin_list"`, `plugin_root:"<fixture>/plugin"`, and `manifest_path:"<fixture>/plugin/herdr-plugin.toml"`. The prototype helper is `<fixture>/helper.py`, outside the observed `<fixture>/plugin` install root; it accepts fixture-only socket/state-root arguments. Plugin-root discovery is observed, but installed-helper lookup is **unverified**. Production must resolve its fixed installed executable from trusted registry/probe information and derive plugin roots internally, never expose that prototype's arbitrary path arguments.
 
 Both action invocations receive identical `HERDR_PLUGIN_STATE_DIR` and `HERDR_PLUGIN_CONFIG_DIR`:
 
@@ -84,13 +84,13 @@ The action writes a random Join request under its socket-derived `sessions/<key>
 The fixed subscriber sends one NDJSON request to that pinned Unix socket and drains stdout through SSH initiated on the local machine:
 
 ```json
-{"id":"join-events","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.metadata_updated"}]}}
+{"id":"join-events-1","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.metadata_updated"}]}}
 ```
 
 Observed native acknowledgement:
 
 ```json
-{"id":"join-events","result":{"type":"subscription_started"}}
+{"id":"join-events-1","result":{"type":"subscription_started"}}
 ```
 
 Observed event (fixture marker retained):
@@ -120,6 +120,18 @@ The fresh run performs this order:
 ```
 
 8. Establish a fresh outbound subscription and reread alpha's pending queue. All three durable requests remain available.
+
+The original harness reused an append-only output file, so old content could satisfy recovery readiness. That evidence did not establish fresh acknowledgement order. The corrected fresh run creates an exclusive, empty output file and a distinct request ID for **each** connection. It parses and requires that connection's `subscription_started` response before starting the separate queue-read SSH process. A controlled stale-content test fails against the old readiness check and passes against the corrected parser.
+
+The sanitized fixture now captures the explicit order (monotonic timestamps are retained in JSON):
+
+| Reconciliation | Fresh stream | Fresh acknowledgement ID | Ack order | Read start | Read complete | Pending requests |
+| --- | --- | --- | --- | --- | --- | --- |
+| Initial | `alpha-stream-1.jsonl` | `join-events-1` | 2 | 3 | 4 | 3 |
+| After restart | `alpha-stream-2.jsonl` | `join-events-2` | 6 | 7 | 8 | 3 |
+| After history loss | `alpha-stream-3.jsonl` | `join-events-3` | 10 | 11 | 12 | 3 |
+
+All three reads return identical alpha request IDs. Each acknowledgement is a native response from its newly started SSH relay; file existence or stale output alone cannot satisfy readiness. This trace establishes fresh subscribe-before-read ordering for initial reconciliation, restart/reconnect, and history-loss recovery.
 
 `events_lost` is **observed on the real binary**, not a synthetic frame. Frame counts before the error vary with socket buffers and scheduling. Herdr 0.9.3's [event hub source](https://github.com/herdrdev/herdr/blob/v0.9.3/src/api/event_hub.rs) retains 512 events; the bounded test exceeds that history after acknowledgement. [Subscription source](https://github.com/herdrdev/herdr/blob/v0.9.3/src/api/subscriptions.rs) confirms the error and recovery instruction. The error closes that stream; production must reconnect, subscribe first, and reconcile authoritative/durable state. Treat events as invalidations rather than an authoritative request queue. Task 4 should still regress this exact error frame synthetically, including an event arriving while a queue read is in flight.
 
@@ -153,18 +165,18 @@ A separate protocol and HTTP artifact forward is added for each route:
 
 ```text
 ssh -F <fixture-ssh-config> -S <private-control-path> -O forward
-  -R 127.0.0.1:0:127.0.0.1:51791 proof-host
-# stdout: 51794
+  -R 127.0.0.1:0:127.0.0.1:54394 proof-host
+# stdout: 54396
 ssh -F <fixture-ssh-config> -S <private-control-path> -O forward
-  -R 127.0.0.1:0:127.0.0.1:51790 proof-host
-# stdout: 51795
+  -R 127.0.0.1:0:127.0.0.1:54393 proof-host
+# stdout: 54397
 ```
 
 Assigned port output is a decimal port plus newline on stdout; parse it only after successful exit. Cancellation with the **allocated** port succeeds:
 
 ```text
 ssh -F <fixture-ssh-config> -S <private-control-path> -O cancel
-  -R 127.0.0.1:51794:127.0.0.1:51791 proof-host
+  -R 127.0.0.1:54396:127.0.0.1:54394 proof-host
 ```
 
 The fixture also verified cancellation using the original zero-port request in the partial-failure test. Production should retain exact forward tuples and assigned ports.
@@ -173,9 +185,9 @@ For `-L`, the caller allocates a candidate local port; OpenSSH does not return d
 
 ```text
 ssh -F <fixture-ssh-config> -S <private-control-path> -O forward
-  -L 127.0.0.1:51806:127.0.0.1:51804 proof-host
+  -L 127.0.0.1:54406:127.0.0.1:54404 proof-host
 ssh -F <fixture-ssh-config> -S <private-control-path> -O cancel
-  -L 127.0.0.1:51806:127.0.0.1:51804 proof-host
+  -L 127.0.0.1:54406:127.0.0.1:54404 proof-host
 ```
 
 For **both `-R` and `-L`**, real Parley rooms join through the protocol forward, exchange a uniquely tagged message, and fetch exact artifact bytes through the separate forwarded HTTP port. The macOS processes use separate private Parley state roots. Both endpoints are loopback sshd on one computer; this does not represent different physical hosts.
