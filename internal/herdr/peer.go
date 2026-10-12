@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/khaiql/parley/internal/descriptor"
 	"io"
 	"net/url"
 	"os"
@@ -14,6 +13,8 @@ import (
 	"reflect"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/khaiql/parley/internal/descriptor"
 )
 
 type ProbeResult struct {
@@ -281,7 +282,10 @@ func ResolveHost(ctx context.Context, c *Client, session string) (HostSession, e
 			}
 			return h, fmt.Errorf("capability_unavailable: %w", e)
 		}
-		return h, fmt.Errorf("%w: %w", ErrHostUnavailable, e)
+		if EventFailureCode(e) == "helper_transport_failed" {
+			return h, fmt.Errorf("%w: %w", ErrHostUnavailable, e)
+		}
+		return h, fmt.Errorf("capability_unavailable: %w", e)
 	}
 	var ack struct {
 		Result struct {

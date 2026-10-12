@@ -21,6 +21,7 @@ type eventHelperFixture struct {
 	acks                          atomic.Int32
 	relay                         chan net.Conn
 	listener                      net.Listener
+	handshake                     []byte
 }
 
 func eventFixture(t *testing.T) *eventHelperFixture {
@@ -83,6 +84,11 @@ func (f *eventHelperFixture) start(t *testing.T, capabilityError bool) {
 					ID string `json:"id"`
 				}
 				if e := json.NewDecoder(conn).Decode(&request); e != nil {
+					conn.Close()
+					return
+				}
+				if request.ID == "parley" && f.handshake != nil {
+					conn.Write(append(append([]byte(nil), f.handshake...), '\n'))
 					conn.Close()
 					return
 				}
@@ -214,6 +220,36 @@ func TestHerdrRPCEventStartupRejection(t *testing.T) {
 			calls, _ := os.ReadFile(filepath.Join(f.root, "calls"))
 			if e == nil || reads != 0 || string(calls) != "x" || !strings.Contains(e.Error(), map[string]string{"capability": "unsupported subscription", "controller": "controller_conflict"}[kind]) {
 				t.Fatal(e, reads, string(calls))
+			}
+		})
+	}
+}
+
+func TestHerdrRPCEventMalformedHandshake(t *testing.T) {
+	for _, kind := range []string{"JSON", "UTF8", "frame-limit"} {
+		t.Run(kind, func(t *testing.T) {
+			f := eventFixture(t)
+			diagnostic := ""
+			switch kind {
+			case "JSON":
+				f.handshake = []byte(`{bad}`)
+				diagnostic = "invalid character"
+			case "UTF8":
+				f.handshake = []byte{'{', '"', 'x', '"', ':', '"', 0xff, '"', '}'}
+				diagnostic = "invalid UTF-8"
+			case "frame-limit":
+				f.handshake = []byte(strings.Repeat("x", 1024*1024+1))
+				diagnostic = "token too long"
+			}
+			f.start(t, false)
+			ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+			defer cancel()
+			reads := 0
+			c := herdr.Client{}
+			e := c.WatchRequests(ctx, f.peer, func(context.Context, herdr.Peer) error { reads++; return nil })
+			calls, _ := os.ReadFile(filepath.Join(f.root, "calls"))
+			if e == nil || !strings.Contains(e.Error(), diagnostic) || !strings.Contains(e.Error(), "helper_startup_failed") || reads != 0 || f.acks.Load() != 0 || string(calls) != "x" {
+				t.Fatal(e, reads, f.acks.Load(), string(calls))
 			}
 		})
 	}

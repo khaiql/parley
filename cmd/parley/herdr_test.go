@@ -3,10 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
-	"github.com/khaiql/parley/internal/herdr"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/khaiql/parley/internal/herdr"
 )
 
 func TestHerdrRPCRejectBeforeProcess(t *testing.T) {

@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.com/khaiql/parley/internal/herdr"
-	"github.com/spf13/cobra"
 	"io"
 	"os/exec"
 	"time"
+
+	"github.com/khaiql/parley/internal/herdr"
+	"github.com/spf13/cobra"
 )
 
 func runHerdrRPC(ctx context.Context, in io.Reader, out io.Writer, c *herdr.Client) (any, error) {
