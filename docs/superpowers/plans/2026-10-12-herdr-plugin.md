@@ -511,7 +511,7 @@ func TestRouteKind(t *testing.T) {
 }
 ```
 
-Fake `Run` records argv. First `-R` returns `51001\n`, second fails: cancel the first allocated forward and report error. Successful acquisition returns protocol port 51001/artifact port 51002, never original server ports. Local bind race retries at most three times. Add malformed allocation, master exit, HTTP/protocol probe failure, cancellation failure retained in status, same-host no SSH, and different remote host rejection.
+Fake `Run` records argv. First `-R` returns `51001\n`, second fails: cancel the first allocated forward and the second attempted zero-port tuple, then report error. Successful acquisition returns protocol port 51001/artifact port 51002, never original server ports. Local candidates retry at most three times only after authoritative no-effect evidence or successful exact-candidate cancellation. Test a lost allocation response followed by successful cleanup before retry, and failed cleanup retaining `route_unavailable` without retry. A generic mux exit255 and failed cancellation never prove absence. Add malformed allocation, master exit, HTTP/protocol probe failure, cancellation failure retained in status, same-host no SSH, and different remote host rejection.
 
 Add `TestArtifactProbe` using the real `server.ArtifactHandler` backed by an artifact repository that fails the test on any repository method call. Matching room empty POST must return 400 with the exact missing-participant error; a distinct room must return the exact 404 route error. Neither request stages/cleans/fetches an artifact. A generic 200, generic 404, wrong JSON error, identical fake 400 for both IDs, redirect, oversized body, or timeout fails the probe.
 
@@ -538,7 +538,7 @@ default:
 }
 ```
 
-Validate both source endpoints as loopback with numeric ports and matching room ID. For cross-host acquisition choose the remote side: participant peer for `-R`, hosting peer for `-L`. Create its plugin-owned master lazily, with no initial forwards. Call `-O forward -R 127.0.0.1:0:127.0.0.1:<source-port>` once per endpoint; parse Task 1 allocation output. For `-L`, reserve an ephemeral local port, close the reservation, and retry a failed bind at most three times. Never reuse Herdr's master or weaken host-key checks.
+Validate both source endpoints as loopback with numeric ports and matching room ID. For cross-host acquisition choose the remote side: participant peer for `-R`, hosting peer for `-L`. Create its plugin-owned master lazily, with no initial forwards. Call `-O forward -R 127.0.0.1:0:127.0.0.1:<source-port>` once per endpoint; parse Task 1 allocation output. For `-L`, reserve an ephemeral local port and close the reservation. Record each attempted tuple before dispatch. On allocation error, cancel the exact attempted candidate, including the original `-R` zero-port tuple. Retry local candidates at most three times only after authoritative no-effect evidence or successful exact-candidate cancellation. Generic mux exit255 and failed cancellation never prove absence; retain uncertain owned routes as `route_unavailable` for explicit recovery instead of retrying. Never reuse Herdr's master or weaken host-key checks.
 
 Use `descriptor.Descriptor.String`, `net.JoinHostPort`, and the existing artifact path for returned endpoints. Probe protocol connectivity and artifact routing from the participant host through the fixed `probe-route` helper. `ProbeArtifact` sends an empty POST to `<artifact-base>/staged`, without a participant query or body. The real handler first checks the path's room ID, then rejects the missing participant before touching its repository:
 
@@ -560,7 +560,7 @@ Protect lease maps with a mutex and serialize acquisition per key, with finite s
 
 - [ ] **Step 4: Verify real routes independently of fake argv.**
 
-Using Task 1 hosts, start Parley on each endpoint and Join/message/fetch artifact through both directions. Occupy an original artifact port to prove remapping. Final release closes only acquired ports and leaves Herdr's SSH connection usable.
+Using Task 1 hosts, start Parley on each endpoint and Join/message/fetch artifact through both directions. Occupy an original artifact port to prove remapping. Final release closes only acquired ports and leaves Herdr's SSH connection usable. Clean real two-direction forwarding remains required. Native automatic retry of a rejected bind candidate with failed absent-tuple cancellation is not claimed: if cleanup/absence cannot be proved, visible `route_unavailable` and explicit recovery satisfy the amended failure acceptance. Fake successful cancellation proves the conditional retry branch, not native absence.
 
 ```sh
 go test ./internal/herdr -run 'TestRouteKind|TestTunnel|TestArtifactProbe' -count=1 -race
