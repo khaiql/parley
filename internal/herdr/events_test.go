@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -140,5 +141,70 @@ func TestEventsSSHDiagnostic(t *testing.T) {
 	_, e = io.ReadAll(stream)
 	if !errors.Is(e, errEventProcess) || !strings.Contains(e.Error(), "fixture SSH refused") {
 		t.Fatal(e)
+	}
+}
+
+type observedLossReader struct {
+	io.ReadCloser
+	lost chan struct{}
+	once sync.Once
+}
+
+func (r *observedLossReader) Read(p []byte) (int, error) {
+	n, e := r.ReadCloser.Read(p)
+	if e == io.EOF || strings.Contains(string(p[:n]), "events_lost") {
+		r.once.Do(func() { close(r.lost) })
+	}
+	return n, e
+}
+func TestEventsLossWhileReadInFlight(t *testing.T) {
+	for _, loss := range []string{"EOF", "events_lost"} {
+		for _, callback := range []string{"canceled", "failure"} {
+			t.Run(loss+"/"+callback, func(t *testing.T) {
+				reader, writer := io.Pipe()
+				defer reader.Close()
+				defer writer.Close()
+				seen := make(chan struct{})
+				stream := &observedLossReader{ReadCloser: reader, lost: seen}
+				entered := make(chan struct{})
+				done := make(chan error, 1)
+				go func() {
+					done <- ReadEvents(context.Background(), stream, func() error {
+						close(entered)
+						<-seen
+						if callback == "canceled" {
+							return context.Canceled
+						}
+						return fmt.Errorf("genuine queue failure")
+					}, func() error { return nil })
+				}()
+				io.WriteString(writer, `{"id":"parley-requests","result":{"type":"subscription_started"}}`+"\n")
+				<-entered
+				if loss == "EOF" {
+					writer.Close()
+				} else {
+					io.WriteString(writer, `{"id":"parley-requests","error":{"code":"events_lost"}}`+"\n")
+				}
+				select {
+				case e := <-done:
+					if callback == "failure" {
+						if e == nil || !strings.Contains(e.Error(), "genuine queue failure") {
+							t.Fatal(e)
+						}
+					} else if loss == "EOF" {
+						if e != io.EOF {
+							t.Fatal(e)
+						}
+					} else {
+						var api *apiError
+						if !errors.As(e, &api) || api.Code != "events_lost" {
+							t.Fatal(e)
+						}
+					}
+				case <-time.After(time.Second):
+					t.Fatal("blocked loss while reading")
+				}
+			})
+		}
 	}
 }

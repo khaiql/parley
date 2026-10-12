@@ -17,6 +17,28 @@ import (
 	"unicode/utf8"
 )
 
+// ErrHostUnavailable marks a temporary host/session outage at its source.
+var ErrHostUnavailable = errors.New("host temporarily unavailable")
+
+func EventFailureCode(err error) string {
+	if errors.Is(err, ErrHostUnavailable) || errors.Is(err, io.EOF) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "helper_transport_failed"
+	}
+	var network *net.OpError
+	if errors.As(err, &network) {
+		return "helper_transport_failed"
+	}
+	return "helper_startup_failed"
+}
+
+func isEventTransportError(err error) bool {
+	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, errEventProcess) {
+		return true
+	}
+	var api *apiError
+	return errors.As(err, &api) && (api.Code == "events_lost" || api.Code == "helper_transport_failed")
+}
+
 func subscriptionParams() any {
 	return map[string]any{"subscriptions": []map[string]string{{"type": "workspace.metadata_updated"}}}
 }
@@ -25,7 +47,8 @@ func subscriptionRequest() any {
 }
 
 // ReadEvents drains invalidations independently of slow authoritative queue reads.
-func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wake func() error) error {
+func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wake func() error) (result error) {
+	parent := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	if closer, ok := stream.(io.Closer); ok {
 		stopped := make(chan struct{})
@@ -39,10 +62,21 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 		}()
 	}
 	ticks := make(chan bool, 1)
-	errors := make(chan error, 1)
+	callbackErrors := make(chan error, 1)
 	var worker sync.WaitGroup
 	worker.Add(1)
-	defer func() { cancel(); worker.Wait() }()
+	defer func() {
+		cancel()
+		worker.Wait()
+		select {
+		case e := <-callbackErrors:
+			if parent.Err() == nil && isEventTransportError(result) && errors.Is(e, context.Canceled) {
+				return
+			}
+			result = e
+		default:
+		}
+	}()
 	go func() {
 		defer worker.Done()
 		first := true
@@ -60,7 +94,7 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 				}
 				if e != nil {
 					select {
-					case errors <- e:
+					case callbackErrors <- e:
 					default:
 					}
 					cancel()
@@ -73,14 +107,6 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 	s.Buffer(make([]byte, 4096), 1024*1024)
 	acked := false
 	for s.Scan() {
-		if e := ctx.Err(); e != nil {
-			select {
-			case e := <-errors:
-				return e
-			default:
-				return e
-			}
-		}
 		if !utf8.Valid(s.Bytes()) {
 			return fmt.Errorf("malformed event frame: invalid UTF-8")
 		}
@@ -99,10 +125,18 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 			return fmt.Errorf("malformed event frame: %w", e)
 		}
 		if f.Error != nil {
-			if f.Error.Code == "events_lost" {
+			if f.Error.Code == "events_lost" || f.Error.Code == "helper_transport_failed" {
 				return f.Error
 			}
 			return fmt.Errorf("capability_unavailable: %w", f.Error)
+		}
+		if e := ctx.Err(); e != nil {
+			select {
+			case e := <-callbackErrors:
+				return e
+			default:
+				return e
+			}
 		}
 		if !acked {
 			if f.ID != "parley-requests" || f.Result == nil || f.Result.Type != "subscription_started" {
@@ -130,16 +164,11 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 			return fmt.Errorf("malformed event frame: unexpected event")
 		}
 	}
-	select {
-	case e := <-errors:
-		return e
-	default:
-	}
 	if e := s.Err(); e != nil {
 		return e
 	}
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if parent.Err() != nil {
+		return parent.Err()
 	}
 	return io.EOF
 }
@@ -227,7 +256,7 @@ func (p *processStream) Read(b []byte) (int, error) {
 				Status string    `json:"status"`
 				Error  *apiError `json:"error"`
 			}
-			if json.Unmarshal(p.stderr.Bytes(), &helper) == nil && helper.Status == "error" && helper.Error != nil {
+			if json.Unmarshal(p.stderr.Bytes(), &helper) == nil && helper.Status == "error" && helper.Error != nil && (helper.Error.Code == "helper_startup_failed" || helper.Error.Code == "helper_unavailable") {
 				e = helper.Error
 			} else {
 				e = fmt.Errorf("%w: %v: %s", errEventProcess, wait, p.stderr.String())
@@ -288,11 +317,8 @@ func (c *Client) WatchRequests(ctx context.Context, p Peer, reconcile func(conte
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if e != io.EOF && e != nil && !errors.Is(e, errEventProcess) {
-			var api *apiError
-			if !errors.As(e, &api) || api.Code != "events_lost" {
-				return e
-			}
+		if !isEventTransportError(e) {
+			return e
 		}
 
 		timer := time.NewTimer(backoff)
