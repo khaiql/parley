@@ -35,6 +35,7 @@ func StartMaster(ctx context.Context, p Peer) (*Master, error) {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	m := &Master{ControlPath: filepath.Join(dir, "master"), Target: p.Machine.Target, cancel: cancel, done: make(chan struct{}), dir: dir}
+	// #nosec G204 -- The saved target is validated and passed as argv after --; the control path is privately allocated.
 	m.Command = exec.CommandContext(ctx, "ssh", "-M", "-S", m.ControlPath, "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ControlPersist=no", "-o", "ClearAllForwardings=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "--", m.Target)
 	m.Command.Stderr = &boundedBuffer{limit: 64 * 1024}
 	m.Command.WaitDelay = processWaitDelay
