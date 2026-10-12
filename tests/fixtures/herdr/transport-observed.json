@@ -1,0 +1,527 @@
+{
+  "versions": {
+    "herdr": "herdr 0.9.3\n",
+    "ssh": "OpenSSH_10.2p1, LibreSSL 3.3.6\n"
+  },
+  "remote-version": "herdr 0.9.3\n",
+  "machines": [
+    {
+      "id": "22222222222222222222222222222222",
+      "label": "proof-host-alpha",
+      "target": "proof-host",
+      "session": "alpha",
+      "enabled": true,
+      "selected": false
+    }
+  ],
+  "sessions": {
+    "sessions": [
+      {
+        "default": true,
+        "name": "default",
+        "running": false,
+        "session_dir": "<fixture>/config/herdr",
+        "socket_path": "<fixture>/config/herdr/herdr.sock"
+      },
+      {
+        "default": false,
+        "name": "alpha",
+        "running": true,
+        "session_dir": "<fixture>/config/herdr/sessions/alpha",
+        "socket_path": "<fixture>/config/herdr/sessions/alpha/herdr.sock"
+      },
+      {
+        "default": false,
+        "name": "beta",
+        "running": true,
+        "session_dir": "<fixture>/config/herdr/sessions/beta",
+        "socket_path": "<fixture>/config/herdr/sessions/beta/herdr.sock"
+      }
+    ]
+  },
+  "remote-plugins": {
+    "id": "cli:plugin",
+    "result": {
+      "plugins": [
+        {
+          "actions": [
+            {
+              "command": [
+                "/usr/bin/python3",
+                "action.py",
+                "enqueue"
+              ],
+              "contexts": [
+                "pane"
+              ],
+              "id": "enqueue",
+              "title": "Enqueue proof"
+            }
+          ],
+          "enabled": true,
+          "manifest_path": "<fixture>/plugin/herdr-plugin.toml",
+          "min_herdr_version": "0.9.3",
+          "name": "Reactive proof",
+          "platforms": [
+            "linux",
+            "macos"
+          ],
+          "plugin_id": "parley-reactive-proof",
+          "plugin_root": "<fixture>/plugin",
+          "source": {
+            "kind": "local"
+          },
+          "startup": [
+            {
+              "command": [
+                "/usr/bin/python3",
+                "action.py",
+                "startup"
+              ]
+            }
+          ],
+          "version": "0.0.1"
+        }
+      ],
+      "type": "plugin_list"
+    }
+  },
+  "agents": {
+    "id": "cli:agent:list",
+    "result": {
+      "agents": [],
+      "type": "agent_list"
+    }
+  },
+  "remote-agents": {
+    "id": "cli:agent:list",
+    "result": {
+      "agents": [],
+      "type": "agent_list"
+    }
+  },
+  "agent-get-shell": {
+    "id": "proof",
+    "error": {
+      "code": "agent_not_found",
+      "message": "agent target w1:p1 not found"
+    }
+  },
+  "contexts": [
+    {
+      "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
+      "key": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49",
+      "state_root": "<fixture>/state/herdr/plugins/parley-reactive-proof",
+      "config_root": "<fixture>/config/herdr/plugins/config/parley-reactive-proof",
+      "context": {
+        "workspace_id": "w1",
+        "workspace_label": "alpha",
+        "workspace_cwd": "<fixture>",
+        "tab_id": "w1:t1",
+        "tab_label": "1",
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": "<fixture>",
+        "focused_pane_status": "unknown",
+        "invocation_source": "cli",
+        "correlation_id": "cli:plugin"
+      },
+      "workspace": "w1",
+      "mode": "enqueue"
+    },
+    {
+      "socket": "<fixture>/config/herdr/sessions/beta/herdr.sock",
+      "key": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac",
+      "state_root": "<fixture>/state/herdr/plugins/parley-reactive-proof",
+      "config_root": "<fixture>/config/herdr/plugins/config/parley-reactive-proof",
+      "context": {
+        "workspace_id": "w1",
+        "workspace_label": "beta",
+        "workspace_cwd": "<fixture>",
+        "tab_id": "w1:t1",
+        "tab_label": "1",
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": "<fixture>",
+        "focused_pane_status": "unknown",
+        "invocation_source": "cli",
+        "correlation_id": "cli:plugin"
+      },
+      "workspace": "w1",
+      "mode": "enqueue"
+    }
+  ],
+  "startup-contexts": [
+    {
+      "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
+      "key": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49",
+      "state_root": "<fixture>/state/herdr/plugins/parley-reactive-proof",
+      "config_root": "<fixture>/config/herdr/plugins/config/parley-reactive-proof",
+      "context": {
+        "workspace_id": "w1",
+        "workspace_label": "alpha",
+        "workspace_cwd": "<fixture>",
+        "tab_id": "w1:t1",
+        "tab_label": "1",
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": "<fixture>",
+        "focused_pane_status": "unknown",
+        "invocation_source": "startup",
+        "correlation_id": "plugin.startup"
+      },
+      "workspace": "w1",
+      "mode": "startup",
+      "role": {
+        "role": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49"
+      },
+      "controller": {
+        "owner": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49"
+      }
+    },
+    {
+      "socket": "<fixture>/config/herdr/sessions/beta/herdr.sock",
+      "key": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac",
+      "state_root": "<fixture>/state/herdr/plugins/parley-reactive-proof",
+      "config_root": "<fixture>/config/herdr/plugins/config/parley-reactive-proof",
+      "context": {
+        "workspace_id": "w1",
+        "workspace_label": "beta",
+        "workspace_cwd": "<fixture>",
+        "tab_id": "w1:t1",
+        "tab_label": "1",
+        "focused_pane_id": "w1:p1",
+        "focused_pane_cwd": "<fixture>",
+        "focused_pane_status": "unknown",
+        "invocation_source": "startup",
+        "correlation_id": "plugin.startup"
+      },
+      "workspace": "w1",
+      "mode": "startup",
+      "role": {
+        "role": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac"
+      },
+      "controller": {
+        "owner": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac"
+      }
+    }
+  ],
+  "ack": {
+    "id": "join-events",
+    "result": {
+      "type": "subscription_started"
+    }
+  },
+  "events": [
+    {
+      "id": "join-events",
+      "result": {
+        "type": "subscription_started"
+      }
+    },
+    {
+      "data": {
+        "type": "workspace_metadata_updated",
+        "workspace": {
+          "active_tab_id": "w1:t1",
+          "agent_status": "unknown",
+          "focused": true,
+          "label": "alpha",
+          "number": 1,
+          "pane_count": 1,
+          "tab_count": 1,
+          "tokens": {
+            "parley_request": "f400f24f17f34781b1c28c8fb3df5c0c"
+          },
+          "workspace_id": "w1"
+        }
+      },
+      "event": "workspace_metadata_updated"
+    },
+    {
+      "data": {
+        "type": "workspace_metadata_updated",
+        "workspace": {
+          "active_tab_id": "w1:t1",
+          "agent_status": "unknown",
+          "focused": true,
+          "label": "alpha",
+          "number": 1,
+          "pane_count": 1,
+          "tab_count": 1,
+          "tokens": {
+            "parley_request": "3063f108117144a2876dc9ee6d62e24d"
+          },
+          "workspace_id": "w1"
+        }
+      },
+      "event": "workspace_metadata_updated"
+    }
+  ],
+  "metadata-before-restart": {
+    "id": "proof",
+    "result": {
+      "type": "workspace_list",
+      "workspaces": [
+        {
+          "workspace_id": "w1",
+          "number": 1,
+          "label": "alpha",
+          "focused": true,
+          "pane_count": 1,
+          "tab_count": 1,
+          "active_tab_id": "w1:t1",
+          "agent_status": "unknown",
+          "tokens": {
+            "parley_request": "3063f108117144a2876dc9ee6d62e24d"
+          }
+        }
+      ]
+    }
+  },
+  "metadata-after-restart": {
+    "id": "proof",
+    "result": {
+      "type": "workspace_list",
+      "workspaces": [
+        {
+          "workspace_id": "w1",
+          "number": 1,
+          "label": "alpha",
+          "focused": true,
+          "pane_count": 1,
+          "tab_count": 1,
+          "active_tab_id": "w1:t1",
+          "agent_status": "unknown"
+        }
+      ]
+    }
+  },
+  "pending-after-subscribe": {
+    "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
+    "session_key": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49",
+    "requests": [
+      {
+        "id": "3063f108117144a2876dc9ee6d62e24d",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      },
+      {
+        "id": "f400f24f17f34781b1c28c8fb3df5c0c",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      },
+      {
+        "id": "1a7b027e60924eb990b6313d8335fd9a",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      }
+    ],
+    "room": {
+      "session": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49"
+    }
+  },
+  "recovery": {
+    "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
+    "session_key": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49",
+    "requests": [
+      {
+        "id": "3063f108117144a2876dc9ee6d62e24d",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      },
+      {
+        "id": "f400f24f17f34781b1c28c8fb3df5c0c",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      },
+      {
+        "id": "1a7b027e60924eb990b6313d8335fd9a",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      }
+    ],
+    "room": {
+      "session": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49"
+    }
+  },
+  "beta-isolation": {
+    "socket": "<fixture>/config/herdr/sessions/beta/herdr.sock",
+    "session_key": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac",
+    "requests": [
+      {
+        "id": "347fb5f4bd8c498a8134e7f729d2f662",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      }
+    ],
+    "room": {
+      "session": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac"
+    }
+  },
+  "beta-restart": {
+    "socket": "<fixture>/config/herdr/sessions/beta/herdr.sock",
+    "session_key": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac",
+    "requests": [
+      {
+        "id": "347fb5f4bd8c498a8134e7f729d2f662",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      }
+    ],
+    "room": {
+      "session": "8ed8b8b396d53818352c5e8dca42b98d2ba9c610406b48e4b063d01c3eb033ac"
+    }
+  },
+  "events-lost-force": {
+    "updates": 2400,
+    "received_frames": 1,
+    "ack": {
+      "id": "slow-events",
+      "result": {
+        "type": "subscription_started"
+      }
+    },
+    "error": {
+      "id": "slow-events",
+      "error": {
+        "code": "events_lost",
+        "message": "event subscription fell behind retained history; resubscribe and resync with session.snapshot"
+      }
+    },
+    "verified": true
+  },
+  "loss-recovery": {
+    "socket": "<fixture>/config/herdr/sessions/alpha/herdr.sock",
+    "session_key": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49",
+    "requests": [
+      {
+        "id": "3063f108117144a2876dc9ee6d62e24d",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      },
+      {
+        "id": "f400f24f17f34781b1c28c8fb3df5c0c",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      },
+      {
+        "id": "1a7b027e60924eb990b6313d8335fd9a",
+        "op": "join",
+        "room_id": "room-proof",
+        "pane_id": "w1:p1"
+      }
+    ],
+    "room": {
+      "session": "982048664438476b3a2d37e9745097f88a63ff9a43bb6dd2a594c9fb31e5af49"
+    }
+  },
+  "allocate-R": {
+    "routes": [
+      [
+        "127.0.0.1:0:127.0.0.1:51791",
+        51794,
+        51791
+      ],
+      [
+        "127.0.0.1:0:127.0.0.1:51790",
+        51795,
+        51790
+      ]
+    ],
+    "ports": [
+      51794,
+      51795
+    ]
+  },
+  "allocate-L": {
+    "routes": [
+      [
+        "127.0.0.1:51806:127.0.0.1:51804",
+        51806,
+        51804
+      ],
+      [
+        "127.0.0.1:51807:127.0.0.1:51803",
+        51807,
+        51803
+      ]
+    ],
+    "ports": [
+      51806,
+      51807
+    ]
+  },
+  "cancel-R": [
+    "127.0.0.1:51794:127.0.0.1:51791",
+    "127.0.0.1:51795:127.0.0.1:51790"
+  ],
+  "cancel-L": [
+    "127.0.0.1:51806:127.0.0.1:51804",
+    "127.0.0.1:51807:127.0.0.1:51803"
+  ],
+  "partial-failure-R": {
+    "allocated": "51817",
+    "exit": 255,
+    "stderr": "mux_client_forward: forwarding request failed: remote port forwarding failed for listen port 51816\nmuxclient: master forward request failed\n",
+    "rolled_back": true
+  },
+  "partial-failure-L": {
+    "exit": 255,
+    "stderr": "mux_client_forward: forwarding request failed: Port forwarding failed\nmuxclient: master forward request failed\n",
+    "rolled_back": true
+  },
+  "ui-detach-survival": {
+    "ui_exit": -9,
+    "close_method": "PTY UI killed after detach key did not exit",
+    "subscriber_alive": true,
+    "master_check": "Master running (pid=45885)\n",
+    "event_after_detach": "{\"data\":{\"type\":\"workspace_metadata_updated\",\"workspace\":{\"active_tab_id\":\"w1:t1\",\"agent_status\":\"unknown\",\"focused\":true,\"label\":\"alpha\",\"number\":1,\"pane_count\":1,\"tab_count\":1,\"tokens\":{\"flood\":\"2399\",\"parley_request\":\"74620dce34cc42ab8bb542c9adf7359d\"},\"workspace_id\":\"w1\"}},\"event\":\"workspace_metadata_updated\"}"
+  },
+  "cleanup": "Owned children reaped; keys, authorized_keys, known_hosts and ssh_config removed; plugin unlinked",
+  "schema_contract": {
+    "protocol": 22,
+    "schema_version": 1,
+    "agent_session": {
+      "properties": {
+        "agent": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/schemas/success_response/$defs/AgentSessionRefKind"
+        },
+        "source": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "agent",
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "agent_target": {
+      "properties": {
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    }
+  }
+}
