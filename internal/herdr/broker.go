@@ -309,6 +309,35 @@ func (h *HostOperations) recordFailure(req Request, response Response) error {
 		return writeJSON(filepath.Join(dir, req.ID+".json"), hostFailure{RequestDigest(req), response})
 	})
 }
+
+// clearFailedIntent runs under the host join lock and removes only proven no-effect intent.
+func (h *HostOperations) clearFailedIntent(key string, prior Binding) (bool, error) {
+	if prior.SessionID != "" || prior.JoinRequestID == "" {
+		return false, nil
+	}
+	var originalReq Request
+	if e := readJSON(filepath.Join(h.Store.dir, "requests", prior.JoinRequestID+".json"), &originalReq); e != nil {
+		return false, e
+	}
+	originalReq, e := normalize(originalReq, (&Broker{Client: h.Client}).localPeer())
+	if e != nil {
+		return false, e
+	}
+	failed, ok, e := h.priorFailure(originalReq)
+	if e != nil {
+		return false, e
+	}
+	if !ok || !knownHostFailure(failed.Code) {
+		return false, nil
+	}
+	if HostBindingKey(originalReq.RoomID, originalReq.Target) != key {
+		return false, fmt.Errorf("binding key mismatch")
+	}
+	if e = h.Store.Update(func(state *State) error { delete(state.Bindings, key); return nil }); e != nil {
+		return false, e
+	}
+	return true, nil
+}
 func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoints) (Response, error) {
 	originalReq, e := normalize(req, (&Broker{Client: h.Client}).localPeer())
 	if e != nil {
@@ -337,27 +366,12 @@ func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoi
 			return nil
 		}
 		prior, e := h.Store.Binding(key)
-		if e == nil && prior.SessionID == "" && prior.JoinRequestID != "" {
-			var originalReq Request
-			readErr := readJSON(filepath.Join(h.Store.dir, "requests", prior.JoinRequestID+".json"), &originalReq)
-			if readErr != nil {
-				return readErr
+		if e == nil {
+			cleared, clearErr := h.clearFailedIntent(key, prior)
+			if clearErr != nil {
+				return clearErr
 			}
-			originalReq, readErr = normalize(originalReq, (&Broker{Client: h.Client}).localPeer())
-			if readErr != nil {
-				return readErr
-			}
-			failed, ok, failureErr := h.priorFailure(originalReq)
-			if failureErr != nil {
-				return failureErr
-			}
-			if ok && knownHostFailure(failed.Code) {
-				if HostBindingKey(originalReq.RoomID, originalReq.Target) != key {
-					return fmt.Errorf("binding key mismatch")
-				}
-				if e = h.Store.Update(func(s *State) error { delete(s.Bindings, key); return nil }); e != nil {
-					return e
-				}
+			if cleared {
 				e = os.ErrNotExist
 			}
 		}
