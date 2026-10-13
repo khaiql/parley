@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -35,20 +36,52 @@ func nativeCommand(use string, hidden bool, run func(*cobra.Command, *herdr.Clie
 	return &cobra.Command{Use: use, Hidden: hidden, Args: noArgsJSON, RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := nativeClient()
 		if err != nil {
-			return writeJSONError(cmd, "helper_unavailable", err.Error())
+			return nativeError(cmd, "helper_unavailable", err)
 		}
 		if err = c.VerifyVersion(cmd.Context()); err != nil {
-			return writeJSONError(cmd, "helper_incompatible", err.Error())
+			return nativeError(cmd, "helper_incompatible", err)
 		}
 		h, session, err := herdr.NativeHost(cmd.Context(), c)
 		if err != nil {
-			return writeJSONError(cmd, "native_context_required", err.Error())
+			return nativeError(cmd, "native_context_required", err)
 		}
 		if err = run(cmd, c, h, session, args); err != nil {
-			return writeJSONError(cmd, "herdr_failed", err.Error())
+			return nativeError(cmd, "herdr_failed", err)
 		}
 		return nil
 	}}
+}
+
+func nativeError(cmd *cobra.Command, code string, err error) error {
+	if (cmd.Name() == "action" || cmd.Name() == "form") && !errors.Is(err, herdr.ErrFormCancelled) {
+		// Notification must work even before helper/version/context preflight succeeds.
+		c := &herdr.Client{HerdrSocket: os.Getenv("HERDR_SOCKET_PATH")}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(cmd.Context()), 2*time.Second)
+		defer cancel()
+		if notifyErr := c.Notify(ctx, "Parley failed", nativeErrorHint(code, err)); notifyErr != nil {
+			err = fmt.Errorf("%w; notification_failed: %v", err, notifyErr)
+		}
+	}
+	return writeJSONError(cmd, code, err.Error())
+}
+
+func nativeErrorHint(code string, err error) string {
+	switch {
+	case strings.Contains(err.Error(), "agent_not_found"):
+		return "Focus an existing agent pane, then use the Parley Start/Join shortcut."
+	case strings.Contains(err.Error(), "agent_identity_required"):
+		return "Native identity missing. Codex may report it only on its first normal turn. Review the Herdr SessionStart hook in /hooks; confirm agent get includes agent_session."
+	case strings.Contains(err.Error(), "ui_busy"):
+		return "Close the active Herdr modal, then retry the Parley Start/Join shortcut."
+	case code == "helper_unavailable":
+		return "Herdr helper unavailable. Install Herdr on this host and rebuild/relink Parley."
+	case code == "helper_incompatible":
+		return "Herdr 0.9.3 or newer required. Check the Herdr binary on this host."
+	case code == "native_context_required":
+		return "Herdr context unavailable. Use the Parley shortcut in the intended Herdr agent pane; check this host's plugin setup."
+	default:
+		return code + ": " + err.Error()
+	}
 }
 func herdrCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "herdr", Short: "Herdr room actions and automatic SSH routing"}
@@ -197,6 +230,9 @@ func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
 	}
 	fmt.Fprint(cmd.OutOrStdout(), "Press Enter to close.\r\n")
 	_, _ = herdr.ReadForm(cmd.InOrStdin(), "start")
+	if result.Status == "error" {
+		return fmt.Errorf("%s: %s", result.Code, result.Message)
+	}
 	return nil
 }
 func formTerminal(in io.Reader) (func(), error) {
