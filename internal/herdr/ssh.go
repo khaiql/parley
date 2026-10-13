@@ -408,3 +408,22 @@ func (m *TunnelManager) Close() error {
 	m.Masters = nil
 	return nil
 }
+
+// ClosePeer closes only this manager's children for the exact activated session.
+// Existing leases stay unavailable; enabling a plugin cannot recreate participants.
+func (m *TunnelManager) ClosePeer(peer Peer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key := peer.Machine.ID + ":" + peer.Config.SessionKey
+	master := m.Masters[key]
+	if master == nil {
+		return
+	}
+	for _, lease := range m.leases {
+		if lease.master == master {
+			lease.unavailable = true
+		}
+	}
+	_ = master.Close()
+	delete(m.Masters, key)
+}

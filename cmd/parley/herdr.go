@@ -1,9 +1,226 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
 
+	"github.com/khaiql/parley/internal/herdr"
+	"github.com/spf13/cobra"
+)
+
+func nativeClient() (*herdr.Client, error) {
+	binary := os.Getenv("HERDR_BIN_PATH")
+	if binary == "" {
+		var err error
+		binary, err = exec.LookPath("herdr")
+		if err != nil {
+			return nil, err
+		}
+	}
+	parley, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	return &herdr.Client{HerdrBinary: binary, ParleyBinary: parley}, nil
+}
+func nativeCommand(use string, hidden bool, run func(*cobra.Command, *herdr.Client, herdr.HostSession, string, []string) error) *cobra.Command {
+	return &cobra.Command{Use: use, Hidden: hidden, Args: noArgsJSON, RunE: func(cmd *cobra.Command, args []string) error {
+		c, err := nativeClient()
+		if err != nil {
+			return writeJSONError(cmd, "helper_unavailable", err.Error())
+		}
+		if err = c.VerifyVersion(cmd.Context()); err != nil {
+			return writeJSONError(cmd, "helper_incompatible", err.Error())
+		}
+		h, session, err := herdr.NativeHost(cmd.Context(), c)
+		if err != nil {
+			return writeJSONError(cmd, "native_context_required", err.Error())
+		}
+		if err = run(cmd, c, h, session, args); err != nil {
+			return writeJSONError(cmd, "herdr_failed", err.Error())
+		}
+		return nil
+	}}
+}
 func herdrCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "herdr", Short: "Herdr integration helpers"}
-	cmd.AddCommand(herdrRPCCmd())
+	cmd := &cobra.Command{Use: "herdr", Short: "Herdr room actions and automatic SSH routing"}
+	setup := nativeCommand("setup", false, func(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession, session string, _ []string) error {
+		owner, err := h.Setup(cmd.Context(), c)
+		if err != nil {
+			return err
+		}
+		if err = h.Startup(cmd.Context(), c.ParleyBinary, session); err != nil {
+			return err
+		}
+		return writeJSON(cmd, owner)
+	})
+	startup := nativeCommand("startup", false, func(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession, session string, _ []string) error {
+		if err := h.Startup(cmd.Context(), c.ParleyBinary, session); err != nil {
+			return err
+		}
+		return writeJSON(cmd, map[string]string{"status": "ready"})
+	})
+	action := nativeCommand("action <start|join>", false, func(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession, _ string, args []string) error {
+		owner, err := h.Owner(cmd.Context())
+		if err != nil {
+			return err
+		}
+		c.LocalMachineID = owner.MachineID
+		c.HerdrSocket = owner.HerdrSocket
+		target, _, err := c.Agent(cmd.Context(), herdr.AgentTarget{PaneID: os.Getenv("HERDR_PANE_ID")})
+		if err != nil {
+			return err
+		}
+		if err = h.PinTrustedRuntime(c); err != nil {
+			return err
+		}
+		target.MachineID = "self"
+		if err = c.OpenForm(cmd.Context(), args[0], target); err != nil {
+			return err
+		}
+		return writeJSON(cmd, map[string]string{"status": "opened"})
+	})
+	// The manifest supplies exactly one fixed action argument.
+	action.Args = func(_ *cobra.Command, args []string) error {
+		if len(args) != 1 || (args[0] != "start" && args[0] != "join") {
+			return fmt.Errorf("expected start or join")
+		}
+		return nil
+	}
+	form := nativeCommand("form", true, func(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession, _ string, _ []string) error {
+		return runForm(cmd, c, h)
+	})
+	status := nativeCommand("status", false, func(cmd *cobra.Command, _ *herdr.Client, h herdr.HostSession, _ string, _ []string) error {
+		state, err := h.Store.Read()
+		if err != nil {
+			return err
+		}
+		return writeJSON(cmd, state)
+	})
+	broker := &cobra.Command{Use: "broker", Hidden: true, Args: noArgsJSON, RunE: func(cmd *cobra.Command, _ []string) error {
+		c, err := nativeClient()
+		if err != nil {
+			return err
+		}
+		session, _ := cmd.Flags().GetString("native-session")
+		h, err := herdr.ResolveHost(cmd.Context(), c, session)
+		if err != nil {
+			return err
+		}
+		ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+		defer stop()
+		return h.Coordinate(ctx, c)
+	}}
+	broker.Flags().String("native-session", "", "verified native session")
+	cmd.AddCommand(herdrRPCCmd(), setup, startup, action, form, status, broker)
 	return cmd
+}
+func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
+	op := os.Getenv("PARLEY_ACTION")
+	if op != "start" && op != "join" {
+		return fmt.Errorf("invalid form action")
+	}
+	target, err := herdr.DecodeTarget(os.Getenv("PARLEY_TARGET_JSON"), h.Config.HerdrSocket)
+	if err != nil {
+		return err
+	}
+	// Pin trusted host environment before any durable queue write or remote helper access.
+	owner, err := h.Owner(cmd.Context())
+	if err != nil {
+		return err
+	}
+	c.LocalMachineID = owner.MachineID
+	c.HerdrSocket = owner.HerdrSocket
+	restore, err := formTerminal(cmd.InOrStdin())
+	if err != nil {
+		return err
+	}
+	defer restore()
+	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	defer stop()
+	readDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			restore()
+			if f, ok := cmd.InOrStdin().(*os.File); ok {
+				_ = f.Close()
+			}
+		case <-readDone:
+		}
+	}()
+	defer close(readDone)
+	label := "Room ID"
+	if op == "start" {
+		label = "Topic"
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Parley %s — %s (Enter submits, Escape cancels):\r\n", op, label)
+	value, err := herdr.ReadTerminalForm(cmd.InOrStdin(), cmd.OutOrStdout(), op)
+	if err != nil {
+		return err
+	}
+	restore()
+	id, err := herdr.NewID()
+	if err != nil {
+		return err
+	}
+	req := herdr.Request{ID: id, Op: op, Target: target}
+	if op == "start" {
+		req.Topic = value
+	} else {
+		req.RoomID = value
+	}
+	wait, cancel := context.WithTimeout(ctx, 35*time.Second)
+	defer cancel()
+	result, err := h.SubmitForm(wait, c, req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", id, err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "\r\nRequest: %s\r\n", id)
+	if result.Room != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "Room: %s\r\n", result.Room.ID)
+	}
+	if result.Binding != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "Session: %s\r\n", result.Binding.SessionID)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s %s\r\n%s\r\n", result.Status, result.Code, result.Message)
+	if result.Binding != nil {
+		fmt.Fprintf(cmd.OutOrStdout(), "parley --session %s send \"message\"\r\n", result.Binding.SessionID)
+	}
+	fmt.Fprint(cmd.OutOrStdout(), "Press Enter to close.\r\n")
+	_, _ = herdr.ReadForm(cmd.InOrStdin(), "start")
+	return nil
+}
+func formTerminal(in io.Reader) (func(), error) {
+	f, ok := in.(*os.File)
+	if !ok {
+		return func() {}, nil
+	}
+	save := exec.Command("stty", "-g")
+	save.Stdin = f
+	b, err := save.Output()
+	if err != nil {
+		return nil, fmt.Errorf("form requires a terminal: %w", err)
+	}
+	state := strings.TrimSpace(string(b))
+	if state == "" || len(state) > 4096 || strings.ContainsAny(state, "\x00\r\n ") {
+		return nil, fmt.Errorf("invalid terminal settings")
+	}
+	raw := exec.Command("stty", "-icanon", "-echo", "min", "1", "time", "0")
+	raw.Stdin = f
+	if err = raw.Run(); err != nil {
+		return nil, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() { restore := exec.Command("stty", state); restore.Stdin = f; _ = restore.Run() })
+	}, nil
 }

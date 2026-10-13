@@ -423,7 +423,12 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 	switch r.Operation {
 	case "probe":
 		c := Client{LocalMachineID: owner.MachineID, HerdrSocket: h.Config.HerdrSocket}
-		agent, status, e := c.Agent(ctx, AgentTarget{MachineID: owner.MachineID, HerdrSocket: h.Config.HerdrSocket, PaneID: r.Target})
+		target := AgentTarget{MachineID: owner.MachineID, HerdrSocket: h.Config.HerdrSocket, PaneID: r.Target}
+		if strings.HasPrefix(r.Target, "term_") {
+			target.PaneID = ""
+			target.TerminalID = r.Target
+		}
+		agent, status, e := c.Agent(ctx, target)
 		if e != nil {
 			return nil, e
 		}
@@ -545,7 +550,7 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 			switch code {
 			case "":
 				binding = original
-				return h.Store.saveBinding(original)
+				return operations.saveBinding(original)
 			case "participant_disconnected":
 				binding = current
 				binding.Status = "offline"

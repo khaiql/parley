@@ -2,7 +2,7 @@
 
 Verified 2026-10-13 against Herdr **0.9.3**, socket protocol **22**, schema version **1**, and OpenSSH **10.2p1** (LibreSSL 3.3.6), on macOS. The reactive gate passes: a remote-selected plugin action commits a durable request, its native metadata event reaches a subscriber over locally initiated SSH, and a separate SSH read recovers every pending request after reconnect, restart, and real event-history loss.
 
-This is a transport proof, not proof of the production coordinator, ownership locks, automatic routing, native agent attachment, Linux support, or the artifact CLI override. The previous 2026-10-12 fixture passed 13 primitive checks using isolated macOS XDG roots. It did not exercise subscriptions, shared-root session isolation, Linux, real user hosts, orchestration, or the CLI override. None of those prior results substitutes for this fresh run.
+The initial transport proof below did not cover the production coordinator, ownership locks, automatic routing, native agent attachment, Linux support, or the artifact CLI override. The later production plugin acceptance section records the installed macOS/Linux Start/Join workflow and exact artifact CLI bytes. The previous 2026-10-12 fixture passed 13 primitive checks using isolated macOS XDG roots. It did not exercise subscriptions, shared-root session isolation, Linux, real user hosts, orchestration, or the CLI override. None of those prior results substitutes for this fresh run.
 
 ## Fixture and reproducibility
 
@@ -207,3 +207,43 @@ Cleanup stops owned Parley rooms, cancels/exits the owned master, unlinks the th
 Linux remains unverified. Docker reports a Linux daemon, but it had no images; a bounded attempt to run `alpine:3.22` stalled at image acquisition and the owned client was terminated. No Linux Herdr process or Linux SSH policy was tested. Real saved user hosts and their SSH policies were not used. The macOS reactive transport gate can proceed; later platform and production end-to-end acceptance remain separate.
 
 Repository validation after the proof: `go test ./... -timeout 30s` passed. This task changes only documentation and sanitized observed fixtures. No production behavior is implemented.
+
+## Production plugin acceptance (macOS controller / Linux remote)
+
+On 2026-10-13, the shipped manifest and production CLI were development-built and natively linked on both Herdr 0.9.3 hosts. The remote Linux ARM64 binary was built from the same source and transferred only into the owned development checkout. This verifies native development build/link, not GitHub installation or a remote Go toolchain build. Both hosts used private, short, immutable runtime-root pins before any action. SSH remained strict and loopback-only; controlled native idle agents used official session hooks and made no paid harness calls.
+
+The tested entrypoints were `parley herdr setup`, `parley herdr startup` twice, and native `plugin.action.invoke` for `parley.start` / `parley.join`. Actions opened the declared managed popup; input was submitted through owned Herdr UI PTYs. No manual participant setup, room-specific port command, adapter launch, or `agent.prompt` call supplied these results. The local coordinator had been restarted after the request-array and terminal-identity adapter fixes before either cross-host Join.
+
+| Native workflow | Source TCP / HTTP | Automatically routed TCP / HTTP | Result |
+| --- | --- | --- | --- |
+| Linux Start, macOS Join | 45593 / 34407 | macOS 61602 / 61603, two `-L` forwards | Room `room-6cd8dd5ac1053e7f75c6`; host `psn_fde40ff7055fdc7e57b9`; participant `psn_5bea75e04d5a804706ea` |
+| macOS Start, Linux Join | 61922 / 61921 | Linux 34147 / 42571, two `-R` forwards | Room `room-f250f158314d21092826`; host `psn_36e004c2d4ff704dfa5f`; participant `psn_b550620c557a6916dfed` |
+
+The macOS Join request `db1bfeda5625407b5faa071aa78ecb5a` and Linux Join request `22cb1ce4a5807c2c30c1cc2aa8c7dc38` remained immutable with host-local `self` targets. Their original-host outcomes became `complete` under the same unique local controller identity. The Linux request was processed by the existing locally initiated event listener after its native workspace marker; the form only polled its own durable outcome. No caller issued a remote mutation or a manual coordinator drain. The local room had no usable metadata tokens during this run, so the reverse Join also exercised authoritative durable room fallback.
+
+Both endpoints sent existing Parley messages and files. The receiving command results contained the exact opposite-host message texts. `parley artifact fetch` returned `downloaded`; independently reading each fetched file matched all bytes, including NUL and non-UTF-8 data:
+
+| Route | Receiving host | Bytes | SHA-256 |
+| --- | --- | --- | --- |
+| `-L` | macOS | 29 | `6a237d61449c9295d0a3c5aaedccc0d4bd2512ebe5abc4bb1085739e06198a04` |
+| `-L` | Linux | 28 | `c941ed097bcba395d08648df37be501f36ef5cbfba4aec94c2302899eee8214a` |
+| `-R` | macOS | 29 | `d7d0fc4b9b6373f10f0652621d254c3fed7de7ec3a73579bcb82c1f475b78572` |
+| `-R` | Linux | 28 | `469503abe64f870468964c0effadbf694f1c967d9ab4309ff923ceb09ad20ba9` |
+
+A second native Linux Join with distinct request `1ab327bf9027c084a1dad789af96181e` returned the original participant session and both original routed ports. A direct native same-host Join (`ea9d0b6c4557e6c8bd0dabc3ffcbdf37`) returned the original Linux host session and source endpoints, without acquiring another route. The macOS Start action captured `w1:p2`; focusing underlying `w1:p1` before submission still bound the room to the original terminal and native session. Native DEL/backspace produced the exact intended topic. Native Escape left room and request counts unchanged.
+
+The initial native run exposed three adapter assumptions. Empty durable requests are an array, while error envelopes are objects; the decoder now enforces that shape. Native `agent.get` accepts pane/name, so captured terminal identity is resolved through `agent.list`, followed by `agent.get` and identity revalidation. `pane.report_metadata` requires `pane_id`. Focused RED/GREEN regressions cover each correction. The rebuilt action/form subsequently created `room-c2c9d435c48b14c6ded0` and native `pane.get` reported its exact room/TCP63791/HTTP63790 tokens, with no metadata warning. That final Start also verified visible input feedback. Earlier warning/error attempts are not counted as passing metadata or mutation evidence.
+
+The source contracts are pinned to [native terminal resolution](https://github.com/herdrdev/herdr/blob/v0.9.3/src/app/terminal_targets.rs), [plugin environment and panes](https://github.com/herdrdev/herdr/blob/v0.9.3/docs/next/website/src/content/docs/plugins.mdx), and [socket schemas](https://github.com/herdrdev/herdr/blob/v0.9.3/docs/next/website/src/content/docs/socket-api.mdx). A fixture UI onboarding modal initially obscured the popup. Its [native input handler](https://github.com/herdrdev/herdr/blob/v0.9.3/src/client/shell/overlay_input.rs) accepts Enter to open settings; Escape then closes settings. This only updated isolated Herdr onboarding state and installed nothing.
+
+### Coverage boundaries
+
+Current native actions prove both automatic directions, native identity capture, durable fallback, distinct-request reuse, same-host Join, real messages, and exact artifact CLI bytes. Production tests cover fresh acknowledgement after event loss, coalesced durable queues, lost results, concurrent direct/helper host locks, original cursor preservation, shared-root namespace isolation, strict artifact probes, partial forwarding, occupied-port remap, ambiguous cancellation, and unavailable routes without participant recreation. The earlier forced native `events_lost`, server restart, SSH allocation/cancellation, and artifact probe experiments remain primitive evidence; they were not repeated through every final popup scenario. No notification, readiness prompt, unread replay, resume, automatic adapter reconnection, or real paid harness conversation was tested or shipped.
+
+### Final lifecycle and cleanup
+
+After both owned macOS UI clients and the Linux UI detached, both original participants still sent messages through their existing routes, and each opposite host received them. All four original controlled native terminal/session identities remained present. Only the owned participant sessions were left and the three owned room servers stopped through existing CLI commands; native servers and agents stayed alive.
+
+The coordinator was then disabled through the native plugin API, rebuilt action/form binaries were already installed, and the final amended coordinator was restored through startup. Startup repeated successfully without another coordinator or new adapter. Disabling the remote plugin made the final coordinator cancel its exact remote subscription and persist that peer as disabled. Disabling the local plugin removed its private ready socket. All ten recorded source/routed TCP and HTTP ports were closed. This final lifecycle check used the later metadata, display, request-shape, and saved-peer-deactivation amendments; it does not claim the earlier running daemon hot-reloaded code.
+
+The fixture's named native servers and four idle agents were deliberately retained for review. Owned core room/participant processes, event readers, and SSH masters were closed. No user root, unrelated process, shared SSH master, or harness configuration was cleaned. Build, exact lint, and the full race gate were rerun only after concrete native producer/lifecycle amendments; focused checks were used while iterating.

@@ -114,7 +114,9 @@ func TestAgentIdentityLocalPinned(t *testing.T) {
 				if e := json.NewDecoder(conn).Decode(&r); e != nil {
 					return
 				}
-				if r.Method == "agent.get" {
+				if r.Method == "agent.list" {
+					io.WriteString(conn, `{"result":{"agents":[{"terminal_id":"term_a","pane_id":"w1:p2"}]}}`+"\n")
+				} else if r.Method == "agent.get" {
 					io.WriteString(conn, `{"result":{"agent":{"terminal_id":"term_a","pane_id":"w1:p2","workspace_id":"w1","agent":"codex","agent_status":"idle","agent_session":{"agent":"codex","kind":"id","value":"conversation_a"}}}}`+"\n")
 				} else if r.Method == "workspace.report_metadata" {
 					io.WriteString(conn, `{"result":{"type":"ok"}}`+"\n")
@@ -211,5 +213,49 @@ func TestSignalRequestMaximumID(t *testing.T) {
 	first, second := <-markers, <-markers
 	if len(first) > 80 || len(second) > 80 || first == second || strings.Contains(first, id) {
 		t.Fatal("invalid metadata markers", len(first), len(second), first == second)
+	}
+}
+
+func TestNativeTerminalIdentityFollowsPane(t *testing.T) {
+	root := t.TempDir()
+	socket := filepath.Join(root, "h")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				var req struct {
+					Method string            `json:"method"`
+					Params map[string]string `json:"params"`
+				}
+				if json.NewDecoder(conn).Decode(&req) != nil {
+					return
+				}
+				switch req.Method {
+				case "agent.list":
+					io.WriteString(conn, `{"result":{"type":"agent_list","agents":[{"terminal_id":"term_original","pane_id":"w2:p9"}]}}`+"\n")
+				case "agent.get":
+					if req.Params["target"] != "w2:p9" {
+						io.WriteString(conn, `{"error":{"code":"agent_not_found","message":"native agent resolver only accepts pane/name"}}`+"\n")
+						return
+					}
+					io.WriteString(conn, `{"result":{"agent":{"terminal_id":"term_original","pane_id":"w2:p9","workspace_id":"w2","agent":"codex","agent_status":"idle","agent_session":{"agent":"codex","kind":"id","value":"native-original"}}}}`+"\n")
+				}
+			}()
+		}
+	}()
+	client := Client{LocalMachineID: "local", HerdrSocket: socket}
+	target := AgentTarget{MachineID: "self", HerdrSocket: socket, PaneID: "w1:p1", TerminalID: "term_original", Kind: "codex", NativeSession: "native-original"}
+	got, _, err := client.Agent(context.Background(), target)
+	if err != nil || got.PaneID != "w2:p9" || got.TerminalID != target.TerminalID {
+		t.Fatal(got, err)
 	}
 }
