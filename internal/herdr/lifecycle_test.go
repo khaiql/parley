@@ -294,3 +294,90 @@ func TestCoordinateDisableDuringRemoteRefresh(t *testing.T) {
 	}
 	_ = conn.Close()
 }
+
+func TestLocalWatchTemporarySocketOutage(t *testing.T) {
+	t.Parallel()
+	root, err := os.MkdirTemp("/tmp", "hw-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(root)
+	socket := filepath.Join(root, "native.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { listener.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	drains := make(chan struct{}, 4)
+	go func() {
+		done <- watchLocal(ctx, socket, func(context.Context) error { drains <- struct{}{}; return nil })
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("watcher did not stop")
+		}
+	}()
+	accept := func() net.Conn {
+		t.Helper()
+		listener.(*net.UnixListener).SetDeadline(time.Now().Add(4 * time.Second))
+		conn, err := listener.Accept()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		conn.SetDeadline(time.Now().Add(4 * time.Second))
+		var request struct {
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(conn).Decode(&request); err != nil || request.Method != "events.subscribe" {
+			t.Fatal(request, err)
+		}
+		return conn
+	}
+	ack := func(conn net.Conn) {
+		t.Helper()
+		if _, err := io.WriteString(conn, `{"id":"parley-requests","result":{"type":"subscription_started"}}`+"\n"); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-drains:
+		case err := <-done:
+			done <- err
+			t.Fatal("watcher exited", err)
+		case <-time.After(time.Second):
+			t.Fatal("ack did not read durable queue")
+		}
+	}
+	conn := accept()
+	ack(conn)
+	listener.Close()
+	conn.Close()
+	// Keep the pinned socket absent beyond the first one-second retry.
+	select {
+	case err := <-done:
+		done <- err
+		t.Fatal("temporary outage stopped watcher", err)
+	case <-time.After(1200 * time.Millisecond):
+	}
+	select {
+	case <-drains:
+		t.Fatal("durable queue read during outage")
+	default:
+	}
+	listener, err = net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn = accept()
+	select {
+	case <-drains:
+		t.Fatal("durable queue read before fresh acknowledgement")
+	case <-time.After(100 * time.Millisecond):
+	}
+	ack(conn)
+}

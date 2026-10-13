@@ -1300,3 +1300,96 @@ func TestHostStartUsesNativeMetadataSchema(t *testing.T) {
 		t.Fatal(response, err)
 	}
 }
+
+func TestRemoteBindingDispatchReconcileLease(t *testing.T) {
+	for _, status := range []string{"offline", "uncertain", "online"} {
+		t.Run(status, func(t *testing.T) {
+			local, _, _ := brokerFixture(t)
+			remote, req, root := brokerFixture(t)
+			key, _ := SessionKey(remote.Client.HerdrSocket)
+			owner := SessionConfig{Role: "participant", MachineID: "peer", ControllerID: "controller", HerdrSocket: remote.Client.HerdrSocket, SessionKey: key}
+			peer := Peer{Machine: Machine{ID: "peer", Target: "host", Session: "agents", Enabled: true}, Config: owner, Binary: "/opt/parley"}
+			host := HostSession{Config: SessionConfig{HerdrSocket: owner.HerdrSocket, SessionKey: key}, ConfigDir: filepath.Join(root, "config"), Store: remote.Store}
+			if err := privateDir(host.ConfigDir); err != nil {
+				t.Fatal(err)
+			}
+			if err := writeJSON(filepath.Join(host.ConfigDir, "controller.json"), owner); err != nil {
+				t.Fatal(err)
+			}
+			if err := remote.Store.PinRuntimeRoot(root); err != nil {
+				t.Fatal(err)
+			}
+			binding := Binding{RoomID: req.RoomID, Target: req.Target, ParticipantName: "h_" + HostBindingKey(req.RoomID, req.Target)[:16], SessionID: "psn_original", JoinPhase: "complete", JoinRequestID: req.ID, Status: "online"}
+			if status != "uncertain" {
+				originalFixture(t, root, binding, status == "online")
+			}
+			if err := remote.saveBinding(binding); err != nil {
+				t.Fatal(err)
+			}
+			cached := binding
+			cached.Target.MachineID = "peer"
+			if err := local.Store.Update(func(s *State) error {
+				s.Peers["peer"] = peer
+				s.Bindings[HostBindingKey(cached.RoomID, cached.Target)] = cached
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			local.Client.Run = func(ctx context.Context, _ string, _ []string, in []byte) ([]byte, error) {
+				var rpc RPCRequest
+				if err := json.Unmarshal(in, &rpc); err != nil {
+					return nil, err
+				}
+				if rpc.Operation != "binding" {
+					t.Fatalf("unexpected RPC: %s", rpc.Operation)
+				}
+				calls++
+				result, err := host.Dispatch(ctx, rpc)
+				if err != nil {
+					return nil, err
+				}
+				return json.Marshal(result)
+			}
+			manager, _, room, _, muxCalls := tunnelFixture(t)
+			manager.Masters = map[string]*Master{"peer:" + key: {ControlPath: "/tmp/owned/master", Target: "host", done: make(chan struct{})}}
+			room.ID = binding.RoomID
+			room.Source.Descriptor = "parley://127.0.0.1:40001/" + room.ID
+			room.Source.ArtifactURL = "http://127.0.0.1:40002/rooms/" + room.ID + "/artifacts"
+			if _, err := manager.Acquire(context.Background(), peer, room, cached.Target); err != nil {
+				t.Fatal(err)
+			}
+			broker := Broker{Store: local.Store, Client: local.Client, Tunnels: manager}
+			for attempt := 0; attempt < 2; attempt++ {
+				if err := broker.Reconcile(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			state, err := local.Store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			current := state.Bindings[HostBindingKey(cached.RoomID, cached.Target)]
+			if current.Target != cached.Target || current.Status != status || calls != 2 {
+				t.Fatalf("binding=%+v, calls=%d", current, calls)
+			}
+			durable, err := remote.Store.Binding(HostBindingKey(binding.RoomID, binding.Target))
+			if err != nil || durable.Target.MachineID != "self" {
+				t.Fatal(durable, err)
+			}
+			var cancels []string
+			for _, call := range *muxCalls {
+				if strings.Contains(call, "-O cancel") {
+					cancels = append(cancels, call)
+				}
+			}
+			if status == "offline" {
+				if len(manager.leases) != 0 || len(cancels) != 2 || !strings.Contains(cancels[0], "-R 127.0.0.1:51001:127.0.0.1:40001") || !strings.Contains(cancels[1], "-R 127.0.0.1:51002:127.0.0.1:40002") {
+					t.Fatal(manager.Status(), cancels)
+				}
+			} else if len(manager.leases) != 1 || len(cancels) != 0 {
+				t.Fatal(manager.Status(), cancels)
+			}
+		})
+	}
+}

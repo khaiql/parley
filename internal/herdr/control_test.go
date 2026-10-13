@@ -141,6 +141,7 @@ func TestLocalInvalidDecodeNeverDispatches(t *testing.T) {
 }
 
 func TestLocalOperationCanTakeLongerThanRequestReadDeadline(t *testing.T) {
+	t.Parallel()
 	dir, err := os.MkdirTemp("", "h-ipc-")
 	if err != nil {
 		t.Fatal(err)
@@ -231,6 +232,7 @@ func TestDecodeRequestSizeAndTopicBoundaries(t *testing.T) {
 	}
 }
 func TestLocalReadDeadline(t *testing.T) {
+	t.Parallel()
 	dir, err := os.MkdirTemp("", "h-ipc-")
 	if err != nil {
 		t.Fatal(err)
