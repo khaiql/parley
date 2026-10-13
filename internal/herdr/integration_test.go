@@ -143,3 +143,93 @@ func TestIntegrationRemoteQueueRejectsWrongShape(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectBrokerSharedClaimOrders(t *testing.T) {
+	for _, first := range []string{"direct", "broker"} {
+		t.Run(first, func(t *testing.T) {
+			operations, req, root := brokerFixture(t)
+			room := brokerRoom(t, operations, req)
+			host := HostSession{Config: SessionConfig{HerdrSocket: operations.Client.HerdrSocket}, ConfigDir: filepath.Join(root, "config"), Store: operations.Store}
+			host.Config.SessionKey, _ = SessionKey(host.Config.HerdrSocket)
+			owner, err := host.Setup(context.Background(), operations.Client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer := Peer{Machine: Machine{ID: owner.MachineID}, Config: owner}
+			broker := Broker{Store: host.Store, Client: operations.Client, Tunnels: &TunnelManager{}}
+			defer broker.Tunnels.Close()
+			calls := 0
+			operations.Client.Run = func(_ context.Context, _ string, args []string, _ []byte) ([]byte, error) {
+				if args[0] != "join" {
+					t.Fatalf("unexpected %v", args)
+				}
+				calls++
+				binding, err := host.Store.Binding(HostBindingKey(req.RoomID, req.Target))
+				if err != nil {
+					t.Fatal(err)
+				}
+				originalFixture(t, root, binding, true)
+				return []byte(`{"status":"joined","room_id":"room-a","session_id":"psn_original"}`), nil
+			}
+			if err = host.Store.Enqueue(req); err != nil {
+				t.Fatal(err)
+			}
+			normalized, err := normalize(req, peer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if first == "direct" {
+				if _, err = host.Store.Claim(req.ID, hostDigest(normalized), owner.ControllerID); err != nil {
+					t.Fatal(err)
+				}
+				if err = broker.Drain(context.Background(), peer); err != nil {
+					t.Fatal(err)
+				}
+				saved, err := host.Store.readOutcome(req.ID)
+				if err != nil || saved.Phase != "complete" {
+					t.Fatal("direct claim stranded by drain", saved, err)
+				}
+			} else {
+				locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+				go func() {
+					done <- host.Store.WithBinding(context.Background(), "join:"+HostBindingKey(req.RoomID, req.Target), func() error { close(locked); <-release; return nil })
+				}()
+				<-locked
+				attempt, stop := context.WithCancel(context.Background())
+				handled := make(chan error, 1)
+				go func() { _, e := broker.Handle(attempt, peer, req); handled <- e }()
+				deadline := time.Now().Add(time.Second)
+				for {
+					if _, e := host.Store.readOutcome(req.ID); e == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						stop()
+						close(release)
+						<-done
+						t.Fatal("broker did not claim")
+					}
+					time.Sleep(time.Millisecond)
+				}
+				stop()
+				<-handled
+				close(release)
+				if err = <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			response, err := host.SubmitForm(context.Background(), operations.Client, req)
+			if err != nil || response.Binding == nil || response.Binding.SessionID != "psn_original" {
+				t.Fatal(response, err)
+			}
+			replay, err := broker.Handle(context.Background(), peer, req)
+			if err != nil || replay.Binding == nil || replay.Binding.SessionID != "psn_original" || calls != 1 {
+				t.Fatal(replay, err, calls)
+			}
+			outcome, err := host.Store.readOutcome(req.ID)
+			if err != nil || outcome.Phase != "complete" {
+				t.Fatal(outcome, err, room)
+			}
+		})
+	}
+}

@@ -365,6 +365,11 @@ func (h HostSession) controller(ctx context.Context, fn func(*SessionConfig) err
 		return e
 	}
 	return lockFile(ctx, filepath.Join(h.ConfigDir, "controller.lock"), func() error {
+		if _, err := h.CoordinatorConfig(); err == nil {
+			return fmt.Errorf("controller_conflict")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 		var c SessionConfig
 		e := readJSON(filepath.Join(h.ConfigDir, "controller.json"), &c)
 		if e != nil && !errors.Is(e, os.ErrNotExist) {
@@ -467,10 +472,10 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 		if e != nil {
 			return nil, e
 		}
-		if normalized.ID != r.RequestID || RequestDigest(normalized) != r.Digest {
+		if normalized.ID != r.RequestID || hostDigest(normalized) != r.Digest {
 			return nil, fmt.Errorf("request_conflict")
 		}
-		return h.Store.Claim(r.RequestID, r.Digest, r.ControllerID)
+		return h.Store.ClaimRequest(normalized, r.ControllerID)
 	case "outcome":
 		if r.Outcome != nil {
 			if r.Outcome.ControllerID != r.ControllerID {

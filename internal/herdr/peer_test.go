@@ -63,11 +63,13 @@ func TestHerdrRPCNormalizedClaim(t *testing.T) {
 	}
 	r.Operation = "claim-request"
 	r.RequestID = "one"
-	r.Digest = RequestDigest(request)
+	forged := request
+	forged.RoomID = "different-room"
+	r.Digest = hostDigest(forged)
 	if _, e = h.Dispatch(context.Background(), r); e == nil {
-		t.Fatal("raw self digest accepted")
+		t.Fatal("different request digest accepted")
 	}
-	r.Digest = RequestDigest(requests[0])
+	r.Digest = hostDigest(requests[0])
 	if _, e = h.Dispatch(context.Background(), r); e != nil {
 		t.Fatal(e)
 	}
