@@ -20,7 +20,7 @@ import (
 const processWaitDelay = 2 * time.Second
 const PluginID = "parley"
 
-var RequiredCapabilities = []string{"events", "requests", "claim-request", "outcome", "claim-controller", "release-controller", "join-failure"}
+var RequiredCapabilities = []string{"events", "requests", "claim-request", "outcome", "claim-controller", "release-controller", "join-failure", "probe", "rooms", "room", "binding", "probe-route", "join"}
 
 type Client struct {
 	HerdrBinary    string
@@ -94,6 +94,12 @@ func (c *Client) Agent(ctx context.Context, t AgentTarget) (AgentTarget, string,
 			return t, "", fmt.Errorf("session_mismatch")
 		}
 		t.HerdrSocket = c.HerdrSocket
+		if t.TerminalID != "" {
+			target, e = c.nativePane(ctx, t.TerminalID)
+			if e != nil {
+				return t, "", e
+			}
+		}
 		b, e = socketAPI(ctx, c.HerdrSocket, "agent.get", map[string]string{"target": target})
 	} else {
 		raw, ok := c.managed.Load(t.MachineID)
@@ -333,4 +339,39 @@ func (c *Client) SignalRequest(ctx context.Context, t AgentTarget, id string) er
 		return fmt.Errorf("pending_signal: %w", e)
 	}
 	return nil
+}
+
+// Native agent.get resolves pane/name, while terminal identity is exposed by agent.list.
+func (c *Client) nativePane(ctx context.Context, terminal string) (string, error) {
+	data, err := socketAPI(ctx, c.HerdrSocket, "agent.list", map[string]string{})
+	if err != nil {
+		return "", err
+	}
+	var wire struct {
+		Result struct {
+			Agents []struct {
+				TerminalID string `json:"terminal_id"`
+				PaneID     string `json:"pane_id"`
+			} `json:"agents"`
+		} `json:"result"`
+	}
+	if err = json.Unmarshal(data, &wire); err != nil {
+		return "", err
+	}
+	pane := ""
+	for _, agent := range wire.Result.Agents {
+		if agent.TerminalID == terminal {
+			if pane != "" {
+				return "", fmt.Errorf("agent_identity_ambiguous")
+			}
+			if err = safeID(agent.PaneID); err != nil {
+				return "", err
+			}
+			pane = agent.PaneID
+		}
+	}
+	if pane == "" {
+		return "", fmt.Errorf("agent_replaced: original terminal unavailable")
+	}
+	return pane, nil
 }

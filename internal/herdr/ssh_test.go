@@ -421,3 +421,18 @@ func TestTunnelAcquireReportsRetainedOwnership(t *testing.T) {
 		})
 	}
 }
+
+func TestTunnelDisableOnlyOwnedPeerSession(t *testing.T) {
+	closedA, closedB := false, false
+	a := &Master{done: make(chan struct{}), cancel: func() { closedA = true }}
+	a.cancel = func() { closedA = true; close(a.done) }
+	b := &Master{done: make(chan struct{}), cancel: func() { closedB = true }}
+	b.cancel = func() { closedB = true; close(b.done) }
+	peer := Peer{Machine: Machine{ID: "peer"}, Config: SessionConfig{SessionKey: "session-a"}}
+	manager := TunnelManager{Masters: map[string]*Master{"peer:session-a": a, "peer:session-b": b}, leases: map[string]*tunnelLease{"a": {master: a}, "b": {master: b}}}
+	defer manager.Close()
+	manager.ClosePeer(peer)
+	if !closedA || closedB || manager.Status()["a"] != "route_unavailable" || manager.Status()["b"] != "ready" {
+		t.Fatal(closedA, closedB, manager.Status())
+	}
+}

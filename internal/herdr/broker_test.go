@@ -88,18 +88,23 @@ func brokerFixtureIdentity(t *testing.T, replaced func(int64) bool) (*HostOperat
 			go func() {
 				defer conn.Close()
 				var r struct {
-					Method string `json:"method"`
+					Method string         `json:"method"`
+					Params map[string]any `json:"params"`
 				}
 				if json.NewDecoder(conn).Decode(&r) != nil {
 					return
 				}
-				if r.Method == "agent.get" {
+				if r.Method == "agent.list" {
+					io.WriteString(conn, `{"result":{"agents":[{"terminal_id":"term_a","pane_id":"w:p"}]}}`+"\n")
+				} else if r.Method == "agent.get" {
 					count := agentCalls.Add(1)
 					if replaced != nil && replaced(count) {
 						io.WriteString(conn, `{"result":{"agent":{"terminal_id":"different","agent":"gemini","agent_status":"idle","agent_session":{"agent":"gemini","kind":"path","value":"/native/a session.json"}}}}`+"\n")
 						return
 					}
 					io.WriteString(conn, `{"result":{"agent":{"terminal_id":"term_a","pane_id":"w:p","workspace_id":"w","agent":"gemini","agent_status":"idle","agent_session":{"agent":"gemini","kind":"path","value":"/native/a session.json"}}}}`+"\n")
+				} else if r.Method == "pane.report_metadata" && r.Params["pane_id"] == nil {
+					io.WriteString(conn, `{"error":{"code":"invalid_params","message":"native pane_id required"}}`+"\n")
 				} else {
 					io.WriteString(conn, `{"result":{}}`+"\n")
 				}
@@ -1279,5 +1284,19 @@ func TestHerdrJoinFailureReadOnlyVerifiedDigest(t *testing.T) {
 	}
 	if _, e = os.Stat(filepath.Join(h.Store.dir, "runtime-root.json")); !os.IsNotExist(e) {
 		t.Fatal("read-only helper pinned runtime", e)
+	}
+}
+
+func TestHostStartUsesNativeMetadataSchema(t *testing.T) {
+	h, r, _ := brokerFixture(t)
+	r.Op = "start"
+	r.RoomID = ""
+	r.Topic = "native metadata"
+	h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) {
+		return []byte(`{"status":"started","room_id":"room-a","session_id":"psn_host","descriptor":"parley://127.0.0.1:49001/room-a","artifact_local_port":49002,"artifact_path":"/rooms/room-a/artifacts"}`), nil
+	}
+	response, err := h.Start(context.Background(), r)
+	if err != nil || strings.Contains(response.Message, "Metadata unavailable") {
+		t.Fatal(response, err)
 	}
 }

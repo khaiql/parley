@@ -116,6 +116,27 @@ func (h *HostOperations) runtimePaths() (paths.Paths, error) {
 	}
 	return p, nil
 }
+
+// Host journals identify the native socket/terminal, independent of controller aliases.
+func hostRequest(req Request) Request { req.Target.MachineID = "self"; return req }
+func hostDigest(req Request) string   { return RequestDigest(hostRequest(req)) }
+func (h *HostOperations) saveBinding(binding Binding) error {
+	binding.Target.MachineID = "self"
+	return h.Store.saveBinding(binding)
+}
+func hostResponse(response Response, machine string) Response {
+	if response.Binding != nil {
+		binding := *response.Binding
+		binding.Target.MachineID = machine
+		response.Binding = &binding
+	}
+	if response.Room != nil {
+		room := *response.Room
+		room.Host.MachineID = machine
+		response.Room = &room
+	}
+	return response
+}
 func (h *HostOperations) journal(req Request) error {
 	return h.Store.locked(func() error {
 		dir, e := h.Store.recordDir("requests")
@@ -126,7 +147,7 @@ func (h *HostOperations) journal(req Request) error {
 		var prior Request
 		e = readJSON(path, &prior)
 		if errors.Is(e, os.ErrNotExist) {
-			return writeJSON(path, req)
+			return writeJSON(path, hostRequest(req))
 		}
 		if e != nil {
 			return e
@@ -135,7 +156,7 @@ func (h *HostOperations) journal(req Request) error {
 		if e != nil {
 			return e
 		}
-		if RequestDigest(normalized) != RequestDigest(req) {
+		if hostDigest(normalized) != hostDigest(req) {
 			return fmt.Errorf("request_conflict")
 		}
 		return nil
@@ -209,6 +230,7 @@ func (h *HostOperations) original(ctx context.Context, b Binding) (Binding, stri
 		return b, "participant_disconnected", nil
 	}
 	b.SessionID = matches[0].ID
+	b.Target.MachineID = h.Client.LocalMachineID
 	b.JoinPhase = "complete"
 	b.Status = "online"
 	return b, "", nil
@@ -245,7 +267,7 @@ func (h *HostOperations) priorFailure(req Request) (Response, bool, error) {
 	if e != nil {
 		return Response{}, false, e
 	}
-	if record.Digest != RequestDigest(req) || record.Response.Status != "error" || !knownHostFailure(record.Response.Code) {
+	if record.Digest != hostDigest(req) || record.Response.Status != "error" || !knownHostFailure(record.Response.Code) {
 		return Response{}, false, fmt.Errorf("request_conflict")
 	}
 	return record.Response, true, nil
@@ -292,6 +314,7 @@ func (h *HostOperations) ReadJoinFailure(ctx context.Context, req Request) (Join
 		result.Response = &failed
 		binding, e := h.Store.Binding(key)
 		if e == nil {
+			binding.Target.MachineID = h.Client.LocalMachineID
 			result.Binding = &binding
 		} else if !errors.Is(e, os.ErrNotExist) {
 			return e
@@ -306,7 +329,7 @@ func (h *HostOperations) recordFailure(req Request, response Response) error {
 		if e != nil {
 			return e
 		}
-		return writeJSON(filepath.Join(dir, req.ID+".json"), hostFailure{RequestDigest(req), response})
+		return writeJSON(filepath.Join(dir, req.ID+".json"), hostFailure{hostDigest(req), response})
 	})
 }
 
@@ -381,7 +404,7 @@ func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoi
 				response = failure(code, e)
 				return nil
 			}
-			if e = h.Store.saveBinding(original); e != nil {
+			if e = h.saveBinding(original); e != nil {
 				return e
 			}
 			response = joinedResponse(original)
@@ -399,7 +422,7 @@ func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoi
 			response = failure("runtime_socket_too_long", e)
 			return nil
 		}
-		if e = h.Store.saveBinding(b); e != nil {
+		if e = h.saveBinding(b); e != nil {
 			return e
 		}
 		if _, e = h.identity(ctx, req); e != nil {
@@ -445,7 +468,7 @@ func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoi
 		}
 		if runErr != nil || decodeErr != nil || wire.Status != "joined" || wire.SessionID == "" {
 			b.JoinPhase = "uncertain"
-			if e = h.Store.saveBinding(b); e != nil {
+			if e = h.saveBinding(b); e != nil {
 				return e
 			}
 			original, code, e := h.original(ctx, b)
@@ -482,13 +505,13 @@ func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoi
 			b.JoinPhase = "complete"
 			b.Status = "online"
 		}
-		if e = h.Store.saveBinding(b); e != nil {
+		if e = h.saveBinding(b); e != nil {
 			return e
 		}
 		response = joinedResponse(b)
 		return nil
 	})
-	return response, e
+	return hostResponse(response, h.Client.LocalMachineID), e
 }
 
 func reservedStartName(socket, requestID string) string {
@@ -531,7 +554,7 @@ func (h *HostOperations) Start(ctx context.Context, req Request) (Response, erro
 			e = readJSON(intentPath, &intent)
 			if errors.Is(e, os.ErrNotExist) {
 				fresh = true
-				intent = startIntent{Digest: RequestDigest(originalReq), Name: reservedStartName(req.Target.HerdrSocket, req.ID), Request: originalReq}
+				intent = startIntent{Digest: hostDigest(originalReq), Name: reservedStartName(req.Target.HerdrSocket, req.ID), Request: hostRequest(originalReq)}
 				return writeJSON(intentPath, intent)
 			}
 			return e
@@ -539,7 +562,7 @@ func (h *HostOperations) Start(ctx context.Context, req Request) (Response, erro
 		if e != nil {
 			return e
 		}
-		if intent.Digest != RequestDigest(originalReq) {
+		if intent.Digest != hostDigest(originalReq) {
 			response = failure("request_conflict", nil)
 			return nil
 		}
@@ -548,7 +571,8 @@ func (h *HostOperations) Start(ctx context.Context, req Request) (Response, erro
 			return nil
 		}
 		saveResponse := func() error {
-			intent.Response = &response
+			saved := hostResponse(response, "self")
+			intent.Response = &saved
 			return h.Store.locked(func() error { return writeJSON(intentPath, intent) })
 		}
 		p, e := h.runtimePaths()
@@ -611,21 +635,22 @@ func (h *HostOperations) Start(ctx context.Context, req Request) (Response, erro
 			return nil
 		}
 		b := Binding{RoomID: room.ID, Target: req.Target, SessionID: sessionID, ParticipantName: intent.Name, StateDir: p.Root, Routed: room.Source, Status: "online", JoinPhase: "complete", JoinRequestID: req.ID}
+		room.Host.MachineID = "self"
 		if e = h.Store.saveRoom(room); e != nil {
 			return e
 		}
-		if e = h.Store.saveBinding(b); e != nil {
+		if e = h.saveBinding(b); e != nil {
 			return e
 		}
 		d, u, _ := validateEndpoints(room.Source, room.ID)
-		_, metadataErr := socketAPI(ctx, h.Client.HerdrSocket, "pane.report_metadata", map[string]any{"target": req.Target.TerminalID, "source": "plugin:parley", "tokens": map[string]string{"parley_room": room.ID, "parley_port": strconv.Itoa(d.Port), "parley_artifact_port": u.Port()}})
+		_, metadataErr := socketAPI(ctx, h.Client.HerdrSocket, "pane.report_metadata", map[string]any{"pane_id": req.Target.PaneID, "source": "plugin:parley", "tokens": map[string]string{"parley_room": room.ID, "parley_port": strconv.Itoa(d.Port), "parley_artifact_port": u.Port()}})
 		response = Response{Status: "started", Room: &room, Binding: &b, Message: "Use parley --session " + b.SessionID + " for existing participant commands."}
 		if metadataErr != nil {
 			response.Message += " Metadata unavailable; durable room discovery remains available."
 		}
 		return saveResponse()
 	})
-	return response, e
+	return hostResponse(response, h.Client.LocalMachineID), e
 }
 func normalize(req Request, peer Peer) (Request, error) {
 	data, e := json.Marshal(req)
@@ -644,11 +669,18 @@ func (b *Broker) peerCall(ctx context.Context, p Peer, r RPCRequest, out any) er
 	var wire struct {
 		Error *apiError `json:"error"`
 	}
-	if e = json.Unmarshal(data, &wire); e != nil {
-		return e
+	// Durable requests are a JSON array; only object responses carry error envelopes.
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) != 0 && trimmed[0] == '{' {
+		if e = json.Unmarshal(data, &wire); e != nil {
+			return e
+		}
+		if wire.Error != nil {
+			return wire.Error
+		}
 	}
-	if wire.Error != nil {
-		return wire.Error
+	if r.Operation == "requests" && (len(trimmed) == 0 || trimmed[0] != '[') {
+		return fmt.Errorf("invalid requests response: array required")
 	}
 	return json.Unmarshal(data, out)
 }

@@ -188,3 +188,7 @@ go test ./internal/e2e -run TestHeadlessRoomTwoParticipants -count=100
 Push a SemVer tag such as `v0.1.0` to run the GoReleaser workflow. The workflow publishes GitHub release archives and updates the Homebrew cask in `khaiql/homebrew-parley`; it requires a `HOMEBREW_TAP_GITHUB_TOKEN` secret with contents write access to that tap repository.
 
 See [CLAUDE.md](CLAUDE.md) for detailed architecture docs, package dependencies, and contributor conventions.
+
+### Herdr rooms
+
+Herdr 0.9.3+ can start and join rooms from existing agent panes, with both message and artifact SSH ports opened automatically. Install the plugin on every participating host, then run `parley herdr setup` on the local controller. See [installation and scope](docs/herdr-plugin.md) and [transport evidence](docs/herdr-transport-proof.md).
