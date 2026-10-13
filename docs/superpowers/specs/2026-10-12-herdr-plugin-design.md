@@ -38,6 +38,8 @@ One managed remote session has one durable controller owner record. Claim it via
 
 Subscribe to `workspace.metadata_updated`. This native API event does **not** invoke manifest event hooks. Implement `parley herdr rpc events` to connect to the pinned remote Unix socket, send the fixed subscription, and relay acknowledgement/events through outbound SSH. Herdr's internal `remote-api-bridge` shows the transport is possible but is not a stable public plugin streaming command to depend on.
 
+After a verified native subscription acknowledgement is forwarded, the helper emits the fixed internal frame `{"id":"parley-requests","result":{"type":"parley_transport_keepalive"}}` with a newline every two seconds. The correlated reader accepts this exact frame only after its own fresh acknowledgement and never treats it as a queue invalidation. The frame belongs only to helper output; it is never written into native metadata, messages, requests, or room storage. Output failure or cancellation closes and joins the owned native reader and stops the timer. This lets a quiet native subscription detect a closed SSH output without a metadata wakeup.
+
 On startup, reconnect, or `events_lost`, subscribe first and keep draining events while reading pending requests through a separate SSH call. Events are invalidation signals, not the queue. Coalesce wakeups; repeat a read if another event arrived while it was in flight. Refresh saved profiles for new/disabled hosts, without timer-based room discovery.
 
 ## State placement
