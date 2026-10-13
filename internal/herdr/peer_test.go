@@ -130,13 +130,19 @@ func TestHerdrRPCRejectCorruptRoom(t *testing.T) {
 }
 
 func TestHerdrRPCAuthoritativeRooms(t *testing.T) {
-	h := testHost(t)
+	operations, req, root := brokerFixture(t)
+	req.RoomID = "room"
+	liveRoom := brokerRoom(t, operations, req)
+	key, _ := SessionKey(operations.Client.HerdrSocket)
+	h := HostSession{Config: SessionConfig{HerdrSocket: operations.Client.HerdrSocket, SessionKey: key}, Store: operations.Store, ConfigDir: filepath.Join(root, "config")}
 	ctx := context.Background()
 	r := RPCRequest{Operation: "claim-controller", Session: "agents", SessionKey: h.Config.SessionKey, ControllerID: "local", MachineID: "peer"}
 	if _, e := h.Dispatch(ctx, r); e != nil {
 		t.Fatal(e)
 	}
-	room := Room{ID: "room", Topic: "authoritative", Host: AgentTarget{MachineID: "self", HerdrSocket: h.Config.HerdrSocket, PaneID: "w1:p1", WorkspaceID: "w1", TerminalID: "term", Kind: "codex", NativeSession: "native"}, HostSessionID: "psn_host", Source: Endpoints{Descriptor: "parley://127.0.0.1:4001/room", ArtifactURL: "http://127.0.0.1:4002/rooms/room/artifacts"}}
+	room := liveRoom
+	room.Topic = "authoritative"
+	room.Host.MachineID = "self"
 	dir := filepath.Join(h.Store.dir, "rooms")
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		t.Fatal(e)
@@ -237,7 +243,7 @@ func TestHerdrRPCTargetedProbePinned(t *testing.T) {
 		}
 		json.NewDecoder(conn).Decode(&r)
 		called <- r.Method + ":" + r.Params["target"]
-		io.WriteString(conn, `{"result":{"agent":{"pane_id":"w1:p1","workspace_id":"w1","terminal_id":"term","agent":"codex","agent_status":"idle","agent_session":{"kind":"id","value":"native"}}}}`+"\n")
+		io.WriteString(conn, `{"result":{"agent":{"pane_id":"w1:p1","workspace_id":"w1","terminal_id":"term","agent":"codex","agent_status":"idle","agent_session":{"agent":"codex","kind":"id","value":"native"}}}}`+"\n")
 	}()
 	h := testHost(t)
 	h.Config.HerdrSocket = socket

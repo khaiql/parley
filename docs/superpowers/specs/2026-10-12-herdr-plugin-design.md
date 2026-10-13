@@ -55,7 +55,7 @@ Within the session state root use:
 - `outcomes/<request-id>.json`: normalized request digest, controller claim, mutation intent, and complete/uncertain result.
 - `state.json`: managed peers, discovered room cache, and known bindings/routes. The cache is not the authoritative room registry.
 
-The session configuration root contains `config.json` for the local role/pinned socket and `controller.json` for managed-session ownership. All room/request/outcome/binding records, locks, logs, and ownership records belong to that session. Use separately allocated short private IPC/control socket paths whose handshake identifies this full session key; never truncate the session identity to fit a filesystem socket path. Pin the selected host's `PARLEY_STATE_DIR` for every Parley operation. Directories are `0700`, records `0600`, with locked atomic replacement and symlink/corruption rejection.
+The session configuration root contains `config.json` for the local role/pinned socket and `controller.json` for managed-session ownership. All room/request/outcome/binding records, locks, logs, and ownership records belong to that session. Use separately allocated short private IPC/control socket paths whose handshake identifies this full session key; never truncate the session identity to fit a filesystem socket path. Trusted setup or the native action pins the selected host's `PARLEY_STATE_DIR` once in private immutable `runtime-root.json` before request submission. Every fixed SSH helper reads that pin before runtime access; SSH environment and request data cannot change it. An unpinned native action may pin its trusted local default. No manual participant setup is required. Directories are `0700`, records `0600`, with locked atomic replacement and symlink/corruption rejection.
 
 Start advertises `parley_room`, `parley_port`, and `parley_artifact_port` via `pane.report_metadata`. Remote Join changes the workspace's `parley_request` token to a fresh random marker. All values fit the 80-character token limit; no payload, file path, or SSH target is stored in a marker. Tokens disappear after Herdr restart and cannot replace durable files.
 
@@ -64,7 +64,7 @@ A marker wakes a read of **all** pending requests for that managed session, so c
 ## Start sequence
 
 1. Capture and validate the original existing agent identity on the selected server.
-2. Journal intent, run host-local `parley start --topic`, and persist returned room/session/endpoints plus a completed host binding under the same host-local binding key used by Join.
+2. Reserve `s_` plus the first 16 hex characters of SHA-256 over JSON `[SessionKey, requestID]`, journal the full normalized request digest, run host-local `parley start --topic`, and persist returned room/session/endpoints plus a completed host binding under the same host-local binding key used by Join.
 3. Advertise room metadata on that host pane.
 4. Return room ID and existing session command instructions in the popup.
 
@@ -72,13 +72,13 @@ Start needs no central registration, callback, worker, or tunnel. Failed metadat
 
 ## Join sequence
 
-**Local Join:** save a durable request and notify the local coordinator via private local IPC. It fetches local and enabled remote pane metadata on demand, validates the matching durable room record and live host identity, acquires/probes both routes, and calls participant-host `parley join` with the remapped artifact endpoint. Persist the binding/outcome and display session instructions.
+**Local Join:** save a durable request and notify the local coordinator via private local IPC. It reads authoritative local and enabled pinned remote room records on demand, validates the matching durable room record and live host identity, acquires/probes both routes, and calls participant-host `parley join` with the remapped artifact endpoint. Persist the binding/outcome and display session instructions.
 
 **Remote Join:** the form saves its request in the remote server's plugin state directory and reports the workspace marker. The local listener receives the event over its own outbound SSH relay, fetches pending requests through a separate fixed helper call, validates/claims the request, and resolves the room on demand. It creates SSH forwards locally, then calls the remote helper to Join. Publish the result back through outbound SSH; the form reads only its own outcome file.
 
 Same-host Join can run directly on the selected server without the coordinator or SSH. A local room may therefore join locally even if no remote subscriptions exist. Direct and queued Join must both use the same participant-host binding transaction below; the direct path does not bypass its lock.
 
-Lookup uses room ID and authoritative machine/Herdr session/terminal/native conversation identity. Pane IDs are server-scoped and can change after moves. Normalize host-local `machine_id:"self"` records to the saved-profile peer, never trust submitted machine/socket claims. Missing/stale pane tokens trigger host-specific helper reads of durable room records. Verify live room status and both source endpoints before forwarding. Duplicate IDs across hosts fail as `room_ambiguous`; unavailable enabled hosts make global resolution incomplete rather than silently picking a first match.
+Lookup uses room ID and authoritative machine/Herdr session/terminal/native conversation identity. Pane IDs are server-scoped and can change after moves. Normalize host-local `machine_id:"self"` records to the saved-profile peer, never trust submitted machine/socket claims. Lookup always reads host-specific durable room records through fixed `room`/`rooms` helpers, so missing/stale pane tokens need no alternate discovery path. Metadata-only rooms without durable plugin records are not discovered; plugin Start always persists first. Verify live room status and both source endpoints before forwarding. Duplicate IDs across hosts fail as `room_ambiguous`; unavailable enabled hosts make global resolution incomplete rather than silently picking a first match.
 
 ## Routing
 
