@@ -191,12 +191,22 @@ func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
 		}
 	}()
 	defer close(readDone)
-	label := "Room ID"
+	var value string
 	if op == "start" {
-		label = "Topic"
+		fmt.Fprint(cmd.OutOrStdout(), "Parley start — Topic (Enter submits, Escape cancels):\r\n")
+		value, err = herdr.ReadTerminalForm(cmd.InOrStdin(), cmd.OutOrStdout(), op)
+	} else {
+		broker := herdr.Broker{Store: h.Store, Client: c}
+		value, err = pickRoom(cmd.InOrStdin(), cmd.OutOrStdout(), func() (herdr.RoomCatalog, error) {
+			lookup, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			return broker.RoomChoices(lookup, target)
+		}, func(room herdr.Room) error {
+			check, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			return broker.CheckRoomChoice(check, target, room)
+		})
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Parley %s — %s (Enter submits, Escape cancels):\r\n", op, label)
-	value, err := herdr.ReadTerminalForm(cmd.InOrStdin(), cmd.OutOrStdout(), op)
 	if err != nil {
 		return err
 	}

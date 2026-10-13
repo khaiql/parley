@@ -14,6 +14,7 @@ import (
 )
 
 var ErrFormCancelled = errors.New("cancelled")
+var ErrFormInput = errors.New("invalid form input")
 
 // ReadForm treats terminal editing as input, never as an executable command.
 func ReadForm(r io.Reader, op string) (string, error) { return ReadTerminalForm(r, io.Discard, op) }
@@ -40,11 +41,11 @@ func ReadTerminalForm(r io.Reader, out io.Writer, op string) (string, error) {
 			fmt.Fprint(out, "\r\n")
 			value := strings.TrimSpace(string(input))
 			if value == "" || !utf8.Valid(input) {
-				return "", fmt.Errorf("nonempty UTF-8 input required")
+				return "", fmt.Errorf("%w: nonempty UTF-8 input required", ErrFormInput)
 			}
 			if op == "join" {
 				if err := safeID(value); err != nil {
-					return "", err
+					return "", fmt.Errorf("%w: %v", ErrFormInput, err)
 				}
 			}
 			return value, nil
@@ -56,12 +57,12 @@ func ReadTerminalForm(r io.Reader, out io.Writer, op string) (string, error) {
 			}
 		default:
 			if b < 32 {
-				return "", fmt.Errorf("control character rejected")
+				return "", fmt.Errorf("%w: control character rejected", ErrFormInput)
 			}
 			input = append(input, b)
 			_, _ = out.Write([]byte{b})
 			if len(input) > 512 {
-				return "", fmt.Errorf("input exceeds 512 bytes")
+				return "", fmt.Errorf("%w: input exceeds 512 bytes", ErrFormInput)
 			}
 		}
 	}
