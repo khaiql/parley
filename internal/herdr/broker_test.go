@@ -6,11 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/khaiql/parley/internal/adapter"
-	"github.com/khaiql/parley/internal/eventlog"
-	"github.com/khaiql/parley/internal/paths"
-	runtime "github.com/khaiql/parley/internal/runtime"
-	"github.com/khaiql/parley/internal/server"
 	"io"
 	"net"
 	"net/http/httptest"
@@ -24,6 +19,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/khaiql/parley/internal/adapter"
+	"github.com/khaiql/parley/internal/eventlog"
+	"github.com/khaiql/parley/internal/paths"
+	runtime "github.com/khaiql/parley/internal/runtime"
+	"github.com/khaiql/parley/internal/server"
 )
 
 func TestEmptyQueueDoesNotDiscoverRooms(t *testing.T) {
@@ -62,7 +63,11 @@ func TestBrokerNativePathReference(t *testing.T) {
 }
 
 func brokerFixture(t *testing.T) (*HostOperations, Request, string) {
+	return brokerFixtureIdentity(t, nil)
+}
+func brokerFixtureIdentity(t *testing.T, replaced func(int64) bool) (*HostOperations, Request, string) {
 	t.Helper()
+	var agentCalls atomic.Int64
 	root, e := os.MkdirTemp("/tmp", "hb-")
 	if e != nil {
 		t.Fatal(e)
@@ -89,6 +94,11 @@ func brokerFixture(t *testing.T) (*HostOperations, Request, string) {
 					return
 				}
 				if r.Method == "agent.get" {
+					count := agentCalls.Add(1)
+					if replaced != nil && replaced(count) {
+						io.WriteString(conn, `{"result":{"agent":{"terminal_id":"different","agent":"gemini","agent_status":"idle","agent_session":{"agent":"gemini","kind":"path","value":"/native/a session.json"}}}}`+"\n")
+						return
+					}
 					io.WriteString(conn, `{"result":{"agent":{"terminal_id":"term_a","pane_id":"w:p","workspace_id":"w","agent":"gemini","agent_status":"idle","agent_session":{"agent":"gemini","kind":"path","value":"/native/a session.json"}}}}`+"\n")
 				} else {
 					io.WriteString(conn, `{"result":{}}`+"\n")
@@ -684,125 +694,142 @@ func TestBrokerCallHasFiniteDeadline(t *testing.T) {
 	}
 }
 func TestBrokerRemoteJoinLostOutcomeKeepsOneParticipantAndLease(t *testing.T) {
-	local, r, _ := brokerFixture(t)
-	room := brokerRoom(t, local, r)
-	remote, remoteReq, remoteRoot := brokerFixture(t)
-	remote.Client.LocalMachineID = "peer"
-	remoteReq.Target.MachineID = "peer"
-	remoteReq.RoomID = room.ID
-	key, _ := SessionKey(remote.Client.HerdrSocket)
-	p := Peer{Machine: Machine{ID: "peer", Target: "host", Session: "agents", Enabled: true}, Config: SessionConfig{MachineID: "peer", ControllerID: "local", HerdrSocket: remote.Client.HerdrSocket, SessionKey: key}, Binary: "/opt/parley"}
-	if e := remote.Store.PinRuntimeRoot(remoteRoot); e != nil {
-		t.Fatal(e)
-	}
-	if e := remote.Store.Enqueue(remoteReq); e != nil {
-		t.Fatal(e)
-	}
-	if e := local.Store.Update(func(s *State) error { s.Peers[p.Machine.ID] = p; return nil }); e != nil {
-		t.Fatal(e)
-	}
-	local.Client.managed.Store("peer", p)
-	cliCalls := 0
-	remote.Client.Run = func(_ context.Context, _ string, args []string, _ []byte) ([]byte, error) {
-		cliCalls++
-		if args[0] != "join" {
-			t.Fatal(args)
-		}
-		binding, _ := remote.Store.Binding(HostBindingKey(room.ID, remoteReq.Target))
-		originalFixture(t, remoteRoot, binding, true)
-		return []byte(`{"status":"joined","room_id":"room-a","session_id":"psn_original"}`), nil
-	}
-	publications := 0
-	local.Client.Run = func(ctx context.Context, binary string, args []string, in []byte) ([]byte, error) {
-		if binary != "ssh" {
-			return json.Marshal([]Machine{p.Machine})
-		}
-		var rpc RPCRequest
-		if e := json.Unmarshal(in, &rpc); e != nil {
-			return nil, e
-		}
-		switch rpc.Operation {
-		case "rooms":
-			return []byte(`{}`), nil
-		case "probe":
-			live := remoteReq.Target
-			return json.Marshal(ProbeResult{Config: p.Config, Agent: &live, AgentStatus: "idle"})
-		case "claim-request":
-			out, e := remote.Store.Claim(rpc.RequestID, rpc.Digest, rpc.ControllerID)
-			if e != nil {
-				return nil, e
+	for _, knownFailure := range []bool{false, true} {
+		t.Run(fmt.Sprint(knownFailure), func(t *testing.T) {
+			local, r, _ := brokerFixture(t)
+			room := brokerRoom(t, local, r)
+			remote, remoteReq, remoteRoot := brokerFixture(t)
+			remote.Client.LocalMachineID = "peer"
+			remoteReq.Target.MachineID = "peer"
+			remoteReq.RoomID = room.ID
+			key, _ := SessionKey(remote.Client.HerdrSocket)
+			p := Peer{Machine: Machine{ID: "peer", Target: "host", Session: "agents", Enabled: true}, Config: SessionConfig{MachineID: "peer", ControllerID: "local", HerdrSocket: remote.Client.HerdrSocket, SessionKey: key}, Binary: "/opt/parley"}
+			if e := remote.Store.PinRuntimeRoot(remoteRoot); e != nil {
+				t.Fatal(e)
 			}
-			return json.Marshal(out)
-		case "binding":
-			binding, e := remote.Store.Binding(rpc.BindingKey)
-			if errors.Is(e, os.ErrNotExist) {
-				return []byte(`{"error":{"code":"binding_missing","message":"not yet joined"}}`), nil
+			if e := remote.Store.Enqueue(remoteReq); e != nil {
+				t.Fatal(e)
 			}
-			if e != nil {
-				return nil, e
+			if e := local.Store.Update(func(s *State) error { s.Peers[p.Machine.ID] = p; return nil }); e != nil {
+				t.Fatal(e)
 			}
-			return json.Marshal(binding)
-		case "join":
-			out, e := remote.Join(ctx, *rpc.Request, *rpc.Endpoints)
-			if e != nil {
-				return nil, e
+			local.Client.managed.Store("peer", p)
+			cliCalls := 0
+			remote.Client.Run = func(_ context.Context, _ string, args []string, _ []byte) ([]byte, error) {
+				cliCalls++
+				if args[0] != "join" {
+					t.Fatal(args)
+				}
+				if knownFailure {
+					return []byte(`{"error":{"code":"invalid_descriptor","message":"no effect"}}`), nil
+				}
+				binding, _ := remote.Store.Binding(HostBindingKey(room.ID, remoteReq.Target))
+				originalFixture(t, remoteRoot, binding, true)
+				return []byte(`{"status":"joined","room_id":"room-a","session_id":"psn_original"}`), nil
 			}
-			return json.Marshal(out)
-		case "outcome":
-			if rpc.Outcome.Phase == "complete" {
-				publications++
-				if publications == 1 {
-					return nil, io.EOF
+			publications := 0
+			local.Client.Run = func(ctx context.Context, binary string, args []string, in []byte) ([]byte, error) {
+				if binary != "ssh" {
+					return json.Marshal([]Machine{p.Machine})
+				}
+				var rpc RPCRequest
+				if e := json.Unmarshal(in, &rpc); e != nil {
+					return nil, e
+				}
+				switch rpc.Operation {
+				case "rooms":
+					return []byte(`{}`), nil
+				case "probe":
+					live := remoteReq.Target
+					return json.Marshal(ProbeResult{Config: p.Config, Agent: &live, AgentStatus: "idle"})
+				case "claim-request":
+					out, e := remote.Store.Claim(rpc.RequestID, rpc.Digest, rpc.ControllerID)
+					if e != nil {
+						return nil, e
+					}
+					return json.Marshal(out)
+				case "join-failure":
+					result, e := remote.ReadJoinFailure(ctx, *rpc.Request)
+					if e != nil {
+						return nil, e
+					}
+					return json.Marshal(result)
+				case "binding":
+					binding, e := remote.Store.Binding(rpc.BindingKey)
+					if errors.Is(e, os.ErrNotExist) {
+						return []byte(`{"error":{"code":"binding_missing","message":"not yet joined"}}`), nil
+					}
+					if e != nil {
+						return nil, e
+					}
+					return json.Marshal(binding)
+				case "join":
+					out, e := remote.Join(ctx, *rpc.Request, *rpc.Endpoints)
+					if e != nil {
+						return nil, e
+					}
+					return json.Marshal(out)
+				case "outcome":
+					if rpc.Outcome.Phase == "complete" {
+						publications++
+						if publications == 1 {
+							return nil, io.EOF
+						}
+					}
+					if e := remote.Store.Complete(rpc.RequestID, *rpc.Outcome); e != nil {
+						return nil, e
+					}
+					return json.Marshal(rpc.Outcome)
+				}
+				return nil, fmt.Errorf("unexpected helper %s %v", rpc.Operation, args)
+			}
+			forwardCalls := []string{}
+			manager := &TunnelManager{Masters: map[string]*Master{"peer:" + key: {ControlPath: "/tmp/owned/master", Target: "host", done: make(chan struct{})}}}
+			port := 51000
+			manager.Run = func(_ context.Context, _ string, args []string, in []byte) ([]byte, error) {
+				call := strings.Join(args, " ")
+				if strings.Contains(call, "-O forward") {
+					if !strings.Contains(call, "-R") {
+						t.Fatal(call)
+					}
+					forwardCalls = append(forwardCalls, call)
+					port++
+					return []byte(strconv.Itoa(port)), nil
+				}
+				if len(in) > 0 {
+					var rpc RPCRequest
+					if json.Unmarshal(in, &rpc) != nil || rpc.Operation != "probe-route" {
+						t.Fatal(string(in))
+					}
+					return []byte(`{"status":"ready"}`), nil
+				}
+				return nil, nil
+			}
+			b := Broker{Store: local.Store, Client: local.Client, Tunnels: manager}
+			if _, e := b.Handle(context.Background(), p, remoteReq); e == nil {
+				t.Fatal("lost outcome ignored")
+			}
+			out, e := b.Handle(context.Background(), p, remoteReq)
+			if e != nil || !knownFailure && out.Binding == nil || knownFailure && out.Code != "invalid_descriptor" || cliCalls != 1 || len(forwardCalls) != 2 {
+				t.Fatal(out, e, cliCalls, forwardCalls)
+			}
+			expectedLeases := 1
+			if knownFailure {
+				expectedLeases = 0
+			}
+			if len(manager.leases) != expectedLeases {
+				t.Fatal(manager.leases)
+			}
+			for _, lease := range manager.leases {
+				if len(lease.bindings) != 1 {
+					t.Fatal(lease.bindings)
 				}
 			}
-			if e := remote.Store.Complete(rpc.RequestID, *rpc.Outcome); e != nil {
-				return nil, e
+			state, e := remote.Store.Read()
+			if e != nil || state.Requests[remoteReq.ID].Phase != "complete" {
+				t.Fatal(state.Requests, e)
 			}
-			return json.Marshal(rpc.Outcome)
-		}
-		return nil, fmt.Errorf("unexpected helper %s %v", rpc.Operation, args)
-	}
-	forwardCalls := []string{}
-	manager := &TunnelManager{Masters: map[string]*Master{"peer:" + key: {ControlPath: "/tmp/owned/master", Target: "host", done: make(chan struct{})}}}
-	port := 51000
-	manager.Run = func(_ context.Context, _ string, args []string, in []byte) ([]byte, error) {
-		call := strings.Join(args, " ")
-		if strings.Contains(call, "-O forward") {
-			if !strings.Contains(call, "-R") {
-				t.Fatal(call)
-			}
-			forwardCalls = append(forwardCalls, call)
-			port++
-			return []byte(strconv.Itoa(port)), nil
-		}
-		if len(in) > 0 {
-			var rpc RPCRequest
-			if json.Unmarshal(in, &rpc) != nil || rpc.Operation != "probe-route" {
-				t.Fatal(string(in))
-			}
-			return []byte(`{"status":"ready"}`), nil
-		}
-		return nil, nil
-	}
-	b := Broker{Store: local.Store, Client: local.Client, Tunnels: manager}
-	if _, e := b.Handle(context.Background(), p, remoteReq); e == nil {
-		t.Fatal("lost outcome ignored")
-	}
-	out, e := b.Handle(context.Background(), p, remoteReq)
-	if e != nil || out.Binding == nil || cliCalls != 1 || len(forwardCalls) != 2 {
-		t.Fatal(out, e, cliCalls, forwardCalls)
-	}
-	if len(manager.leases) != 1 {
-		t.Fatal(manager.leases)
-	}
-	for _, lease := range manager.leases {
-		if len(lease.bindings) != 1 {
-			t.Fatal(lease.bindings)
-		}
-	}
-	state, e := remote.Store.Read()
-	if e != nil || state.Requests[remoteReq.ID].Phase != "complete" {
-		t.Fatal(state.Requests, e)
+		})
 	}
 }
 func TestBrokerLocalJoinRemoteRoomCreatesLocalForwards(t *testing.T) {
@@ -998,5 +1025,259 @@ func TestHostJoinKnownNoEffectCrashAllowsNewRequestOnly(t *testing.T) {
 	out, e = h.Join(context.Background(), r, endpoints)
 	if e != nil || out.Binding == nil || calls != 1 {
 		t.Fatal(out, e, calls)
+	}
+}
+
+func TestBrokerAcquireFailureClassification(t *testing.T) {
+	for _, retained := range []bool{false, true} {
+		t.Run(fmt.Sprint(retained), func(t *testing.T) {
+			h, r, _ := brokerFixture(t)
+			room := brokerRoom(t, h, r)
+			if e := h.Store.Enqueue(r); e != nil {
+				t.Fatal(e)
+			}
+			cli := 0
+			h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) {
+				cli++
+				return nil, fmt.Errorf("unexpected mutation")
+			}
+			b := Broker{Store: h.Store, Client: h.Client, Tunnels: &TunnelManager{}}
+			normalized, _ := normalize(r, b.localPeer())
+			if retained {
+				if _, e := b.Tunnels.Acquire(context.Background(), b.localPeer(), room, normalized.Target); e != nil {
+					t.Fatal(e)
+				}
+				for _, lease := range b.Tunnels.leases {
+					lease.unavailable = true
+				}
+			} else {
+				b.Tunnels.closed = true
+			}
+			out, e := b.Handle(context.Background(), b.localPeer(), r)
+			if e != nil || out.Code != "route_unavailable" || cli != 0 {
+				t.Fatal(out, e, cli)
+			}
+			state, _ := h.Store.Read()
+			expected := "complete"
+			if retained {
+				expected = "uncertain"
+			}
+			if state.Requests[r.ID].Phase != expected {
+				t.Fatal(state.Requests[r.ID])
+			}
+		})
+	}
+}
+func TestHostJoinFinalIdentityNoEffectRecovery(t *testing.T) {
+	var restore atomic.Bool
+	h, r, root := brokerFixtureIdentity(t, func(call int64) bool { return call == 2 && !restore.Load() })
+	cli := 0
+	h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) {
+		cli++
+		binding, _ := h.Store.Binding(HostBindingKey(r.RoomID, r.Target))
+		originalFixture(t, root, binding, true)
+		return []byte(`{"status":"joined","room_id":"room-a","session_id":"psn_original"}`), nil
+	}
+	endpoints := Endpoints{Descriptor: "parley://127.0.0.1:49001/room-a", ArtifactURL: "http://127.0.0.1:49002/rooms/room-a/artifacts"}
+	out, e := h.Join(context.Background(), r, endpoints)
+	if e != nil || out.Code != "agent_replaced" || cli != 0 {
+		t.Fatal(out, e, cli)
+	}
+	restore.Store(true)
+	r.ID = "restored"
+	out, e = h.Join(context.Background(), r, endpoints)
+	if e != nil || out.Binding == nil || cli != 1 {
+		t.Fatal(out, e, cli)
+	}
+}
+func TestBrokerKnownFailureRecoveryOwnership(t *testing.T) {
+	for _, mode := range []string{"deleted", "intent", "newer-success", "shared-lease"} {
+		t.Run(mode, func(t *testing.T) {
+			h, r, root := brokerFixture(t)
+			room := brokerRoom(t, h, r)
+			if e := h.Store.Enqueue(r); e != nil {
+				t.Fatal(e)
+			}
+			b := Broker{Store: h.Store, Client: h.Client, Tunnels: &TunnelManager{}}
+			normalized, _ := normalize(r, b.localPeer())
+			outcome, e := h.Store.Claim(r.ID, RequestDigest(normalized), "local")
+			if e != nil {
+				t.Fatal(e)
+			}
+			outcome.Phase = "intent"
+			if e = h.Store.Complete(r.ID, outcome); e != nil {
+				t.Fatal(e)
+			}
+			if e = h.recordFailure(normalized, failure("invalid_descriptor", fmt.Errorf("original no-effect failure"))); e != nil {
+				t.Fatal(e)
+			}
+			if _, e = b.Tunnels.Acquire(context.Background(), b.localPeer(), room, normalized.Target); e != nil {
+				t.Fatal(e)
+			}
+			b.Tunnels.leases["unrelated"] = &tunnelLease{bindings: map[string]bool{"unrelated-success": true}}
+			if mode == "shared-lease" {
+				for key, lease := range b.Tunnels.leases {
+					if key != "unrelated" {
+						lease.bindings["other-successful-member"] = true
+					}
+				}
+			}
+			if mode == "intent" || mode == "newer-success" {
+				binding := Binding{RoomID: r.RoomID, Target: normalized.Target, ParticipantName: "h_" + HostBindingKey(r.RoomID, r.Target)[:16], Routed: room.Source, JoinPhase: "intent", JoinRequestID: r.ID}
+				if mode == "newer-success" {
+					binding.JoinRequestID = "newer"
+					binding.JoinPhase = "complete"
+					binding.SessionID = "psn_original"
+					binding.Status = "online"
+					originalFixture(t, root, binding, true)
+				}
+				if e = h.Store.saveBinding(binding); e != nil {
+					t.Fatal(e)
+				}
+			}
+			cli := 0
+			h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) {
+				cli++
+				return nil, fmt.Errorf("recovery launched mutation")
+			}
+			out, e := b.Handle(context.Background(), b.localPeer(), r)
+			if e != nil || out.Code != "invalid_descriptor" || cli != 0 {
+				t.Fatal(out, e, cli)
+			}
+			state, _ := h.Store.Read()
+			if state.Requests[r.ID].Phase != "complete" {
+				t.Fatal(state.Requests[r.ID])
+			}
+			expected := 1
+			if mode == "newer-success" || mode == "shared-lease" {
+				expected = 2
+			}
+			if len(b.Tunnels.leases) != expected || b.Tunnels.leases["unrelated"] == nil {
+				t.Fatal(b.Tunnels.leases)
+			}
+			if mode == "shared-lease" {
+				for key, lease := range b.Tunnels.leases {
+					if key != "unrelated" && (len(lease.bindings) != 1 || !lease.bindings["other-successful-member"]) {
+						t.Fatal(lease.bindings)
+					}
+				}
+			}
+		})
+	}
+}
+func TestBrokerUnsupportedRouteCompletesNoEffect(t *testing.T) {
+	h, r, _ := brokerFixture(t)
+	r.Target.MachineID = "participant"
+	key, _ := SessionKey(h.Client.HerdrSocket)
+	origin := Peer{Machine: Machine{ID: "participant", Target: "host-b", Session: "agents"}, Config: SessionConfig{MachineID: "participant", ControllerID: "local", HerdrSocket: h.Client.HerdrSocket, SessionKey: key}, Binary: "/opt/parley"}
+	sourceSocket := "/tmp/source-herdr.sock"
+	sourceKey, _ := SessionKey(sourceSocket)
+	source := Peer{Machine: Machine{ID: "source", Target: "host-a", Session: "agents", Enabled: true}, Config: SessionConfig{MachineID: "source", ControllerID: "local", HerdrSocket: sourceSocket, SessionKey: sourceKey}, Binary: "/opt/parley"}
+	room := Room{ID: r.RoomID, Host: r.Target, HostSessionID: "psn_host", Source: Endpoints{Descriptor: "parley://127.0.0.1:49001/room-a", ArtifactURL: "http://127.0.0.1:49002/rooms/room-a/artifacts"}}
+	room.Host.MachineID = "source"
+	room.Host.HerdrSocket = sourceSocket
+	if e := h.Store.Update(func(s *State) error { s.Peers["source"] = source; return nil }); e != nil {
+		t.Fatal(e)
+	}
+	h.Client.managed.Store("source", source)
+	h.Client.managed.Store("participant", origin)
+	requests := NewStore(t.TempDir())
+	if e := requests.Enqueue(r); e != nil {
+		t.Fatal(e)
+	}
+	mutations := 0
+	h.Client.Run = func(_ context.Context, binary string, _ []string, in []byte) ([]byte, error) {
+		if binary != "ssh" {
+			return json.Marshal([]Machine{source.Machine})
+		}
+		var rpc RPCRequest
+		if e := json.Unmarshal(in, &rpc); e != nil {
+			return nil, e
+		}
+		switch rpc.Operation {
+		case "claim-request":
+			out, e := requests.Claim(r.ID, rpc.Digest, rpc.ControllerID)
+			if e != nil {
+				return nil, e
+			}
+			return json.Marshal(out)
+		case "join-failure":
+			return []byte(`{"status":"absent"}`), nil
+		case "binding":
+			return []byte(`{"error":{"code":"binding_missing","message":"absent"}}`), nil
+		case "rooms":
+			return json.Marshal(map[string]Room{r.RoomID: room})
+		case "room":
+			return json.Marshal(room)
+		case "probe":
+			if rpc.SessionKey == sourceKey {
+				return json.Marshal(ProbeResult{Config: source.Config, Agent: &room.Host, AgentStatus: "idle"})
+			}
+			return json.Marshal(ProbeResult{Config: origin.Config, Agent: &r.Target, AgentStatus: "idle"})
+		case "outcome":
+			if e := requests.Complete(r.ID, *rpc.Outcome); e != nil {
+				return nil, e
+			}
+			return json.Marshal(rpc.Outcome)
+		default:
+			mutations++
+			return nil, fmt.Errorf("unexpected %s", rpc.Operation)
+		}
+	}
+	manager := &TunnelManager{Run: func(context.Context, string, []string, []byte) ([]byte, error) {
+		mutations++
+		return nil, fmt.Errorf("unexpected route mutation")
+	}}
+	b := Broker{Store: h.Store, Client: h.Client, Tunnels: manager}
+	for range 2 {
+		out, e := b.Handle(context.Background(), origin, r)
+		if e != nil || out.Code != "unsupported_route" {
+			t.Fatal(out, e)
+		}
+	}
+	state, e := requests.Read()
+	if e != nil || state.Requests[r.ID].Phase != "complete" || mutations != 0 {
+		t.Fatal(state.Requests, e, mutations)
+	}
+}
+func TestHerdrJoinFailureReadOnlyVerifiedDigest(t *testing.T) {
+	h, r, root := brokerFixture(t)
+	normalized, _ := normalize(r, (&Broker{Client: h.Client}).localPeer())
+	if e := h.Store.Enqueue(r); e != nil {
+		t.Fatal(e)
+	}
+	if e := h.recordFailure(normalized, failure("agent_replaced", nil)); e != nil {
+		t.Fatal(e)
+	}
+	before, e := os.ReadFile(filepath.Join(h.Store.dir, "requests", r.ID+".json"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) {
+		t.Fatal("read-only helper executed subprocess")
+		return nil, nil
+	}
+	host := HostSession{Config: (&Broker{Client: h.Client}).localPeer().Config, ConfigDir: filepath.Join(root, "config"), Store: h.Store}
+	claim := RPCRequest{Operation: "claim-controller", Session: "agents", SessionKey: host.Config.SessionKey, ControllerID: "controller", MachineID: "local"}
+	if _, e := host.Dispatch(context.Background(), claim); e != nil {
+		t.Fatal(e)
+	}
+	rpc := RPCRequest{Operation: "join-failure", Session: "agents", SessionKey: host.Config.SessionKey, ControllerID: "controller", Request: &normalized}
+	result, e := host.Dispatch(context.Background(), rpc)
+	if e != nil || result.(JoinFailureResult).Response.Code != "agent_replaced" {
+		t.Fatal(result, e)
+	}
+	changed := normalized
+	changed.Target.NativeSession = "different"
+	rpc.Request = &changed
+	if _, e = host.Dispatch(context.Background(), rpc); e == nil {
+		t.Fatal("changed request accepted")
+	}
+	after, _ := os.ReadFile(filepath.Join(h.Store.dir, "requests", r.ID+".json"))
+	if !bytes.Equal(before, after) {
+		t.Fatal("read-only helper changed request")
+	}
+	if _, e = os.Stat(filepath.Join(h.Store.dir, "runtime-root.json")); !os.IsNotExist(e) {
+		t.Fatal("read-only helper pinned runtime", e)
 	}
 }

@@ -3,6 +3,7 @@ package herdr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -388,6 +389,34 @@ func TestTunnelLocalAmbiguousAllocation(t *testing.T) {
 				if !strings.Contains((*calls)[i], "-O forward") || !strings.Contains((*calls)[i+1], "-O cancel") || strings.Split((*calls)[i], "-L ")[1] != strings.Split((*calls)[i+1], "-L ")[1] {
 					t.Fatal("candidate not canceled before retry", *calls)
 				}
+			}
+		})
+	}
+}
+
+func TestTunnelAcquireReportsRetainedOwnership(t *testing.T) {
+	for _, retained := range []bool{false, true} {
+		t.Run(fmt.Sprint(retained), func(t *testing.T) {
+			manager, peer, room, target, _ := tunnelFixture(t)
+			manager.Run = func(_ context.Context, _ string, args []string, _ []byte) ([]byte, error) {
+				if strings.Contains(strings.Join(args, " "), "-O cancel") && !retained {
+					return nil, nil
+				}
+				return nil, fmt.Errorf("generic mux exit255")
+			}
+			_, err := manager.Acquire(context.Background(), peer, room, target)
+			if err == nil {
+				t.Fatal("failed acquisition passed")
+			}
+			var uncertain *AcquisitionError
+			if errors.As(err, &uncertain) != retained {
+				t.Fatal(err, retained)
+			}
+			if retained && len(manager.leases) != 1 {
+				t.Fatal("uncertain ownership lost")
+			}
+			if !retained && len(manager.leases) != 0 {
+				t.Fatal("confirmed cleanup kept lease")
 			}
 		})
 	}

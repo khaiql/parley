@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/khaiql/parley/internal/paths"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +15,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/khaiql/parley/internal/paths"
 )
 
 type Store struct{ dir string }

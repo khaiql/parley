@@ -143,6 +143,16 @@ func (r RPCRequest) Validate() error {
 		if _, _, e := validateEndpoints(*r.Endpoints, r.RoomID); e != nil {
 			return e
 		}
+	case "join-failure":
+		allowed.ControllerID = r.ControllerID
+		allowed.SessionKey = r.SessionKey
+		allowed.Request = r.Request
+		if r.Request == nil || r.Request.Op != "join" {
+			return fmt.Errorf("join request required")
+		}
+		if e := validateRequest(*r.Request); e != nil {
+			return e
+		}
 	case "join":
 		allowed.ControllerID = r.ControllerID
 		allowed.SessionKey = r.SessionKey
@@ -548,6 +558,12 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 			}
 		})
 		return binding, e
+	case "join-failure":
+		request, e := normalize(*r.Request, Peer{Machine: Machine{ID: owner.MachineID}, Config: owner})
+		if e != nil {
+			return nil, e
+		}
+		return (&HostOperations{h.Store, &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket}}).ReadJoinFailure(ctx, request)
 	case "join":
 		req, e := normalize(*r.Request, Peer{Machine: Machine{ID: owner.MachineID}, Config: owner})
 		if e != nil {

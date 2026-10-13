@@ -233,25 +233,72 @@ func knownNoEffect(e *apiError) bool {
 	}
 	return false
 }
+func knownHostFailure(code string) bool {
+	return code == "agent_replaced" || code == "room_mismatch" || knownNoEffect(&apiError{Code: code})
+}
 func (h *HostOperations) priorFailure(req Request) (Response, bool, error) {
 	var record hostFailure
-	e := h.Store.locked(func() error {
-		dir, e := h.Store.recordDir("join-failures")
-		if e != nil {
-			return e
-		}
-		return readJSON(filepath.Join(dir, req.ID+".json"), &record)
-	})
+	e := readJSON(filepath.Join(h.Store.dir, "join-failures", req.ID+".json"), &record)
 	if errors.Is(e, os.ErrNotExist) {
 		return Response{}, false, nil
 	}
 	if e != nil {
 		return Response{}, false, e
 	}
-	if record.Digest != RequestDigest(req) {
+	if record.Digest != RequestDigest(req) || record.Response.Status != "error" || !knownHostFailure(record.Response.Code) {
 		return Response{}, false, fmt.Errorf("request_conflict")
 	}
 	return record.Response, true, nil
+}
+
+// JoinFailureResult is read-only recovery evidence, including the current host owner.
+type JoinFailureResult struct {
+	Status   string    `json:"status"`
+	Response *Response `json:"response,omitempty"`
+	Binding  *Binding  `json:"binding,omitempty"`
+}
+
+func (h *HostOperations) ReadJoinFailure(ctx context.Context, req Request) (JoinFailureResult, error) {
+	var result JoinFailureResult
+	req, e := normalize(req, (&Broker{Client: h.Client}).localPeer())
+	if e != nil {
+		return result, e
+	}
+	if req.Op != "join" {
+		return result, fmt.Errorf("join request required")
+	}
+	key := HostBindingKey(req.RoomID, req.Target)
+	e = h.Store.WithBinding(ctx, "join:"+key, func() error {
+		var stored Request
+		if e := readJSON(filepath.Join(h.Store.dir, "requests", req.ID+".json"), &stored); e != nil {
+			return e
+		}
+		stored, e := normalize(stored, (&Broker{Client: h.Client}).localPeer())
+		if e != nil {
+			return e
+		}
+		if RequestDigest(stored) != RequestDigest(req) || HostBindingKey(stored.RoomID, stored.Target) != key {
+			return fmt.Errorf("request_conflict")
+		}
+		failed, ok, e := h.priorFailure(req)
+		if e != nil {
+			return e
+		}
+		result.Status = "absent"
+		if !ok {
+			return nil
+		}
+		result.Status = "failed"
+		result.Response = &failed
+		binding, e := h.Store.Binding(key)
+		if e == nil {
+			result.Binding = &binding
+		} else if !errors.Is(e, os.ErrNotExist) {
+			return e
+		}
+		return nil
+	})
+	return result, e
 }
 func (h *HostOperations) recordFailure(req Request, response Response) error {
 	return h.Store.locked(func() error {
@@ -304,7 +351,7 @@ func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoi
 			if failureErr != nil {
 				return failureErr
 			}
-			if ok && knownNoEffect(&apiError{Code: failed.Code}) {
+			if ok && knownHostFailure(failed.Code) {
 				if HostBindingKey(originalReq.RoomID, originalReq.Target) != key {
 					return fmt.Errorf("binding key mismatch")
 				}
@@ -343,7 +390,16 @@ func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoi
 		}
 		if _, e = h.identity(ctx, req); e != nil {
 			response = failure("agent_replaced", e)
-			return nil
+			if e = h.recordFailure(originalReq, response); e != nil {
+				return e
+			}
+			return h.Store.Update(func(state *State) error {
+				current, ok := state.Bindings[key]
+				if ok && current.JoinRequestID == req.ID && current.SessionID == "" {
+					delete(state.Bindings, key)
+				}
+				return nil
+			})
 		}
 		sessions, listErr := runtime.ListSessions(p)
 		if listErr != nil {
@@ -702,6 +758,51 @@ func (b *Broker) Drain(ctx context.Context, peer Peer) error {
 	}
 	return nil
 }
+func (b *Broker) joinFailure(ctx context.Context, peer Peer, req Request) (JoinFailureResult, error) {
+	if peer.Machine.ID == b.Client.LocalMachineID {
+		return (&HostOperations{b.Store, b.Client}).ReadJoinFailure(ctx, req)
+	}
+	var result JoinFailureResult
+	e := b.peerCall(ctx, peer, RPCRequest{Operation: "join-failure", Request: &req}, &result)
+	if e != nil {
+		return result, e
+	}
+	if result.Status != "absent" && result.Status != "failed" || result.Status == "failed" && (result.Response == nil || result.Response.Status != "error" || !knownHostFailure(result.Response.Code)) {
+		return result, fmt.Errorf("invalid failure recovery evidence")
+	}
+	if result.Binding != nil && (HostBindingKey(result.Binding.RoomID, result.Binding.Target) != HostBindingKey(req.RoomID, req.Target) || result.Binding.Target.MachineID != req.Target.MachineID) {
+		return result, fmt.Errorf("binding key mismatch")
+	}
+	return result, nil
+}
+func (b *Broker) releaseFailed(ctx context.Context, req Request, evidence JoinFailureResult) error {
+	key := HostBindingKey(req.RoomID, req.Target)
+	if evidence.Binding != nil && (evidence.Binding.JoinRequestID != req.ID || evidence.Binding.JoinPhase == "complete") {
+		return nil
+	}
+	cached, e := b.Store.Binding(key)
+	if e == nil && (cached.JoinRequestID != req.ID || cached.JoinPhase == "complete") {
+		return nil
+	}
+	if e != nil && !errors.Is(e, os.ErrNotExist) {
+		return e
+	}
+	b.mu.Lock()
+	tunnels := b.Tunnels
+	b.mu.Unlock()
+	if tunnels != nil {
+		if e = tunnels.Release(ctx, req.RoomID, req.Target); e != nil {
+			return e
+		}
+	}
+	return b.Store.Update(func(state *State) error {
+		current, ok := state.Bindings[key]
+		if ok && current.JoinRequestID == req.ID && current.SessionID == "" && current.JoinPhase != "complete" {
+			delete(state.Bindings, key)
+		}
+		return nil
+	})
+}
 func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, error) {
 	req, e := normalize(req, peer)
 	if e != nil {
@@ -746,6 +847,16 @@ func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, 
 			}
 			var published Outcome
 			return b.peerCall(ctx, peer, RPCRequest{Operation: "outcome", RequestID: req.ID, Outcome: &outcome}, &published)
+		}
+		recovered, recoveryErr := b.joinFailure(ctx, peer, req)
+		if recoveryErr != nil {
+			return recoveryErr
+		}
+		if recovered.Status == "failed" {
+			if e = b.releaseFailed(ctx, req, recovered); e != nil {
+				return finish(failure("route_unavailable", e), "uncertain")
+			}
+			return finish(*recovered.Response, "complete")
 		}
 		var existing Binding
 		if local {
@@ -818,7 +929,16 @@ func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, 
 		}
 		endpoints, e := tunnels.Acquire(ctx, routePeer, room, req.Target)
 		if e != nil {
-			return finish(failure("route_unavailable", e), "uncertain")
+			var retained *AcquisitionError
+			phase := "complete"
+			if errors.As(e, &retained) {
+				phase = "uncertain"
+			}
+			code := "route_unavailable"
+			if e.Error() == "unsupported_route" {
+				code = "unsupported_route"
+			}
+			return finish(failure(code, e), phase)
 		}
 		if !local {
 			cached := Binding{RoomID: req.RoomID, Target: req.Target, ParticipantName: "h_" + HostBindingKey(req.RoomID, req.Target)[:16], Routed: endpoints, JoinPhase: "intent", JoinRequestID: req.ID}

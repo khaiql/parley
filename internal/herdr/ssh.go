@@ -151,6 +151,12 @@ func masterAlive(master *Master) bool {
 	}
 }
 
+// AcquisitionError marks forwarding ownership that a failed acquisition could not clear.
+// All other Acquire failures occur before allocation or after confirmed cleanup.
+type AcquisitionError struct{ Cause error }
+
+func (e *AcquisitionError) Error() string { return e.Cause.Error() }
+func (e *AcquisitionError) Unwrap() error { return e.Cause }
 func (m *TunnelManager) Acquire(ctx context.Context, peer Peer, room Room, target AgentTarget) (Endpoints, error) {
 	var empty Endpoints
 	if err := ctx.Err(); err != nil {
@@ -203,6 +209,9 @@ func (m *TunnelManager) Acquire(ctx context.Context, peer Peer, room Room, targe
 	if old := m.leases[routeKey]; old != nil {
 		if old.unavailable || old.master != nil && !masterAlive(old.master) {
 			old.unavailable = true
+			if old.bindings[binding] {
+				return empty, &AcquisitionError{Cause: fmt.Errorf("route_unavailable")}
+			}
 			return empty, fmt.Errorf("route_unavailable")
 		}
 		if old.bindings[binding] {
@@ -257,7 +266,7 @@ func (m *TunnelManager) Acquire(ctx context.Context, peer Peer, room Room, targe
 		if cleanupErr != nil {
 			lease.unavailable = true
 			m.leases[routeKey] = lease
-			return empty, fmt.Errorf("route_unavailable: %w; retained forwards: %v", err, cleanupErr)
+			return empty, &AcquisitionError{Cause: fmt.Errorf("route_unavailable: %w; retained forwards: %v", err, cleanupErr)}
 		}
 		return empty, err
 	}
