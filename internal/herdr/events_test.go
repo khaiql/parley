@@ -1,6 +1,8 @@
 package herdr
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -237,6 +239,176 @@ func TestEventTransportErrorClassification(t *testing.T) {
 		err := ReadEvents(context.Background(), strings.NewReader(frame+"\n"), read, read)
 		if err == nil || isEventTransportError(err) || reads.Load() != 0 {
 			t.Fatalf("permanent frame %s: %v", frame, err)
+		}
+	}
+}
+
+const testEventAck = `{"id":"parley-requests","result":{"type":"subscription_started"}}` + "\n"
+const testKeepalive = `{"id":"parley-requests","result":{"type":"parley_transport_keepalive"}}` + "\n"
+
+func TestEventsKeepaliveNoWake(t *testing.T) {
+	r, w := io.Pipe()
+	defer w.Close()
+	defer r.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	var wakes atomic.Int32
+	done := make(chan error, 1)
+	go func() {
+		done <- ReadEvents(ctx, r, func() error { close(started); return nil }, func() error { wakes.Add(1); return nil })
+	}()
+	io.WriteString(w, testEventAck)
+	<-started
+	io.WriteString(w, testKeepalive)
+	io.WriteString(w, testKeepalive)
+	cancel()
+	if e := <-done; e != context.Canceled {
+		t.Fatal(e)
+	}
+	if wakes.Load() != 0 {
+		t.Fatal("transport frame woke queue")
+	}
+}
+
+func TestEventsKeepaliveReject(t *testing.T) {
+	for _, frame := range []string{
+		testKeepalive,
+		testEventAck + strings.Replace(testKeepalive, "parley-requests", "wrong", 1),
+		testEventAck + strings.Replace(testKeepalive, "parley_transport_keepalive", "unknown", 1),
+		testEventAck + `{"id":"parley-requests","result":{"type":"parley_transport_keepalive","extra":true}}` + "\n",
+		testEventAck + `{"id":"parley-requests","result":{"type":"parley_transport_keepalive"},"event":"workspace_metadata_updated"}` + "\n",
+		testEventAck + `{"id":"parley-requests","result":{"type":` + "\n",
+	} {
+		e := ReadEvents(context.Background(), strings.NewReader(frame), func() error { return nil }, func() error { return nil })
+		if e == nil || isEventTransportError(e) {
+			t.Fatalf("accepted invalid control: %q: %v", frame, e)
+		}
+	}
+}
+
+func TestRelayEventsQuietLifecycle(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"quiet-keepalive", "broken-output", "cancel", "pre-ack"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			dir, e := os.MkdirTemp("/tmp", "qe-")
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer os.RemoveAll(dir)
+			socket := filepath.Join(dir, "events.sock")
+			listener, e := net.Listen("unix", socket)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer listener.Close()
+			nativeClosed := make(chan struct{})
+			ack := make(chan struct{})
+			go func() {
+				conn, e := listener.Accept()
+				if e != nil {
+					return
+				}
+				defer conn.Close()
+				defer close(nativeClosed)
+				b := make([]byte, 4096)
+				conn.Read(b)
+				if mode != "pre-ack" {
+					io.WriteString(conn, testEventAck)
+				}
+				close(ack)
+				io.Copy(io.Discard, conn)
+			}()
+			r, w := io.Pipe()
+			defer r.Close()
+			defer w.Close()
+			deadline := time.AfterFunc(7*time.Second, func() { r.Close() })
+			defer deadline.Stop()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- RelayEvents(ctx, socket, w) }()
+			<-ack
+			if mode == "pre-ack" {
+				unexpected := make(chan bool, 1)
+				go func() { b := make([]byte, 1); n, _ := r.Read(b); unexpected <- n != 0 }()
+				select {
+				case <-unexpected:
+					t.Fatal("output before native acknowledgement")
+				case <-time.After(2100 * time.Millisecond):
+				}
+				cancel()
+				w.Close()
+				if <-unexpected {
+					t.Fatal("output before native acknowledgement")
+				}
+			} else {
+				scanner := bufio.NewScanner(r)
+				if !scanner.Scan() || scanner.Text() != strings.TrimSpace(testEventAck) {
+					t.Fatal("missing first native ack")
+				}
+				if mode == "cancel" {
+					cancel()
+				} else if mode == "broken-output" {
+					r.Close()
+				} else {
+					if !scanner.Scan() || scanner.Text() != strings.TrimSpace(testKeepalive) {
+						t.Fatal("missing quiet keepalive")
+					}
+					cancel()
+				}
+			}
+			select {
+			case e := <-done:
+				if e == nil {
+					t.Fatal("missing terminal error")
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("relay stayed alive")
+			}
+			select {
+			case <-nativeClosed:
+			case <-time.After(time.Second):
+				t.Fatal("native reader stayed alive")
+			}
+		})
+	}
+}
+
+func TestRelayEventsRejectInvalidAcknowledgement(t *testing.T) {
+	for _, frame := range []string{testKeepalive, strings.Replace(testEventAck, "parley-requests", "wrong", 1), "{bad\n", string([]byte{0xff, '\n'}), strings.Repeat("x", 1024*1024) + "\n"} {
+		dir, e := os.MkdirTemp("/tmp", "qr-")
+		if e != nil {
+			t.Fatal(e)
+		}
+		socket := filepath.Join(dir, "events.sock")
+		listener, e := net.Listen("unix", socket)
+		if e != nil {
+			t.Fatal(e)
+		}
+		closed := make(chan struct{})
+		go func() {
+			defer close(closed)
+			conn, e := listener.Accept()
+			if e != nil {
+				return
+			}
+			defer conn.Close()
+			b := make([]byte, 4096)
+			conn.Read(b)
+			io.WriteString(conn, frame)
+			io.Copy(io.Discard, conn)
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		var out bytes.Buffer
+		err := RelayEvents(ctx, socket, &out)
+		cancel()
+		listener.Close()
+		<-closed
+		os.RemoveAll(dir)
+		if err == nil || isEventTransportError(err) || out.Len() != 0 {
+			t.Fatalf("invalid acknowledgement accepted: %v, output bytes %d", err, out.Len())
 		}
 	}
 }

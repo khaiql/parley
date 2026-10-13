@@ -154,6 +154,9 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 			continue
 		}
 		if f.Result != nil {
+			if f.ID == "parley-requests" && f.Result.Type == "parley_transport_keepalive" && validTransportKeepalive(s.Bytes()) {
+				continue
+			}
 			return fmt.Errorf("unexpected subscription response")
 		}
 		if f.Event == "workspace_metadata_updated" {
@@ -168,72 +171,121 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 			return fmt.Errorf("malformed event frame: unexpected event")
 		}
 	}
-	if e := s.Err(); e != nil {
-		return e
-	}
 	if parent.Err() != nil {
 		return parent.Err()
 	}
+	if e := s.Err(); e != nil {
+		return e
+	}
 	return io.EOF
 }
+
+// validTransportKeepalive accepts only the internal control frame, without native event data.
+func validTransportKeepalive(data []byte) bool {
+	var frame map[string]json.RawMessage
+	if json.Unmarshal(data, &frame) != nil || len(frame) != 2 {
+		return false
+	}
+	var result map[string]json.RawMessage
+	return json.Unmarshal(frame["result"], &result) == nil && len(result) == 1
+}
+
 func RelayEvents(ctx context.Context, socket string, out io.Writer) error {
 	conn, e := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socket)
 	if e != nil {
 		return e
 	}
-	defer conn.Close()
-	stopped := make(chan struct{})
-	defer close(stopped)
-	go func() {
-		select {
-		case <-ctx.Done():
-			conn.Close()
-		case <-stopped:
-		}
-	}()
+	ctx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	defer func() { cancel(); conn.Close(); workers.Wait() }()
+	workers.Add(1)
+	go func() { defer workers.Done(); <-ctx.Done(); conn.Close() }()
 	if e = conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
 		return e
 	}
 	if e = json.NewEncoder(conn).Encode(subscriptionRequest()); e != nil {
 		return e
 	}
-	s := bufio.NewScanner(conn)
-	s.Buffer(make([]byte, 4096), 1024*1024)
-	acked := false
-	for s.Scan() {
-		if !utf8.Valid(s.Bytes()) {
-			return fmt.Errorf("malformed event frame: invalid UTF-8")
-		}
-		var f struct {
-			ID     string `json:"id"`
-			Result struct {
-				Type string `json:"type"`
-			} `json:"result"`
-			Error *apiError `json:"error"`
-		}
-		if e = json.Unmarshal(s.Bytes(), &f); e != nil {
-			return fmt.Errorf("malformed event frame: %w", e)
-		}
-		if !acked && f.Error == nil {
-			if f.ID != "parley-requests" || f.Result.Type != "subscription_started" {
-				return fmt.Errorf("subscription acknowledgement required")
+	type eventFrame struct {
+		data []byte
+		err  error
+	}
+	frames := make(chan eventFrame, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		s := bufio.NewScanner(conn)
+		s.Buffer(make([]byte, 4096), 1024*1024)
+		for s.Scan() {
+			select {
+			case frames <- eventFrame{data: append([]byte(nil), s.Bytes()...)}:
+			case <-ctx.Done():
+				return
 			}
-			acked = true
 		}
-		if _, e = out.Write(append(append([]byte(nil), s.Bytes()...), '\n')); e != nil {
-			return e
+		err := s.Err()
+		if err == nil {
+			err = io.EOF
 		}
-		if f.Error != nil {
-			return f.Error
+		select {
+		case frames <- eventFrame{err: err}:
+		case <-ctx.Done():
+		}
+	}()
+	var ticker *time.Ticker
+	var timer <-chan time.Time
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
+	acked := false
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer:
+			if _, e = io.WriteString(out, `{"id":"parley-requests","result":{"type":"parley_transport_keepalive"}}`+"\n"); e != nil {
+				return e
+			}
+		case frame := <-frames:
+			if frame.err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return frame.err
+			}
+			if !utf8.Valid(frame.data) {
+				return fmt.Errorf("malformed event frame: invalid UTF-8")
+			}
+			var f struct {
+				ID     string `json:"id"`
+				Result struct {
+					Type string `json:"type"`
+				} `json:"result"`
+				Error *apiError `json:"error"`
+			}
+			if e = json.Unmarshal(frame.data, &f); e != nil {
+				return fmt.Errorf("malformed event frame: %w", e)
+			}
+			if !acked && f.Error == nil {
+				if f.ID != "parley-requests" || f.Result.Type != "subscription_started" {
+					return fmt.Errorf("subscription acknowledgement required")
+				}
+				acked = true
+			}
+			if _, e = out.Write(append(frame.data, '\n')); e != nil {
+				return e
+			}
+			if f.Error != nil {
+				return f.Error
+			}
+			if acked && timer == nil {
+				ticker = time.NewTicker(2 * time.Second)
+				timer = ticker.C
+			}
 		}
 	}
-	if e = s.Err(); e != nil {
-		return e
-	}
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	return io.EOF
 }
 
 var errEventProcess = errors.New("event process failed")
