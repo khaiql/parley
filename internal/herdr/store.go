@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/khaiql/parley/internal/paths"
 	"io"
 	"os"
 	"path/filepath"
@@ -433,4 +434,92 @@ func validDigest(digest string) bool {
 		}
 	}
 	return true
+}
+
+// PinRuntimeRoot is called by trusted host setup, never with request data.
+func (s *Store) PinRuntimeRoot(root string) error {
+	if !filepath.IsAbs(root) || root != filepath.Clean(root) || strings.ContainsRune(root, 0) {
+		return fmt.Errorf("invalid runtime root")
+	}
+	return s.locked(func() error {
+		var record struct {
+			Root string `json:"root"`
+		}
+		path := filepath.Join(s.dir, "runtime-root.json")
+		e := readJSON(path, &record)
+		if e == nil {
+			if record.Root != root {
+				return fmt.Errorf("runtime_root_conflict")
+			}
+			return nil
+		}
+		if !errors.Is(e, os.ErrNotExist) {
+			return e
+		}
+		record.Root = root
+		return writeJSON(path, record)
+	})
+}
+
+func (s *Store) pinnedPaths() (paths.Paths, error) {
+	var record struct {
+		Root string `json:"root"`
+	}
+	e := s.locked(func() error { return readJSON(filepath.Join(s.dir, "runtime-root.json"), &record) })
+	if e != nil {
+		return paths.Paths{}, e
+	}
+	if !filepath.IsAbs(record.Root) || record.Root != filepath.Clean(record.Root) || strings.ContainsRune(record.Root, 0) {
+		return paths.Paths{}, fmt.Errorf("invalid pinned runtime root")
+	}
+	return paths.New(record.Root), nil
+}
+
+func (s *Store) Binding(key string) (Binding, error) {
+	state, e := s.Read()
+	if e != nil {
+		return Binding{}, e
+	}
+	b, ok := state.Bindings[key]
+	if !ok {
+		return b, os.ErrNotExist
+	}
+	if HostBindingKey(b.RoomID, b.Target) != key {
+		return Binding{}, fmt.Errorf("binding key mismatch")
+	}
+	if e := validateRequest(Request{ID: b.JoinRequestID, Op: "join", RoomID: b.RoomID, Target: b.Target}); e != nil {
+		return Binding{}, fmt.Errorf("invalid binding: %w", e)
+	}
+	switch b.JoinPhase {
+	case "intent", "uncertain", "complete":
+	default:
+		return Binding{}, fmt.Errorf("invalid binding phase")
+	}
+	if b.JoinPhase == "complete" && safeID(b.SessionID) != nil {
+		return Binding{}, fmt.Errorf("invalid completed session")
+	}
+	return b, nil
+}
+
+func (s *Store) saveBinding(b Binding) error {
+	return s.Update(func(state *State) error {
+		key := HostBindingKey(b.RoomID, b.Target)
+		for k, v := range state.Bindings {
+			if v.ParticipantName == b.ParticipantName && v.RoomID == b.RoomID && k != key {
+				return fmt.Errorf("participant_name_collision")
+			}
+		}
+		state.Bindings[key] = b
+		return nil
+	})
+}
+
+func (s *Store) saveRoom(room Room) error {
+	return s.locked(func() error {
+		dir, e := s.recordDir("rooms")
+		if e != nil {
+			return e
+		}
+		return writeJSON(filepath.Join(dir, room.ID+".json"), room)
+	})
 }

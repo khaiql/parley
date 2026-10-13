@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -71,19 +72,22 @@ func validateRequest(req Request) error {
 		if req.Target.HerdrSocket == "" || req.Target.MachineID == "" {
 			return fmt.Errorf("target origin required")
 		}
-		if req.Target.Kind != "codex" && req.Target.Kind != "claude" {
+		if safeID(req.Target.Kind) != nil || req.Target.Kind == "shell" {
 			return fmt.Errorf("unsupported agent kind")
 		}
 		if req.Target.TerminalID == "" || req.Target.NativeSession == "" {
 			return fmt.Errorf("agent identity required")
 		}
 	}
-	for _, value := range []string{req.Target.WorkspaceID, req.Target.PaneID, req.Target.TerminalID, req.Target.NativeSession} {
+	for _, value := range []string{req.Target.WorkspaceID, req.Target.PaneID, req.Target.TerminalID} {
 		if value != "" {
 			if err := safeID(value); err != nil {
 				return err
 			}
 		}
+	}
+	if len(req.Target.NativeSession) > 4096 || !utf8.ValidString(req.Target.NativeSession) || strings.ContainsAny(req.Target.NativeSession, "\x00\r\n") {
+		return fmt.Errorf("invalid native reference")
 	}
 	return nil
 }

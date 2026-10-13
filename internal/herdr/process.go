@@ -37,9 +37,15 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return b.buffer.Write(p)
 }
 func RunProcess(ctx context.Context, binary string, args []string, stdin []byte) ([]byte, error) {
+	return runProcessEnv(ctx, binary, args, stdin, nil)
+}
+func runProcessEnv(ctx context.Context, binary string, args []string, stdin []byte, env []string) ([]byte, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, args...)
+	if env != nil {
+		cmd.Env = env
+	}
 	cmd.Stdin = bytes.NewReader(stdin)
 	out := &boundedBuffer{limit: outputLimit, cancel: cancel}
 	stderr := &boundedBuffer{limit: 64 * 1024, cancel: cancel}

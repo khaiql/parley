@@ -115,7 +115,7 @@ func TestAgentIdentityLocalPinned(t *testing.T) {
 					return
 				}
 				if r.Method == "agent.get" {
-					io.WriteString(conn, `{"result":{"agent":{"terminal_id":"term_a","pane_id":"w1:p2","workspace_id":"w1","agent":"codex","agent_status":"idle","agent_session":{"kind":"id","value":"conversation_a"}}}}`+"\n")
+					io.WriteString(conn, `{"result":{"agent":{"terminal_id":"term_a","pane_id":"w1:p2","workspace_id":"w1","agent":"codex","agent_status":"idle","agent_session":{"agent":"codex","kind":"id","value":"conversation_a"}}}}`+"\n")
 				} else if r.Method == "workspace.report_metadata" {
 					io.WriteString(conn, `{"result":{"type":"ok"}}`+"\n")
 				}
@@ -161,7 +161,7 @@ func TestAgentIdentityProfileRetarget(t *testing.T) {
 			return []byte(`{"config":{"machine_id":"peer","controller_id":"controller","herdr_socket":"/tmp/old.sock","session_key":"` + key + `"},"agent":{"machine_id":"peer","herdr_socket":"/tmp/old.sock","workspace_id":"w1","pane_id":"w1:p1","terminal_id":"old-terminal","kind":"codex","native_session":"old-conversation"},"agent_status":"idle"}`), nil
 		}
 		mutableReads++
-		return []byte(`{"result":{"agent":{"pane_id":"w1:p1","workspace_id":"w1","terminal_id":"new-terminal","agent":"codex","agent_status":"idle","agent_session":{"kind":"id","value":"new-conversation"}}}}`), nil
+		return []byte(`{"result":{"agent":{"pane_id":"w1:p1","workspace_id":"w1","terminal_id":"new-terminal","agent":"codex","agent_status":"idle","agent_session":{"agent":"codex","kind":"id","value":"new-conversation"}}}}`), nil
 	}}
 	c.managed.Store("peer", p)
 	live, _, e := c.Agent(context.Background(), AgentTarget{MachineID: "peer", PaneID: "w1:p1"})

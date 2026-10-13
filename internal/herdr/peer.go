@@ -143,7 +143,21 @@ func (r RPCRequest) Validate() error {
 		if _, _, e := validateEndpoints(*r.Endpoints, r.RoomID); e != nil {
 			return e
 		}
-	case "start", "join", "leave":
+	case "join":
+		allowed.ControllerID = r.ControllerID
+		allowed.SessionKey = r.SessionKey
+		allowed.Request = r.Request
+		allowed.Endpoints = r.Endpoints
+		if r.Request == nil || r.Request.Op != "join" || r.Endpoints == nil {
+			return fmt.Errorf("join request and endpoints required")
+		}
+		if e := validateRequest(*r.Request); e != nil {
+			return e
+		}
+		if _, _, e := validateEndpoints(*r.Endpoints, r.Request.RoomID); e != nil {
+			return e
+		}
+	case "start", "leave":
 		return fmt.Errorf("capability_unavailable: %s", r.Operation)
 	default:
 		return fmt.Errorf("unsupported helper operation")
@@ -478,7 +492,16 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 		if e != nil {
 			return nil, e
 		}
-		return h.validRoom(room, owner)
+		room, e = h.validRoom(room, owner)
+		if e != nil {
+			return nil, e
+		}
+		p, e := h.Store.pinnedPaths()
+		if e != nil {
+			return nil, e
+		}
+		c := &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket, RuntimeRoot: p.Root}
+		return (&HostOperations{h.Store, c}).liveRoom(ctx, room)
 	case "binding":
 		state, e := h.Store.Read()
 		if e != nil {
@@ -496,7 +519,49 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 			return nil, e
 		}
 		binding.Target = target
-		return binding, nil
+		if HostBindingKey(binding.RoomID, target) != r.BindingKey {
+			return nil, fmt.Errorf("binding key mismatch")
+		}
+		if _, e = h.Store.pinnedPaths(); e != nil {
+			return nil, fmt.Errorf("runtime_root_unpinned: %w", e)
+		}
+		operations := &HostOperations{h.Store, &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket}}
+		e = h.Store.WithBinding(ctx, "join:"+r.BindingKey, func() error {
+			current, e := h.Store.Binding(r.BindingKey)
+			if e != nil {
+				return e
+			}
+			original, code, originalErr := operations.original(ctx, current)
+			switch code {
+			case "":
+				binding = original
+				return h.Store.saveBinding(original)
+			case "participant_disconnected":
+				binding = current
+				binding.Status = "offline"
+				return nil
+			default:
+				binding = current
+				binding.Status = "uncertain"
+				_ = originalErr
+				return nil
+			}
+		})
+		return binding, e
+	case "join":
+		req, e := normalize(*r.Request, Peer{Machine: Machine{ID: owner.MachineID}, Config: owner})
+		if e != nil {
+			return nil, e
+		}
+		if _, e = h.Store.pinnedPaths(); e != nil {
+			return nil, fmt.Errorf("runtime_root_unpinned: %w", e)
+		}
+		binary, e := os.Executable()
+		if e != nil {
+			return nil, e
+		}
+		c := &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket, ParleyBinary: binary}
+		return (&HostOperations{Store: h.Store, Client: c}).Join(ctx, req, *r.Endpoints)
 	case "probe-route":
 		if e := probeRoute(ctx, *r.Endpoints, r.RoomID); e != nil {
 			return nil, e

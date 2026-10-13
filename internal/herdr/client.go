@@ -25,6 +25,8 @@ var RequiredCapabilities = []string{"events", "requests", "claim-request", "outc
 type Client struct {
 	HerdrBinary    string
 	ParleyBinary   string
+	RuntimeRoot    string
+	rootOnce       sync.Once
 	LocalMachineID string
 	HerdrSocket    string
 	Run            Run
@@ -32,10 +34,14 @@ type Client struct {
 }
 
 func (c *Client) runner() Run {
-	if c.Run != nil {
-		return c.Run
+	return func(ctx context.Context, binary string, args []string, stdin []byte) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if c.Run != nil {
+			return c.Run(ctx, binary, args, stdin)
+		}
+		return RunProcess(ctx, binary, args, stdin)
 	}
-	return RunProcess
 }
 func (c *Client) Machines(ctx context.Context) ([]Machine, error) {
 	b, e := c.runner()(ctx, c.HerdrBinary, []string{"machine", "list", "--json"}, nil)
@@ -140,6 +146,7 @@ func (c *Client) Agent(ctx context.Context, t AgentTarget) (AgentTarget, string,
 				Status      string `json:"agent_status"`
 				Session     *struct {
 					Kind  string `json:"kind"`
+					Agent string `json:"agent"`
 					Value string `json:"value"`
 				} `json:"agent_session"`
 			} `json:"agent"`
@@ -153,7 +160,7 @@ func (c *Client) Agent(ctx context.Context, t AgentTarget) (AgentTarget, string,
 		return t, "", wire.Error
 	}
 	a := wire.Result.Agent
-	if (a.Kind != "codex" && a.Kind != "claude") || a.TerminalID == "" || a.Session == nil || a.Session.Value == "" {
+	if safeID(a.Kind) != nil || a.TerminalID == "" || a.Session == nil || a.Session.Value == "" || (a.Session.Kind != "id" && a.Session.Kind != "path") || a.Session.Agent != a.Kind {
 		return t, "", fmt.Errorf("agent_identity_required")
 	}
 	if t.TerminalID != "" && t.TerminalID != a.TerminalID || t.Kind != "" && t.Kind != a.Kind || t.NativeSession != "" && t.NativeSession != a.Session.Value {
