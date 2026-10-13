@@ -35,6 +35,10 @@ func isEventTransportError(err error) bool {
 	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, errEventProcess) {
 		return true
 	}
+	var network *net.OpError
+	if errors.Is(err, ErrHostUnavailable) || errors.As(err, &network) {
+		return true
+	}
 	var api *apiError
 	return errors.As(err, &api) && (api.Code == "events_lost" || api.Code == "helper_transport_failed")
 }

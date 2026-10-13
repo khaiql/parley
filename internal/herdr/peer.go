@@ -551,6 +551,7 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 			if e != nil {
 				return e
 			}
+			current.Target.MachineID = owner.MachineID
 			original, code, originalErr := operations.original(ctx, current)
 			switch code {
 			case "":

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -205,6 +207,36 @@ func TestEventsLossWhileReadInFlight(t *testing.T) {
 					t.Fatal("blocked loss while reading")
 				}
 			})
+		}
+	}
+}
+
+func TestEventTransportErrorClassification(t *testing.T) {
+	for _, cause := range []error{syscall.ENOENT, syscall.ECONNREFUSED, syscall.ECONNRESET} {
+		err := fmt.Errorf("relay: %w", &net.OpError{Op: "dial", Net: "unix", Err: cause})
+		if !isEventTransportError(err) || EventFailureCode(err) != "helper_transport_failed" {
+			t.Fatal(err)
+		}
+		if isEventTransportError(errors.New(err.Error())) {
+			t.Fatal("classified transport by error text")
+		}
+	}
+	if !isEventTransportError(fmt.Errorf("relay: %w", ErrHostUnavailable)) {
+		t.Fatal("typed host outage is permanent")
+	}
+	for _, frame := range []string{
+		`{bad`,
+		`{"id":"wrong-session","result":{"type":"subscription_started"}}`,
+		`{"error":{"code":"capability_unavailable","message":"connect: connection refused"}}`,
+		`{"error":{"code":"session_mismatch"}}`,
+		`{"error":{"code":"controller_conflict"}}`,
+		`{"error":{"code":"helper_startup_failed"}}`,
+	} {
+		var reads atomic.Int32
+		read := func() error { reads.Add(1); return fmt.Errorf("unexpected durable read") }
+		err := ReadEvents(context.Background(), strings.NewReader(frame+"\n"), read, read)
+		if err == nil || isEventTransportError(err) || reads.Load() != 0 {
+			t.Fatalf("permanent frame %s: %v", frame, err)
 		}
 	}
 }
