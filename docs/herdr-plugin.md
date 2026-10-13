@@ -1,5 +1,7 @@
 # Herdr Start and Join
 
+For a review checkout, use the [local test procedure and verifier](herdr-local-test.md) to exercise the real shortcuts and both message/artifact endpoints.
+
 Install Parley on every participating host. Herdr 0.9.3 or newer, Go, and OpenSSH are required. The first manifest builds the CLI during installation.
 
 ```sh
