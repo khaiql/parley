@@ -412,3 +412,44 @@ func TestRelayEventsRejectInvalidAcknowledgement(t *testing.T) {
 		}
 	}
 }
+
+func TestEventsKeepaliveExactControl(t *testing.T) {
+	for _, control := range []string{
+		`{"ID":"parley-requests","result":{"type":"parley_transport_keepalive"}}`,
+		`{"id":"parley-requests","RESULT":{"type":"parley_transport_keepalive"}}`,
+		`{"id":"parley-requests","result":{"TYPE":"parley_transport_keepalive"}}`,
+		`{"id":"wrong","id":"parley-requests","result":{"type":"parley_transport_keepalive"}}`,
+		`{"id":"parley-requests","id":"parley-requests","result":{"type":"parley_transport_keepalive"}}`,
+		`{"id":"parley-requests","result":{"type":"parley_transport_keepalive","type":null}}`,
+		`{"id":"parley-requests","result":{"type":"parley_transport_keepalive","type":"parley_transport_keepalive"}}`,
+		`{"id":"parley-requests","result":{"type":"parley_transport_keepalive"},"result":{"type":"parley_transport_keepalive"}}`,
+		`{"id":"parley-requests","id":null,"result":{"type":"parley_transport_keepalive"}}`,
+		`{"id":"parley-requests","result":{"type":null}}`,
+		`{"id":null,"result":{"type":"parley_transport_keepalive"}}`,
+		`{"id":"parley-requests","result":null}`,
+		`{"id":"parley-requests","result":{"type":3}}`,
+	} {
+		var wakes atomic.Int32
+		e := ReadEvents(context.Background(), strings.NewReader(testEventAck+control+"\n"), func() error { return nil }, func() error { wakes.Add(1); return nil })
+		if e == nil || isEventTransportError(e) || wakes.Load() != 0 {
+			t.Errorf("invalid control %s: terminal=%v queue_wakes=%d", control, e, wakes.Load())
+		}
+	}
+	valid := ` { "result" : { "type" : "parley_transport_keepalive" }, "id" : "parley-requests" } `
+	r, w := io.Pipe()
+	defer r.Close()
+	defer w.Close()
+	started := make(chan struct{})
+	var wakes atomic.Int32
+	done := make(chan error, 1)
+	go func() {
+		done <- ReadEvents(context.Background(), r, func() error { close(started); return nil }, func() error { wakes.Add(1); return nil })
+	}()
+	io.WriteString(w, testEventAck)
+	<-started
+	io.WriteString(w, valid+"\n")
+	w.Close()
+	if e := <-done; e != io.EOF || wakes.Load() != 0 {
+		t.Fatalf("valid reordered control: terminal=%v queue_wakes=%d", e, wakes.Load())
+	}
+}

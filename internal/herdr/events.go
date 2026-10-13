@@ -182,12 +182,40 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 
 // validTransportKeepalive accepts only the internal control frame, without native event data.
 func validTransportKeepalive(data []byte) bool {
-	var frame map[string]json.RawMessage
-	if json.Unmarshal(data, &frame) != nil || len(frame) != 2 {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	expect := func(want any) bool {
+		token, err := decoder.Token()
+		return err == nil && token == want
+	}
+	if !expect(json.Delim('{')) {
 		return false
 	}
-	var result map[string]json.RawMessage
-	return json.Unmarshal(frame["result"], &result) == nil && len(result) == 1
+	id, result := false, false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		switch key {
+		case "id":
+			if id || !expect("parley-requests") {
+				return false
+			}
+			id = true
+		case "result":
+			if result || !expect(json.Delim('{')) || !expect("type") || !expect("parley_transport_keepalive") || !expect(json.Delim('}')) {
+				return false
+			}
+			result = true
+		default:
+			return false
+		}
+	}
+	if !id || !result || !expect(json.Delim('}')) {
+		return false
+	}
+	_, err := decoder.Token()
+	return err == io.EOF
 }
 
 func RelayEvents(ctx context.Context, socket string, out io.Writer) error {
