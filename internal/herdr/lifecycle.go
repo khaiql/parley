@@ -114,7 +114,7 @@ func (h HostSession) Setup(ctx context.Context, c *Client) (SessionConfig, error
 		var participant SessionConfig
 		err := readJSON(filepath.Join(h.ConfigDir, "controller.json"), &participant)
 		if err == nil {
-			return fmt.Errorf("participant session already owned by another controller")
+			return fmt.Errorf("controller_conflict")
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -291,6 +291,29 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 		}
 		cancel()
 	}()
+	// Local disable must cancel owned work even while a remote refresh is blocked.
+	workers.Go(func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				enabled, err := c.pluginEnabled(ctx)
+				if err != nil {
+					if ctx.Err() == nil {
+						fmt.Fprintln(os.Stderr, err)
+					}
+					continue
+				}
+				if !enabled {
+					cancel()
+					return
+				}
+			}
+		}
+	})
 	local := Peer{Machine: Machine{ID: owner.MachineID}, Config: owner}
 	workers.Go(func() {
 		if err := watchLocal(ctx, c.HerdrSocket, func(ctx context.Context) error { return broker.Drain(ctx, local) }); err != nil && ctx.Err() == nil {
@@ -382,14 +405,6 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 		case <-profiles.C:
 			refresh()
 		case <-status.C:
-			enabled, e := c.pluginEnabled(ctx)
-			if e != nil {
-				fmt.Fprintln(os.Stderr, e)
-				continue
-			}
-			if !enabled {
-				return nil
-			}
 			for id, s := range subscriptions {
 				if _, check := c.helper(ctx, s.peer.Machine); check != nil && (check.Error() == "helper_disabled" || check.Error() == "helper_missing") {
 					s.cancel()
@@ -397,7 +412,7 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 					delete(subscriptions, id)
 				}
 			}
-			if e = broker.Reconcile(ctx); e != nil {
+			if e := broker.Reconcile(ctx); e != nil {
 				fmt.Fprintln(os.Stderr, e)
 			}
 		}

@@ -869,9 +869,9 @@ func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, 
 		var outcome Outcome
 		local := peer.Machine.ID == b.Client.LocalMachineID
 		if local {
-			outcome, e = b.Store.Claim(req.ID, RequestDigest(req), peer.Config.ControllerID)
+			outcome, e = b.Store.ClaimRequest(req, peer.Config.ControllerID)
 		} else {
-			e = b.peerCall(ctx, peer, RPCRequest{Operation: "claim-request", RequestID: req.ID, Digest: RequestDigest(req)}, &outcome)
+			e = b.peerCall(ctx, peer, RPCRequest{Operation: "claim-request", RequestID: req.ID, Digest: hostDigest(req)}, &outcome)
 		}
 		if e != nil {
 			if e.Error() == "request_conflict" {
@@ -881,13 +881,13 @@ func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, 
 			return e
 		}
 		if outcome.Phase == "complete" {
-			response = outcome.Response
+			response = hostResponse(outcome.Response, req.Target.MachineID)
 			return nil
 		}
 		finish := func(r Response, phase string) error {
 			response = r
 			outcome.Phase = phase
-			outcome.Response = r
+			outcome.Response = hostResponse(r, "self")
 			if local {
 				return b.Store.Complete(req.ID, outcome)
 			}

@@ -524,3 +524,17 @@ func (s *Store) saveRoom(room Room) error {
 		return writeJSON(filepath.Join(dir, room.ID+".json"), room)
 	})
 }
+
+// ClaimRequest shares host-canonical receipts across direct and queued delivery.
+// Completed receipts replay across owner assignment; incomplete claims never transfer.
+func (s *Store) ClaimRequest(req Request, controllerID string) (Outcome, error) {
+	digest := hostDigest(req)
+	saved, err := s.readOutcome(req.ID)
+	if err == nil && saved.Phase == "complete" && saved.Digest == digest {
+		return saved, nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Outcome{}, err
+	}
+	return s.Claim(req.ID, digest, controllerID)
+}

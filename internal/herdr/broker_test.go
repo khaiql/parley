@@ -1105,7 +1105,7 @@ func TestBrokerKnownFailureRecoveryOwnership(t *testing.T) {
 			}
 			b := Broker{Store: h.Store, Client: h.Client, Tunnels: &TunnelManager{}}
 			normalized, _ := normalize(r, b.localPeer())
-			outcome, e := h.Store.Claim(r.ID, RequestDigest(normalized), "local")
+			outcome, e := h.Store.ClaimRequest(normalized, "local")
 			if e != nil {
 				t.Fatal(e)
 			}

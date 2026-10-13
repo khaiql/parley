@@ -156,19 +156,12 @@ func (h HostSession) directForm(ctx context.Context, operations HostOperations, 
 	if owner.ControllerID == "" {
 		owner.ControllerID = "direct_" + owner.SessionKey
 	}
-	saved, savedErr := h.Store.readOutcome(req.ID)
-	if savedErr == nil && saved.Phase == "complete" && saved.Digest == hostDigest(req) {
-		return hostResponse(saved.Response, owner.MachineID), nil
-	}
-	if savedErr != nil && !errors.Is(savedErr, os.ErrNotExist) {
-		return Response{}, savedErr
-	}
-	outcome, err := h.Store.Claim(req.ID, hostDigest(req), owner.ControllerID)
+	outcome, err := h.Store.ClaimRequest(req, owner.ControllerID)
 	if err != nil {
 		return Response{}, err
 	}
 	if outcome.Phase == "complete" {
-		return outcome.Response, nil
+		return hostResponse(outcome.Response, owner.MachineID), nil
 	}
 	room, err = operations.liveRoom(ctx, room)
 	if err != nil {
