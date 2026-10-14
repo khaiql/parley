@@ -13,7 +13,21 @@ import (
 
 func TestIntegrationNativeFormsAndActivation(t *testing.T) {
 	operations, start, root := brokerFixture(t)
-	binary := filepath.Join(root, "parley")
+	binary := filepath.Join(root, "bin", "parley")
+	if err := os.MkdirAll(filepath.Dir(binary), 0700); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(root, "skills", "parley")
+	if err := os.MkdirAll(skillDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	skill, err := os.ReadFile("../../skills/parley/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), skill, 0600); err != nil {
+		t.Fatal(err)
+	}
 	build := exec.Command("go", "build", "-o", binary, "../../cmd/parley")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %s %v", out, err)
@@ -29,6 +43,9 @@ func TestIntegrationNativeFormsAndActivation(t *testing.T) {
 	result, err := host.SubmitForm(ctx, operations.Client, start)
 	if err != nil || result.Room == nil || result.Binding == nil {
 		t.Fatal(result, err)
+	}
+	if result.Handoff == nil || result.Handoff.Status != "submitted" {
+		t.Fatal("room created without agent handoff", result.Handoff)
 	}
 	run := func(args ...string) []byte {
 		t.Helper()
@@ -84,6 +101,9 @@ func TestIntegrationNativeFormsAndActivation(t *testing.T) {
 	joined, err := host.SubmitForm(ctx, operations.Client, join)
 	if err != nil || joined.Binding == nil || joined.Binding.SessionID != result.Binding.SessionID {
 		t.Fatal(joined, err)
+	}
+	if joined.Handoff == nil || joined.Handoff.Status != "submitted" {
+		t.Fatal("Join missed handoff receipt", joined.Handoff)
 	}
 	outcome, err := host.Store.readOutcome(join.ID)
 	if err != nil || outcome.Phase != "complete" {
@@ -192,7 +212,7 @@ func TestDirectBrokerSharedClaimOrders(t *testing.T) {
 			} else {
 				locked, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 				go func() {
-					done <- host.Store.WithBinding(context.Background(), "join:"+HostBindingKey(req.RoomID, req.Target), func() error { close(locked); <-release; return nil })
+					done <- host.Store.WithBinding(context.Background(), "join:"+terminalBindingKey(req.RoomID, req.Target), func() error { close(locked); <-release; return nil })
 				}()
 				<-locked
 				attempt, stop := context.WithCancel(context.Background())

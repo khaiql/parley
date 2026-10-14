@@ -70,7 +70,7 @@ func nativeErrorHint(code string, err error) string {
 	case strings.Contains(err.Error(), "agent_not_found"):
 		return "Focus an existing agent pane, then use the Parley Start/Join shortcut."
 	case strings.Contains(err.Error(), "agent_identity_required"):
-		return "Native identity missing. Codex may report it only on its first normal turn. Review the Herdr SessionStart hook in /hooks; confirm agent get includes agent_session."
+		return "Herdr needs a detected agent and terminal ID. Focus an existing supported agent pane and check agent get."
 	case strings.Contains(err.Error(), "ui_busy"):
 		return "Close the active Herdr modal, then retry the Parley Start/Join shortcut."
 	case code == "helper_unavailable":
@@ -136,7 +136,14 @@ func herdrCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return writeJSON(cmd, state)
+		handoffs, err := h.Store.HandoffStatuses()
+		if err != nil {
+			return err
+		}
+		return writeJSON(cmd, struct {
+			herdr.State
+			Handoffs map[string]herdr.HandoffResult `json:"handoffs"`
+		}{state, handoffs})
 	})
 	broker := &cobra.Command{Use: "broker", Hidden: true, Args: noArgsJSON, RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := nativeClient()
@@ -192,6 +199,8 @@ func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
 	}()
 	defer close(readDone)
 	var value string
+	var selectedHost *herdr.RoomHostRef
+	var selectedTopic string
 	if op == "start" {
 		fmt.Fprint(cmd.OutOrStdout(), "Parley start — Topic (Enter submits, Escape cancels):\r\n")
 		value, err = herdr.ReadTerminalForm(cmd.InOrStdin(), cmd.OutOrStdout(), op)
@@ -204,7 +213,13 @@ func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
 		}, func(room herdr.Room) error {
 			check, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
-			return broker.CheckRoomChoice(check, target, room)
+			if err := broker.CheckRoomChoice(check, target, room); err != nil {
+				return err
+			}
+			host := herdr.RoomHostReference(room, c.LocalMachineID)
+			selectedHost = &host
+			selectedTopic = room.Topic
+			return nil
 		})
 	}
 	if err != nil {
@@ -215,7 +230,7 @@ func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
 	if err != nil {
 		return err
 	}
-	req := herdr.Request{ID: id, Op: op, Target: target}
+	req := herdr.Request{ID: id, Op: op, Target: target, RoomHost: selectedHost, RoomTopic: selectedTopic}
 	if op == "start" {
 		req.Topic = value
 	} else {
@@ -239,7 +254,23 @@ func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "parley --session %s send \"message\"\r\n", result.Binding.SessionID)
 	}
 	fmt.Fprint(cmd.OutOrStdout(), "Press Enter to close.\r\n")
-	_, _ = herdr.ReadForm(cmd.InOrStdin(), "start")
+	if result.Handoff != nil {
+		for {
+			fmt.Fprintf(cmd.OutOrStdout(), "Agent instructions: %s. %s\r\n", result.Handoff.Status, result.Handoff.Message)
+			if result.Handoff.Status == "failed" {
+				fmt.Fprint(cmd.OutOrStdout(), "R + Enter retries instructions only; Enter closes.\r\n")
+			}
+			value, _ := herdr.ReadForm(cmd.InOrStdin(), "start")
+			if result.Handoff.Status != "failed" || strings.ToLower(value) != "r" || result.Binding == nil {
+				break
+			}
+			operations := herdr.HostOperations{Store: h.Store, Client: c}
+			retry := operations.Handoff(ctx, *result.Binding, true)
+			result.Handoff = &retry
+		}
+	} else {
+		_, _ = herdr.ReadForm(cmd.InOrStdin(), "start")
+	}
 	if result.Status == "error" {
 		return fmt.Errorf("%s: %s", result.Code, result.Message)
 	}

@@ -20,26 +20,68 @@ type RoomCatalog struct {
 }
 
 func (b *Broker) CheckRoomChoice(ctx context.Context, target AgentTarget, selected Room) error {
-	catalog, err := b.RoomChoices(ctx, target)
+	if _, _, err := b.Client.Agent(ctx, target); err != nil {
+		return err
+	}
+	live, err := b.ResolveSelectedRoom(ctx, selected.ID, RoomHostReference(selected, b.Client.LocalMachineID))
 	if err != nil {
 		return err
 	}
-	if len(catalog.Warnings) != 0 {
-		return fmt.Errorf("room_resolution_incomplete: refresh or use manual room ID")
+	if !SameTerminal(live.Host, selected.Host) || live.Source != selected.Source || live.HostSessionID != selected.HostSessionID {
+		return fmt.Errorf("room_identity_mismatch: refresh the room list")
 	}
-	for _, choice := range catalog.Rooms {
-		if choice.Room.ID != selected.ID {
-			continue
+	return nil
+}
+
+func (b *Broker) ResolveSelectedRoom(ctx context.Context, id string, host RoomHostRef) (Room, error) {
+	local := b.localPeer()
+	if host.MachineID == local.Config.MachineID && host.SessionKey == local.Config.SessionKey {
+		room, err := b.Store.Room(id)
+		if err != nil {
+			return room, err
 		}
-		if choice.Status != "open" {
-			return fmt.Errorf("room_%s: refresh the room list", choice.Status)
+		if RoomHostReference(room, b.Client.LocalMachineID) != host {
+			return room, fmt.Errorf("room_identity_mismatch")
 		}
-		if HostBindingKey(selected.ID, choice.Room.Host) != HostBindingKey(selected.ID, selected.Host) || choice.Room.Source != selected.Source || choice.Room.HostSessionID != selected.HostSessionID {
-			return fmt.Errorf("room_identity_mismatch: refresh the room list")
-		}
-		return nil
+		return b.validateRoom(ctx, room)
 	}
-	return fmt.Errorf("room_missing: refresh the room list")
+	state, err := b.Store.Read()
+	if err != nil {
+		return Room{}, err
+	}
+	peer, ok := state.Peers[host.MachineID]
+	if !ok || peer.Config.SessionKey != host.SessionKey {
+		return Room{}, fmt.Errorf("session_unverified")
+	}
+	machines, err := b.Client.Machines(ctx)
+	if err != nil {
+		return Room{}, err
+	}
+	valid := false
+	for _, machine := range machines {
+		if machine.ID == peer.Machine.ID && machine.Enabled && machine.Target == peer.Machine.Target && machine.Session == peer.Machine.Session {
+			valid = true
+		}
+	}
+	if !valid {
+		return Room{}, fmt.Errorf("saved_profile_changed")
+	}
+	binary, err := b.Client.helper(ctx, peer.Machine)
+	if err != nil {
+		return Room{}, err
+	}
+	if binary != peer.Binary {
+		return Room{}, fmt.Errorf("helper_changed")
+	}
+	b.Client.managed.Store(peer.Machine.ID, peer)
+	var room Room
+	if err = b.peerCall(ctx, peer, RPCRequest{Operation: "room", RoomID: id}, &room); err != nil {
+		return room, err
+	}
+	if room.ID != id || RoomHostReference(room, b.Client.LocalMachineID) != host {
+		return room, fmt.Errorf("room_identity_mismatch")
+	}
+	return b.validateRoom(ctx, room)
 }
 
 // RoomChoices reads this session and its activated enabled peers; it never claims or joins.
@@ -72,7 +114,7 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 			}
 		}
 		for _, binding := range state.Bindings {
-			if binding.SessionID != "" && binding.JoinPhase == "complete" && HostBindingKey(room.ID, binding.Target) == HostBindingKey(room.ID, target) {
+			if binding.RoomID == room.ID && binding.SessionID != "" && binding.JoinPhase == "complete" && SameTerminal(binding.Target, target) && bindingMatchesRoom(binding, room, state, b.Client.LocalMachineID) {
 				choice.Joined = true
 				break
 			}
@@ -128,10 +170,10 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 	}
 	counts := map[string]int{}
 	for _, choice := range catalog.Rooms {
-		counts[choice.Room.ID]++
+		counts[choice.Room.ID+":"+choice.Room.Host.MachineID+":"+choice.Room.Host.HerdrSocket]++
 	}
 	for i := range catalog.Rooms {
-		if counts[catalog.Rooms[i].Room.ID] > 1 {
+		if counts[catalog.Rooms[i].Room.ID+":"+catalog.Rooms[i].Room.Host.MachineID+":"+catalog.Rooms[i].Room.Host.HerdrSocket] > 1 {
 			catalog.Rooms[i].Status = "ambiguous"
 			catalog.Rooms[i].Message = "room_ambiguous"
 		}
@@ -148,4 +190,16 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 	})
 	sort.Strings(catalog.Warnings)
 	return catalog, nil
+}
+
+func bindingMatchesRoom(binding Binding, room Room, state State, localMachine string) bool {
+	ref := RoomHostReference(room, localMachine)
+	if binding.RoomHost != nil {
+		return *binding.RoomHost == ref
+	}
+	if binding.Target.HerdrSocket == room.Host.HerdrSocket && binding.Routed == room.Source {
+		return true
+	}
+	cached, ok := state.Rooms[room.ID]
+	return ok && RoomHostReference(cached, localMachine) == ref && cached.Source == room.Source
 }
