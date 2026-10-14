@@ -330,7 +330,7 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 	failed := make(chan error, 1)
 	workers.Go(func() {
 		failed <- ServeLocal(ctx, path, local, func(ctx context.Context, p Peer, r Request) (Response, error) {
-			if r.Op == "status" || r.Op == "probe" {
+			if r.Op == "status" || r.Op == "probe" || r.Op == "catalog" {
 				return broker.Handle(ctx, p, r)
 			}
 			if r.Op != "join" {

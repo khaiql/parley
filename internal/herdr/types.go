@@ -87,6 +87,7 @@ func RoomHostReference(room Room, localMachine string) RoomHostRef {
 }
 
 type Response struct {
+	Catalog *RoomCatalog   `json:"catalog,omitempty"`
 	Version int            `json:"version,omitempty"`
 	Status  string         `json:"status"`
 	Code    string         `json:"code,omitempty"`

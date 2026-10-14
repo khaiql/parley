@@ -727,7 +727,9 @@ func (b *Broker) localPeer() Peer {
 }
 func (b *Broker) validateRoom(ctx context.Context, room Room) (Room, error) {
 	if room.Host.MachineID == b.Client.LocalMachineID || room.Host.MachineID == "self" {
-		return (&HostOperations{b.Store, b.Client}).liveRoom(ctx, room)
+		live, err := (&HostOperations{b.Store, b.Client}).liveRoom(ctx, room)
+		live.Host.MachineID = b.Client.LocalMachineID
+		return live, err
 	}
 	state, e := b.Store.Read()
 	if e != nil {
@@ -905,12 +907,9 @@ func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, 
 	if e != nil {
 		return failure("invalid_request", e), nil
 	}
-	if req.Op == "probe" {
-		return Response{Status: "ready", Version: HelperVersion}, nil
-	}
-	if req.Op == "status" {
-		e = b.Reconcile(ctx)
-		return Response{Status: "status"}, e
+	switch req.Op {
+	case "catalog", "probe", "status":
+		return b.readRequest(ctx, peer, req)
 	}
 	if req.Op == "start" {
 		if req.Target.MachineID != b.Client.LocalMachineID {
@@ -1203,4 +1202,15 @@ func (b *Broker) completedResponse(ctx context.Context, req Request, outcome Out
 		response, _ = (&HostOperations{b.Store, b.Client}).withHandoff(ctx, response, nil)
 	}
 	return response
+}
+
+func (b *Broker) readRequest(ctx context.Context, peer Peer, req Request) (Response, error) {
+	switch req.Op {
+	case "catalog":
+		return b.serveCatalog(ctx, peer, req)
+	case "probe":
+		return Response{Status: "ready", Version: HelperVersion}, nil
+	default:
+		return Response{Status: "status"}, b.Reconcile(ctx)
+	}
 }

@@ -57,6 +57,10 @@ func validateRequest(req Request) error {
 		if req.RoomID == "" || req.Topic != "" {
 			return fmt.Errorf("join requires room id and no topic")
 		}
+	case "catalog":
+		if req.RoomID != "" || req.Topic != "" {
+			return fmt.Errorf("catalog must not submit room or topic")
+		}
 	case "status", "probe":
 		if req.Topic != "" {
 			return fmt.Errorf("status must not submit a topic")

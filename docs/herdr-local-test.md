@@ -10,7 +10,7 @@ From the PR checkout, with the intended local `default` Herdr server already run
 
 ```sh
 git status --short
-git branch --show-current  # codex/herdr-room-picker includes parent PR #132
+git branch --show-current  # codex/herdr-controller-catalog includes the handoff and picker parents
 go build -o bin/parley ./cmd/parley
 herdr --version           # 0.9.3 or newer
 herdr --session default plugin list --json  # note the old parley plugin_root for rollback
@@ -20,7 +20,7 @@ HERDR_SESSION=default "$PWD/bin/parley" herdr setup
 
 Linking changes which checkout the local Parley plugin uses. The old checkout and its binary remain intact. Setup starts the coordinator if necessary; do not restart Herdr or existing agents. Run setup from a shell on the intended host/session; an inherited `HERDR_SOCKET_PATH` selects its socket over `HERDR_SESSION`. For a named session, replace `default` consistently. If your controller uses a custom `PARLEY_STATE_DIR`, keep that same value for setup and the verifier; do not change an existing immutable root pin.
 
-Every enabled saved SSH profile participates in discovery. Install and link Parley in that profile's selected Herdr session, then let the existing controller activate it. An enabled profile without a helper or activated session makes lookup incomplete, but confirmed local rows remain selectable. Do not disable unrelated profiles for a local-only test. A participant-only remote popup can list its own host rooms; it has no controller-wide peer catalog unless peers are already activated there. Use manual ID entry for other controller-routed rooms. Browsing never installs helpers or claims controller ownership.
+Every enabled saved SSH profile participates in discovery. Install and link Parley in that profile's selected Herdr session, then let the existing controller activate it. An enabled profile without a helper or activated session makes lookup incomplete, but confirmed local rows remain selectable. Do not disable unrelated profiles for a local-only test. An activated participant-only remote popup requests the controller’s authoritative catalog through its durable queue, so Mac-hosted rooms can be selected by number on Ubuntu. Missing activation or unavailable controller responses must produce warnings, rather than a complete empty list. Browsing never installs helpers or claims controller ownership.
 
 If setup reports `coordinator_upgrade_required`, follow the [plugin-only upgrade procedure](herdr-plugin.md#upgrading-from-the-identity-based-helper) before testing. Finish existing routed work first: restarting the owned coordinator closes its SSH routes. Agents do not need restarting.
 
@@ -126,6 +126,14 @@ To restore your former plugin checkout, link the exact old `plugin_root` recorde
 
 ## 8. SSH and harness coverage
 
-Install helper protocol 2 on both hosts and upgrade the owned coordinator using [the plugin procedure](herdr-plugin.md#upgrading-from-the-identity-based-helper). Repeat Start/Join with a local host and remote participant, then with a remote host and local participant. Verify both agents received their own host-local skill, binary, state root, and session ID. Exercise messages and artifacts in both directions; same-host proof does not establish SSH proof.
+Install helper protocol 3 on both hosts and upgrade the owned coordinator using [the plugin procedure](herdr-plugin.md#upgrading-from-the-identity-based-helper). Repeat Start/Join with a local host and remote participant, then with a remote host and local participant. Verify both agents received their own host-local skill, binary, state root, and session ID. Exercise messages and artifacts in both directions; same-host proof does not establish SSH proof.
 
 Repeat with at least two Herdr-supported harness kinds. A working agent uses its harness's ordinary prompt behavior; no delayed-delivery guarantee is added. Record native shortcut, cross-harness, SSH authentication, sandbox approval, or acknowledgement failures separately. Do not claim an unexercised environment passes.
+
+For Mac-hosted-room/Ubuntu-participant acceptance, keep a Mac room running, open Ubuntu Join from its existing agent, require that topic with host `Controller`, select its number, and require distinct participant/session plus submitted handoff. Reopen Join and refresh after closing a disposable Mac room; it must not remain selectable. This is the controller-catalog regression; showing only Ubuntu-local rooms is not a pass. Verify fresh SSH works without a password prompt and restart only an outdated Parley coordinator, never the agents or Herdr servers.
+
+## Controller catalog live proof (2026-10-14)
+
+Built helper protocol 3 for macOS and Linux amd64, linked separate prebuilt bundles on the live Mac and Ubuntu server, and restarted only Parley's coordinators. Existing checkout binaries were preserved. Ubuntu's unused second-controller configuration was backed up after verifying that it had no peers, rooms, bindings, requests, or handoffs; the Mac then activated Ubuntu as its participant. Run setup on the Mac controller only.
+
+The actual Ubuntu Join form, launched in an SSH PTY against its existing Herdr socket and Codex terminal, listed Mac room `room-1e7a728868ca7f6204b8`, topic `testing`, as `Controller | open`. Escape closed the form without choosing Join. This proves live cross-host catalog discovery; it does not prove GUI shortcut invocation, cross-host Join, prompt delivery, or messages/artifacts. Build, golangci-lint, and the full race suite passed. Regressions cover stale host-session selection, unavailable controller fallback, unactivated host warnings, bounded catalog lookup, and browsing without participant or route creation.
