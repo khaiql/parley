@@ -45,15 +45,11 @@ With the default prefix, press **Ctrl+B**, release, then **Shift+S** for Start o
 
 Client keybindings normally come from the client's local config even when viewing an SSH machine. With `--remote-keybindings server`, configure the bindings on the selected server instead. Install the plugin and helper on every participating host; the action runs on the host of the focused pane. Notifications use the injected native socket, so remote failures stay in that Herdr context. Diagnostic CLI commands run on their host, or use `herdr --machine <enabled-profile-id-or-label>` from Local; selecting a machine in the UI does not retarget ordinary local commands.
 
-### Native identity and visible failures
+### Agent targeting and visible failures
 
-The agent must have a native `agent_session`, not just a detected process and an idle badge. In the intended session, check `herdr --session <name> agent get <pane-id>` for `agent_session`. From Local, use `herdr --machine <profile> agent get <remote-pane-id>` for a saved remote machine.
+Parley targets the captured Herdr socket, terminal ID, and detected harness kind. Any harness supported by Herdr can participate. Native `agent_session` is optional; Codex welcome prompts and shared daemons do not require hooks, flags, or agent restarts. The terminal is re-resolved before joining and prompting, so changing focus or moving a pane does not redirect instructions. A different terminal or harness is rejected. Existing bindings retain their original storage keys, participant IDs, and cursors.
 
-For a fresh Codex CLI 0.160.0 session, `SessionStart` hook delivery is deferred until its first turn. A ready prompt can therefore lack identity even when integration v8 is current and the hook is enabled and trusted. Use an existing Codex agent that has begun ordinary work and has reported its session, or another supported agent with a reported identity. Do not send a paid prompt solely to test Parley. Support before the first turn is tracked in [#131](https://github.com/khaiql/parley/issues/131).
-
-If identity is still absent after normal work, inspect `/hooks` in that Codex session: the Herdr SessionStart hook must be enabled and trusted for its current definition. Check the effective hook sources and execution errors, and that the actual hook process inherits `HERDR_ENV=1`, the correct `HERDR_PANE_ID`, and the correct `HERDR_SOCKET_PATH`. A shared Codex daemon can retain a different pane's environment; see [Herdr #4814](https://github.com/herdrdev/herdr/issues/4814). Do not assume reinstalling hooks or restarting an agent fixes the cause. Parley never changes hook trust, restarts agents, fabricates identities, or reads guessed transcript paths. See [diagnosis and verification evidence](herdr-usability-proof.md).
-
-Preflight and form failures request a silent Herdr notification and retain structured JSON/plugin-log diagnostics. Shell targets explain how to focus an agent; missing identities explain the Codex hook boundary; incompatible helpers and busy modals give recovery steps. Failed submitted outcomes stay visible in the form until Enter and then exit unsuccessfully. Escape or EOF cancels input without a failure notification.
+Preflight and form failures request a silent Herdr notification and retain structured JSON/plugin-log diagnostics. Shell targets explain how to focus an agent; missing terminal or harness detection explains the native targeting requirement; incompatible helpers and busy modals give recovery steps. Failed submitted outcomes stay visible in the form until Enter and then exit unsuccessfully. Escape or EOF cancels input without a failure notification.
 
 Notifications follow Herdr's configured toast delivery. To display them inside Herdr, use `delivery = "herdr"` in your existing `[ui.toast]` table, then reload configuration. With delivery disabled, no foreground client, a busy toast, or rate limiting, delivery can fail; the original diagnostic includes `notification_failed` and the native reason. An unavailable socket also prevents notification; it never falls back to another local session. If the Parley executable cannot be launched at all, inspect Herdr's own action launch log and repair the plugin build/install:
 
@@ -63,11 +59,11 @@ herdr --session <name> plugin log list --plugin parley --limit 5
 
 ### Start and Join
 
-Invoke **Parley: Start room** with its shortcut from an existing agent pane. Enter a nonempty topic and press Enter. The popup captures the original terminal and native agent identity before opening. It creates a local room and shows its room ID, session ID, and existing Parley command instructions. Escape, EOF, empty input, control characters, and topics over 512 bytes do not submit work.
+Invoke **Parley: Start room** with its shortcut from an existing agent pane. Enter a nonempty topic and press Enter. The popup captures the original terminal and harness kind before opening. It creates a local room and shows its room ID, session ID, and existing Parley command instructions. Escape, EOF, empty input, control characters, and topics over 512 bytes do not submit work.
 
 Invoke **Parley: Join room** from another existing agent pane. The popup lists topic, host, room ID, live status, and whether this agent already joined. Enter a visible room number and press Enter. No room ID needs copying. Use **R + Enter** to refresh, **N/P + Enter** for pages, **M + Enter** for manual room-ID entry, or **Escape** to close.
 
-Discovery runs only on opening, explicit refresh, and selection validation. It reads the selected session's durable room records and its already activated enabled peers; it never starts a controller, claims a peer, creates a route, or joins a participant while browsing. Closed, stale, unreachable, and ambiguous records cannot be selected. Incomplete peer lookup is shown explicitly and blocks numbered selection; refresh after recovery or use manual entry through the existing Join path. Removed or changed saved profiles cannot silently reuse an old peer. The original agent and selected room are checked again before submission. Sibling local Herdr sessions and cached coordinator room records are not scanned.
+Discovery runs only on opening, explicit refresh, and selection validation. It reads the selected session's durable room records and its already activated enabled peers; it never starts a controller, claims a peer, creates a route, or joins a participant while browsing. Closed, stale, unreachable, and ambiguous records cannot be selected. Incomplete peer lookup is shown explicitly. Confirmed rooms remain selectable; selection revalidates only the selected authoritative host and the room’s original host participant session, including delayed queued requests. Manual ID lookup still requires complete discovery to avoid choosing the wrong host. Removed or changed saved profiles cannot silently reuse an old peer. The original agent and selected room are checked again before submission. Sibling local Herdr sessions and cached coordinator room records are not scanned.
 
 A same-host room joins directly without SSH. Cross-host Join persists a request, reports its marker through the native socket, and waits for the local coordinator. The coordinator acquires both the message and HTTP artifact routes before invoking the fixed host-local Join helper. Both initiating-host directions work: local room with remote participant uses two reverse forwards; remote room with local participant uses two local forwards. Joining between two different remote hosts is unsupported. A remote-only UI needs the local controller's saved SSH profile active; the remote popup never starts another controller.
 
@@ -83,6 +79,26 @@ Plugin state and config use the full canonical Herdr socket namespace, including
 
 Detaching the Herdr UI leaves the owned coordinator, event readers, and SSH masters running. Disabling the local plugin closes only those owned readers and masters. Disabling a remote plugin or profile closes that session's owned reader and master; its existing participant stays alive, with unavailable routes. Profile refresh runs every 30 seconds; plugin status checks run every two seconds. Empty queues do not trigger room discovery or forwarding.
 
-Returned session instructions use existing Parley messaging and artifacts. This phase adds no automatic receive hooks, readiness prompts, harness changes, notification workers, participant resume/replay, adapter reconnection, or agent launch.
+### Automatic agent handoff
+
+After confirmed Start/Join, the participant host calls Herdr `agent.prompt` for the captured terminal. Instructions include the room, topic, existing participant/session, bundled Parley skill, executable, and pinned runtime root. The agent sends a presence message and continues its task using that session. No session ID copying or second agent-side Join is needed. An operation that completes after the popup closes still submits its instructions.
+
+The popup reports **submitted**, **failed**, or **uncertain** separately from room creation. Submitted means Herdr accepted the input; it does not prove the agent finished processing it. Each harness controls its normal input behavior, including input while working. Parley adds no next-turn queue, agent restart, hook change, or receive worker.
+
+Known pre-submission failures such as a blocked approval dialog are recorded. After resolving that dialog, **R + Enter** in the result popup retries only the instructions, preserving the participant and cursor. Reopening Join also shows the recorded result for that participant. Timeout, lost acknowledgement, or corrupt receipt stays uncertain and is never automatically retried. `parley herdr status` exposes durable handoff results keyed by participant session ID, including late completions. Agent sandbox permissions can still require normal user approval for participant socket access.
+
+### Upgrading from the identity-based helper
+
+This flow uses helper protocol 2. Install/build this plugin on every participating host; incompatible helpers are rejected before participant mutation. Exact binary version equality is unnecessary, but all helpers and the controller must support protocol 2.
+
+A running older coordinator is not replaced silently: doing so would close its active SSH routes. Finish existing routed work, rebuild the plugin, then restart **only the Parley plugin** on the controller and run setup:
+
+```sh
+herdr plugin disable parley
+herdr plugin enable parley
+parley herdr setup
+```
+
+Agents and Herdr servers remain running. Existing rooms, participant IDs, runtime pins, ownership, and cursors remain stored; routes close during the plugin restart. Startup and local cross-host submission report `coordinator_upgrade_required` until this restart. No participant is recreated to repair an incompatible helper.
 
 Native API contracts follow the [Herdr 0.9.3 plugin documentation](https://github.com/herdrdev/herdr/blob/v0.9.3/docs/next/website/src/content/docs/plugins.mdx) and [socket API](https://github.com/herdrdev/herdr/blob/v0.9.3/docs/next/website/src/content/docs/socket-api.mdx).

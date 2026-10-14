@@ -262,7 +262,7 @@ func TestHerdrRPCTargetedProbePinned(t *testing.T) {
 		t.Fatal(e)
 	}
 	probe := v.(ProbeResult)
-	if probe.Agent == nil || probe.Agent.MachineID != "peer" || probe.Agent.HerdrSocket != socket || probe.Agent.NativeSession != "native" || <-called != "agent.get:w1:p1" {
+	if probe.Agent == nil || probe.Agent.MachineID != "peer" || probe.Agent.HerdrSocket != socket || probe.Agent.NativeSession != "" || <-called != "agent.get:w1:p1" {
 		t.Fatal(probe)
 	}
 	r.ControllerID = "other"

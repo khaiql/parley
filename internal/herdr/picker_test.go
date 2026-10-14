@@ -41,7 +41,7 @@ func TestRoomChoicesDurableLocalAndIsolation(t *testing.T) {
 	}
 	if err := h.Store.Update(func(state *State) error {
 		state.Rooms[other.ID] = other // Discovery cache must not become a host registry.
-		state.Bindings[HostBindingKey(room.ID, req.Target)] = Binding{RoomID: room.ID, Target: req.Target, SessionID: "psn_existing", JoinPhase: "complete"}
+		state.Bindings[HostBindingKey(room.ID, req.Target)] = Binding{RoomID: room.ID, Target: req.Target, SessionID: "psn_existing", JoinPhase: "complete", Routed: room.Source}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestRoomChoiceRechecksBeforeJoin(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "host":
-				room.Host.NativeSession = "different"
+				room.Host.Kind = "different"
 				if err := h.Store.saveRoom(room); err != nil {
 					t.Fatal(err)
 				}
@@ -137,6 +137,13 @@ func TestRoomChoicesPeersAndAmbiguity(t *testing.T) {
 			remote.Host.HerdrSocket = peer.Config.HerdrSocket
 			if mode == "ambiguous" {
 				remote.ID = local.ID
+				if err := h.Store.Update(func(state *State) error {
+					ref := RoomHostReference(local, h.Client.LocalMachineID)
+					state.Bindings[HostBindingKey(local.ID, req.Target)] = Binding{RoomID: local.ID, Target: req.Target, SessionID: "psn_existing", JoinPhase: "complete", RoomHost: &ref}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			remote.Source.Descriptor = strings.ReplaceAll(local.Source.Descriptor, local.ID, remote.ID)
 			remote.Source.ArtifactURL = strings.ReplaceAll(local.Source.ArtifactURL, local.ID, remote.ID)
@@ -167,7 +174,7 @@ func TestRoomChoicesPeersAndAmbiguity(t *testing.T) {
 				case "room":
 					return json.Marshal(remote)
 				case "probe":
-					return json.Marshal(ProbeResult{Config: peer.Config, Agent: &remote.Host, AgentStatus: "idle"})
+					return json.Marshal(ProbeResult{Version: HelperVersion, Config: peer.Config, Agent: &remote.Host, AgentStatus: "idle"})
 				default:
 					t.Fatalf("browsing attempted mutation: %s %v", rpc.Operation, args)
 					return nil, nil
@@ -185,11 +192,11 @@ func TestRoomChoicesPeersAndAmbiguity(t *testing.T) {
 				}
 				for _, choice := range got.Rooms {
 					want := "open"
-					if mode == "ambiguous" {
-						want = "ambiguous"
-					}
 					if choice.Status != want {
 						t.Fatal(choice)
+					}
+					if mode == "ambiguous" && choice.Joined != (choice.Host == "Local") {
+						t.Fatal("joined badge leaked across hosts", choice)
 					}
 				}
 			} else if len(got.Warnings) == 0 || len(got.Rooms) != 1 {

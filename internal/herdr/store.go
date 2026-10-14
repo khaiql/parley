@@ -275,7 +275,7 @@ func (s *Store) Enqueue(req Request) error {
 		var prior Request
 		err = readJSON(path, &prior)
 		if err == nil {
-			if prior != req {
+			if RequestDigest(prior) != RequestDigest(req) {
 				return fmt.Errorf("request_conflict")
 			}
 			return nil
@@ -500,6 +500,33 @@ func (s *Store) Binding(key string) (Binding, error) {
 		return Binding{}, fmt.Errorf("invalid completed session")
 	}
 	return b, nil
+}
+
+func (s *Store) BindingForTarget(roomID string, target AgentTarget) (Binding, error) {
+	state, err := s.Read()
+	if err != nil {
+		return Binding{}, err
+	}
+	var found Binding
+	matched := false
+	for key, binding := range state.Bindings {
+		if binding.RoomID != roomID || !SameTerminal(binding.Target, target) {
+			continue
+		}
+		validated, err := s.Binding(key)
+		if err != nil {
+			return Binding{}, err
+		}
+		if matched {
+			return Binding{}, fmt.Errorf("binding_ambiguous")
+		}
+		found = validated
+		matched = true
+	}
+	if !matched {
+		return found, os.ErrNotExist
+	}
+	return found, nil
 }
 
 func (s *Store) saveBinding(b Binding) error {

@@ -37,10 +37,16 @@ func validateRequest(req Request) error {
 	if len(req.Topic) > 512 || !utf8.ValidString(req.Topic) {
 		return fmt.Errorf("invalid topic")
 	}
+	if len(req.RoomTopic) > 512 || !utf8.ValidString(req.RoomTopic) || req.RoomTopic != "" && req.Op != "join" {
+		return fmt.Errorf("invalid room topic")
+	}
 	if req.RoomID != "" {
 		if err := safeID(req.RoomID); err != nil {
 			return err
 		}
+	}
+	if req.RoomHost != nil && (req.Op != "join" || safeID(req.RoomHost.MachineID) != nil || !validDigest(req.RoomHost.SessionKey) || safeID(req.RoomHost.HostSessionID) != nil) {
+		return fmt.Errorf("invalid selected room host")
 	}
 	switch req.Op {
 	case "start":
@@ -51,7 +57,7 @@ func validateRequest(req Request) error {
 		if req.RoomID == "" || req.Topic != "" {
 			return fmt.Errorf("join requires room id and no topic")
 		}
-	case "status":
+	case "status", "probe":
 		if req.Topic != "" {
 			return fmt.Errorf("status must not submit a topic")
 		}
@@ -68,14 +74,14 @@ func validateRequest(req Request) error {
 			return err
 		}
 	}
-	if req.Op != "status" {
+	if req.Op != "status" && req.Op != "probe" {
 		if req.Target.HerdrSocket == "" || req.Target.MachineID == "" {
 			return fmt.Errorf("target origin required")
 		}
 		if safeID(req.Target.Kind) != nil || req.Target.Kind == "shell" {
 			return fmt.Errorf("unsupported agent kind")
 		}
-		if req.Target.TerminalID == "" || req.Target.NativeSession == "" {
+		if req.Target.TerminalID == "" {
 			return fmt.Errorf("agent identity required")
 		}
 	}
@@ -268,7 +274,7 @@ func serveLocalConn(ctx context.Context, conn *net.UnixConn, key string, origin 
 			r, err := dispatch(operation, origin, req)
 			if err != nil {
 				code := "operation_failed"
-				if req.Op != "status" {
+				if req.Op != "status" && req.Op != "probe" {
 					code = "operation_uncertain"
 				}
 				r = Response{Status: "error", Code: code, Message: err.Error()}
@@ -280,7 +286,7 @@ func serveLocalConn(ctx context.Context, conn *net.UnixConn, key string, origin 
 			resp = r.Response
 		case <-operation.Done():
 			code := "operation_timeout"
-			if req.Op != "status" {
+			if req.Op != "status" && req.Op != "probe" {
 				code = "operation_uncertain"
 			}
 			resp = Response{Status: "error", Code: code, Message: operation.Err().Error()}

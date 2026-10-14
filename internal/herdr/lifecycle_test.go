@@ -46,6 +46,58 @@ func TestHerdrStartupNamespaceAndOwner(t *testing.T) {
 		t.Fatal(a, b)
 	}
 }
+
+func TestCoordinatorStartupVersion(t *testing.T) {
+	for _, version := range []int{1, HelperVersion} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			root := t.TempDir()
+			owner := SessionConfig{Role: "controller", MachineID: "local", ControllerID: "controller", HerdrSocket: filepath.Join(root, "native")}
+			owner.SessionKey, _ = SessionKey(owner.HerdrSocket)
+			h := HostSession{Config: owner, ConfigDir: root, Store: NewStore(filepath.Join(root, "state"))}
+			if err := writeJSON(filepath.Join(root, "coordinator.json"), owner); err != nil {
+				t.Fatal(err)
+			}
+			path, err := h.CoordinatorSocket()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.RemoveAll(filepath.Dir(path)) })
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() {
+				done <- ServeLocal(ctx, path, Peer{Machine: Machine{ID: owner.MachineID}, Config: owner}, func(_ context.Context, _ Peer, req Request) (Response, error) {
+					if req.Op != "probe" {
+						t.Error("version check mutates coordinator", req.Op)
+					}
+					return Response{Status: "ready", Version: version}, nil
+				})
+			}()
+			t.Cleanup(func() {
+				cancel()
+				if err := <-done; err != nil {
+					t.Error(err)
+				}
+			})
+			deadline := time.Now().Add(time.Second)
+			for {
+				if info, err := os.Stat(path); err == nil && info.Mode().Perm() == 0600 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("coordinator not ready")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			err = h.Startup(context.Background(), "/no/executable", "native")
+			if version == HelperVersion && err != nil {
+				t.Fatal(err)
+			}
+			if version == 1 && (err == nil || !strings.Contains(err.Error(), "coordinator_upgrade_required")) {
+				t.Fatal("old coordinator silently reused", err)
+			}
+		})
+	}
+}
 func TestHerdrSetupParticipantConflict(t *testing.T) {
 	root := t.TempDir()
 	h := HostSession{Config: SessionConfig{HerdrSocket: "/tmp/native.sock"}, ConfigDir: root, Store: NewStore(filepath.Join(root, "state"))}

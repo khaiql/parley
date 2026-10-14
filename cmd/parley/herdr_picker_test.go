@@ -26,7 +26,7 @@ func TestPickRoomSelectionRefreshAndValidation(t *testing.T) {
 				input, want, checks = "1\n\x1b", "", 0
 			case "incomplete":
 				catalog.Warnings = []string{"Work: unreachable"}
-				input, want, checks = "1\n\x1b", "", 0
+				input, want, checks = "1\n", "room-a", 1
 			case "manual":
 				input, want, checks = "m\nmanual-room\n", "manual-room", 0
 			case "cancel":

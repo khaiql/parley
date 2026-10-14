@@ -131,11 +131,19 @@ func (h HostSession) SubmitForm(ctx context.Context, c *Client, req Request) (Re
 	}
 	room, roomErr := h.Store.Room(req.RoomID)
 	direct := roomErr == nil && room.Host.HerdrSocket == owner.HerdrSocket && (room.Host.MachineID == "self" || room.Host.MachineID == owner.MachineID)
+	if req.RoomHost != nil {
+		direct = direct && *req.RoomHost == RoomHostReference(room, c.LocalMachineID)
+	}
 	if roomErr != nil && !errors.Is(roomErr, os.ErrNotExist) {
 		return Response{}, roomErr
 	}
 	if !direct && owner.ControllerID == "" {
 		return failure("setup_required", fmt.Errorf("run parley herdr setup on the local controller and enable its saved SSH profile")), nil
+	}
+	if !direct && owner.Role == "controller" {
+		if err := h.CheckCoordinator(ctx); err != nil {
+			return Response{}, err
+		}
 	}
 	// Persist self so later activation can normalize this host to its saved profile.
 	req.Target.MachineID = "self"
@@ -167,7 +175,7 @@ func (h HostSession) directForm(ctx context.Context, operations HostOperations, 
 		return Response{}, err
 	}
 	if outcome.Phase == "complete" {
-		return hostResponse(outcome.Response, owner.MachineID), nil
+		return operations.withHandoff(ctx, hostResponse(outcome.Response, owner.MachineID), nil)
 	}
 	room, err = operations.liveRoom(ctx, room)
 	if err != nil {

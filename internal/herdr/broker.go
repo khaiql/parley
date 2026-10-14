@@ -20,7 +20,7 @@ import (
 
 // BindingKey identifies the coordinator route; HostBindingKey excludes profile aliases.
 func BindingKey(roomID string, t AgentTarget) string {
-	return hashBytes([]byte(t.MachineID + ":" + HostBindingKey(roomID, t)))
+	return hashBytes([]byte(t.MachineID + ":" + terminalBindingKey(roomID, t)))
 }
 
 type HostOperations struct {
@@ -290,7 +290,7 @@ func (h *HostOperations) ReadJoinFailure(ctx context.Context, req Request) (Join
 		return result, fmt.Errorf("join request required")
 	}
 	key := HostBindingKey(req.RoomID, req.Target)
-	e = h.Store.WithBinding(ctx, "join:"+key, func() error {
+	e = h.Store.WithBinding(ctx, "join:"+terminalBindingKey(req.RoomID, req.Target), func() error {
 		var stored Request
 		if e := readJSON(filepath.Join(h.Store.dir, "requests", req.ID+".json"), &stored); e != nil {
 			return e
@@ -362,6 +362,35 @@ func (h *HostOperations) clearFailedIntent(key string, prior Binding) (bool, err
 	return true, nil
 }
 func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoints) (Response, error) {
+	result, err := h.join(ctx, req, endpoints)
+	if result.Binding != nil {
+		result.Binding.Topic = req.RoomTopic
+	}
+	return h.withHandoff(ctx, result, err)
+}
+
+// Legacy keys remain intact while new requests identify the terminal only.
+func (h *HostOperations) reuseTerminalBinding(req *Request, endpoints Endpoints) (string, error) {
+	prior, err := h.Store.BindingForTarget(req.RoomID, req.Target)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "binding_ambiguous", err
+	}
+	if prior.Target.NativeSession != req.Target.NativeSession {
+		if prior.JoinPhase != "complete" {
+			return "operation_uncertain", fmt.Errorf("legacy participant intent requires recovery")
+		}
+		req.Target.NativeSession = prior.Target.NativeSession
+	}
+	if prior.Routed != (Endpoints{}) && prior.Routed != endpoints || prior.RoomHost != nil && req.RoomHost != nil && *prior.RoomHost != *req.RoomHost {
+		return "room_mismatch", fmt.Errorf("existing participant belongs to a different room host or route")
+	}
+	return "", nil
+}
+
+func (h *HostOperations) join(ctx context.Context, req Request, endpoints Endpoints) (Response, error) {
 	originalReq, e := normalize(req, (&Broker{Client: h.Client}).localPeer())
 	if e != nil {
 		return failure("invalid_request", e), nil
@@ -380,8 +409,12 @@ func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoi
 		return failure("request_conflict", e), nil
 	}
 	var response Response
-	key := HostBindingKey(req.RoomID, req.Target)
-	e = h.Store.WithBinding(ctx, "join:"+key, func() error {
+	e = h.Store.WithBinding(ctx, "join:"+terminalBindingKey(req.RoomID, req.Target), func() error {
+		if code, err := h.reuseTerminalBinding(&req, endpoints); code != "" {
+			response = failure(code, err)
+			return nil
+		}
+		key := HostBindingKey(req.RoomID, req.Target)
 		if prior, ok, e := h.priorFailure(originalReq); e != nil {
 			return e
 		} else if ok {
@@ -417,7 +450,7 @@ func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoi
 		if e != nil {
 			return e
 		}
-		b := Binding{RoomID: req.RoomID, Target: req.Target, ParticipantName: "h_" + key[:16], StateDir: p.Root, Routed: endpoints, JoinPhase: "intent", JoinRequestID: req.ID}
+		b := Binding{RoomID: req.RoomID, RoomHost: req.RoomHost, Target: req.Target, ParticipantName: "h_" + key[:16], StateDir: p.Root, Routed: endpoints, JoinPhase: "intent", JoinRequestID: req.ID}
 		if e = validateSocket(runtime.ParticipantSocketPath(p, b.RoomID, b.ParticipantName)); e != nil {
 			response = failure("runtime_socket_too_long", e)
 			return nil
@@ -529,6 +562,13 @@ type startIntent struct {
 }
 
 func (h *HostOperations) Start(ctx context.Context, req Request) (Response, error) {
+	result, err := h.start(ctx, req)
+	if result.Binding != nil {
+		result.Binding.Topic = req.Topic
+	}
+	return h.withHandoff(ctx, result, err)
+}
+func (h *HostOperations) start(ctx context.Context, req Request) (Response, error) {
 	originalReq, e := normalize(req, (&Broker{Client: h.Client}).localPeer())
 	if e != nil {
 		return failure("invalid_request", e), nil
@@ -849,10 +889,31 @@ func (b *Broker) releaseFailed(ctx context.Context, req Request, evidence JoinFa
 		return nil
 	})
 }
+func (b *Broker) checkBindingHost(ctx context.Context, req Request, existing Binding) (string, error) {
+	if req.RoomHost == nil {
+		return "", nil
+	}
+	selected, err := b.ResolveSelectedRoom(ctx, req.RoomID, *req.RoomHost)
+	if err != nil {
+		return "room_unavailable", err
+	}
+	state, err := b.Store.Read()
+	if err != nil {
+		return "room_unavailable", err
+	}
+	if !bindingMatchesRoom(existing, selected, state, b.Client.LocalMachineID) {
+		return "room_mismatch", fmt.Errorf("existing participant belongs to another host")
+	}
+	return "", nil
+}
+
 func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, error) {
 	req, e := normalize(req, peer)
 	if e != nil {
 		return failure("invalid_request", e), nil
+	}
+	if req.Op == "probe" {
+		return Response{Status: "ready", Version: HelperVersion}, nil
 	}
 	if req.Op == "status" {
 		e = b.Reconcile(ctx)
@@ -863,6 +924,9 @@ func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, 
 			return failure("host_local_start_required", nil), nil
 		}
 		return (&HostOperations{b.Store, b.Client}).Start(ctx, req)
+	}
+	if _, _, err := b.Client.Agent(ctx, req.Target); err != nil {
+		return failure("agent_unavailable", err), nil
 	}
 	var response Response
 	e = b.Store.WithBinding(ctx, "route:"+BindingKey(req.RoomID, req.Target), func() error {
@@ -881,7 +945,7 @@ func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, 
 			return e
 		}
 		if outcome.Phase == "complete" {
-			response = hostResponse(outcome.Response, req.Target.MachineID)
+			response = b.completedResponse(ctx, req, outcome)
 			return nil
 		}
 		finish := func(r Response, phase string) error {
@@ -906,13 +970,16 @@ func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, 
 		}
 		var existing Binding
 		if local {
-			existing, e = b.Store.Binding(HostBindingKey(req.RoomID, req.Target))
+			existing, e = b.Store.BindingForTarget(req.RoomID, req.Target)
 		} else {
-			e = b.peerCall(ctx, peer, RPCRequest{Operation: "binding", BindingKey: HostBindingKey(req.RoomID, req.Target)}, &existing)
+			e = b.peerCall(ctx, peer, RPCRequest{Operation: "binding", Request: &req}, &existing)
 		}
 		if e == nil {
-			if HostBindingKey(existing.RoomID, existing.Target) != HostBindingKey(req.RoomID, req.Target) {
+			if existing.RoomID != req.RoomID || !SameTerminal(existing.Target, req.Target) {
 				return fmt.Errorf("binding key mismatch")
+			}
+			if code, err := b.checkBindingHost(ctx, req, existing); code != "" {
+				return finish(failure(code, err), "complete")
 			}
 			if local {
 				response, e = (&HostOperations{b.Store, b.Client}).Join(ctx, req, existing.Routed)
@@ -931,18 +998,7 @@ func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, 
 		if !errors.Is(e, os.ErrNotExist) && !strings.Contains(e.Error(), "binding_missing") {
 			return e
 		}
-		var room Room
-		if local {
-			room, e = b.Store.Room(req.RoomID)
-			if e == nil {
-				room, e = b.validateRoom(ctx, room)
-			}
-			if errors.Is(e, os.ErrNotExist) {
-				room, e = b.ResolveRoom(ctx, req.RoomID)
-			}
-		} else {
-			room, e = b.ResolveRoom(ctx, req.RoomID)
-		}
+		room, e := b.requestRoom(ctx, req, local)
 		if e != nil {
 			return finish(failure(e.Error(), e), "complete")
 		}
@@ -1004,7 +1060,7 @@ func (b *Broker) Handle(ctx context.Context, peer Peer, req Request) (Response, 
 			return finish(response, "uncertain")
 		}
 		if response.Binding != nil && !local {
-			if HostBindingKey(response.Binding.RoomID, response.Binding.Target) != HostBindingKey(req.RoomID, req.Target) {
+			if response.Binding.RoomID != req.RoomID || !SameTerminal(response.Binding.Target, req.Target) {
 				return finish(failure("operation_uncertain", fmt.Errorf("binding key mismatch")), "uncertain")
 			}
 			if e = b.Store.saveBinding(*response.Binding); e != nil {
@@ -1091,7 +1147,7 @@ func (b *Broker) Reconcile(ctx context.Context) error {
 			continue
 		}
 		e = b.Store.WithBinding(ctx, "route:"+BindingKey(record.RoomID, record.Target), func() error {
-			return b.Store.WithBinding(ctx, "join:"+key, func() error {
+			return b.Store.WithBinding(ctx, "join:"+terminalBindingKey(record.RoomID, record.Target), func() error {
 				current, e := b.Store.Binding(key)
 				if e != nil {
 					return e
@@ -1130,4 +1186,28 @@ func (b *Broker) Reconcile(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (b *Broker) requestRoom(ctx context.Context, req Request, local bool) (Room, error) {
+	if req.RoomHost != nil {
+		return b.ResolveSelectedRoom(ctx, req.RoomID, *req.RoomHost)
+	}
+	if local {
+		room, err := b.Store.Room(req.RoomID)
+		if err == nil {
+			return b.validateRoom(ctx, room)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return Room{}, err
+		}
+	}
+	return b.ResolveRoom(ctx, req.RoomID)
+}
+
+func (b *Broker) completedResponse(ctx context.Context, req Request, outcome Outcome) Response {
+	response := hostResponse(outcome.Response, req.Target.MachineID)
+	if req.Target.MachineID == b.Client.LocalMachineID {
+		response, _ = (&HostOperations{b.Store, b.Client}).withHandoff(ctx, response, nil)
+	}
+	return response
 }
