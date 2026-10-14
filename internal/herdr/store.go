@@ -96,11 +96,10 @@ func (s *Store) locked(fn func() error) error {
 	return lockFile(ctx, filepath.Join(s.dir, "state.lock"), fn)
 }
 
-// WithBinding holds a host transaction lock across processes. Callers acquire route:
-// before join: and never hold the short data lock across external operations.
+// WithBinding holds a host transaction lock across processes, never the short data lock across external operations.
 func (s *Store) WithBinding(ctx context.Context, key string, fn func() error) error {
-	if (!strings.HasPrefix(key, "route:") && !strings.HasPrefix(key, "join:")) || strings.HasSuffix(key, ":") {
-		return fmt.Errorf("binding lock requires route: or join: key")
+	if (!strings.HasPrefix(key, "route:") && !strings.HasPrefix(key, "join:") && !strings.HasPrefix(key, "terminal:")) || strings.HasSuffix(key, ":") {
+		return fmt.Errorf("binding lock requires route:, join:, or terminal: key")
 	}
 	if err := privateDir(s.dir); err != nil {
 		return err

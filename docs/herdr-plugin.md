@@ -87,9 +87,17 @@ The popup reports **submitted**, **failed**, or **uncertain** separately from ro
 
 Known pre-submission failures such as a blocked approval dialog are recorded. After resolving that dialog, **R + Enter** in the result popup retries only the instructions, preserving the participant and cursor. Reopening Join also shows the recorded result for that participant. Timeout, lost acknowledgement, or corrupt receipt stays uncertain and is never automatically retried. `parley herdr status` exposes durable handoff results keyed by participant session ID, including late completions. Agent sandbox permissions can still require normal user approval for participant socket access.
 
-### Upgrading from the identity-based helper
+### Automatic terminal cleanup
 
-This flow uses helper protocol 3. Install/build this plugin on every participating host; incompatible helpers are rejected before participant mutation. Exact binary version equality is unnecessary, but all helpers and the controller must support protocol 3.
+Parley subscribes to Herdr's `pane.closed`, `pane.exited`, `pane.moved`, `tab.closed`, and `workspace.closed` events. These events trigger an authoritative `session.snapshot` scan; event payloads, pane IDs, focus, and agent status do not identify an owned terminal. Parley matches the persisted terminal ID, harness kind, and Herdr socket. A pane move preserves its terminal ID and does not trigger cleanup. A replacement pane or changed harness cannot match the saved identity.
+
+When a snapshot proves the original terminal is absent, the host helper takes the same terminal transaction lock as Start and Join. It leaves each completed participant with its persisted Parley session ID. If the terminal owns a room, it stops that exact host session and waits for the room-stopped record and control socket shutdown before marking the room closed. The existing broker reconciliation then releases only that room's Parley-owned SSH routes. Other participants and rooms stay untouched.
+
+The coordinator scans on event subscription startup, lifecycle events, reconnection, and its two-second reconciliation loop. This recovers missed events and retries pending cleanup after restart. An unavailable snapshot or SSH helper preserves the room and participant. Failed cleanup appears as `cleanup_status: "pending"` and `cleanup_error` in `parley herdr status`. Idle/readiness changes and a harness ending while its shell remains open do not trigger cleanup; Herdr 0.9.3 exposes no definitive agent-end event for that case, so cleanup waits for terminal closure.
+
+### Upgrading the helper protocol
+
+This flow uses helper protocol 4. Install/build this plugin on every participating host; incompatible helpers are rejected before participant mutation. Exact binary version equality is unnecessary, but all helpers and the controller must support protocol 4.
 
 A running older coordinator is not replaced silently: doing so would close its active SSH routes. Finish existing routed work, rebuild the plugin, then restart **only the Parley plugin** on the controller and run setup:
 

@@ -44,7 +44,10 @@ func isEventTransportError(err error) bool {
 }
 
 func subscriptionParams() any {
-	return map[string]any{"subscriptions": []map[string]string{{"type": "workspace.metadata_updated"}}}
+	return map[string]any{"subscriptions": []map[string]string{
+		{"type": "workspace.metadata_updated"}, {"type": "workspace.closed"}, {"type": "tab.closed"},
+		{"type": "pane.closed"}, {"type": "pane.exited"}, {"type": "pane.moved"},
+	}}
 }
 func subscriptionRequest() any {
 	return map[string]any{"id": "parley-requests", "method": "events.subscribe", "params": subscriptionParams()}
@@ -159,15 +162,16 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 			}
 			return fmt.Errorf("unexpected subscription response")
 		}
-		if f.Event == "workspace_metadata_updated" {
-			if f.Data.Type != f.Event {
-				return fmt.Errorf("malformed metadata event")
-			}
+		if f.Data.Type != f.Event {
+			return fmt.Errorf("malformed event frame: event data mismatch")
+		}
+		switch f.Event {
+		case "workspace_metadata_updated", "workspace_closed", "tab_closed", "pane_closed", "pane_exited", "pane_moved":
 			select {
 			case ticks <- false:
 			default:
 			}
-		} else {
+		default:
 			return fmt.Errorf("malformed event frame: unexpected event")
 		}
 	}

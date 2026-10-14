@@ -19,9 +19,9 @@ import (
 
 const processWaitDelay = 2 * time.Second
 const PluginID = "parley"
-const HelperVersion = 3
+const HelperVersion = 4
 
-var RequiredCapabilities = []string{"events", "requests", "claim-request", "outcome", "claim-controller", "release-controller", "join-failure", "probe", "rooms", "room", "binding", "probe-route", "join"}
+var RequiredCapabilities = []string{"events", "requests", "claim-request", "outcome", "claim-controller", "release-controller", "join-failure", "probe", "rooms", "room", "binding", "probe-route", "join", "cleanup-terminals"}
 
 type Client struct {
 	HerdrBinary    string
