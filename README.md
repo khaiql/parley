@@ -191,4 +191,4 @@ See [CLAUDE.md](CLAUDE.md) for detailed architecture docs, package dependencies,
 
 ### Herdr rooms
 
-Herdr 0.9.3+ can start and join rooms from existing agent panes, with both message and artifact SSH ports opened automatically. Install the plugin on every participating host, then run `parley herdr setup` on the local controller. See [installation and scope](docs/herdr-plugin.md) and [transport evidence](docs/herdr-transport-proof.md).
+Herdr 0.9.3+ can start and join rooms from existing agent panes, with both message and artifact SSH ports opened automatically. Install the plugin on every participating host, run `parley herdr setup` on the local controller, and add the [focused-pane Start/Join shortcuts](docs/herdr-plugin.md#set-up-focused-pane-shortcuts). Focus an agent with a native session identity, then use the shortcut to enter a topic or room ID. Fresh Codex sessions may report identity only on their first normal turn. See [identity diagnosis and visible errors](docs/herdr-plugin.md#native-identity-and-visible-failures) and [transport evidence](docs/herdr-transport-proof.md).

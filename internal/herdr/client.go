@@ -189,6 +189,28 @@ type apiError struct {
 }
 
 func (e *apiError) Error() string { return e.Code + ": " + e.Message }
+
+// Notify uses the invocation's socket; selecting a remote UI never retargets local CLI defaults.
+func (c *Client) Notify(ctx context.Context, title, body string) error {
+	b, err := socketAPI(ctx, c.HerdrSocket, "notification.show", map[string]string{"title": title, "body": body, "sound": "none"})
+	if err != nil {
+		return err
+	}
+	var wire struct {
+		Result struct {
+			Shown  bool   `json:"shown"`
+			Reason string `json:"reason"`
+		} `json:"result"`
+	}
+	if err = json.Unmarshal(b, &wire); err != nil {
+		return err
+	}
+	if !wire.Result.Shown {
+		return fmt.Errorf("notification not shown: %s", wire.Result.Reason)
+	}
+	return nil
+}
+
 func socketAPI(ctx context.Context, socket, method string, params any) ([]byte, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
