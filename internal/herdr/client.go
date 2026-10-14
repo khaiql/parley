@@ -19,7 +19,7 @@ import (
 
 const processWaitDelay = 2 * time.Second
 const PluginID = "parley"
-const HelperVersion = 2
+const HelperVersion = 3
 
 var RequiredCapabilities = []string{"events", "requests", "claim-request", "outcome", "claim-controller", "release-controller", "join-failure", "probe", "rooms", "room", "binding", "probe-route", "join"}
 
@@ -299,8 +299,12 @@ func installedHelper(b []byte) (string, error) {
 	}
 	return "", fmt.Errorf("helper_missing")
 }
-func shellQuote(s string) string         { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-func helperCommand(binary string) string { return shellQuote(binary) + " herdr rpc" }
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// A login shell restores PATH for Herdr installed in ~/.local/bin on SSH hosts.
+func helperCommand(binary string) string {
+	return "sh -lc " + shellQuote(shellQuote(binary)+" herdr rpc")
+}
 func (c *Client) Call(ctx context.Context, p Peer, r RPCRequest) ([]byte, error) {
 	if e := validateMachine(p.Machine); e != nil {
 		return nil, e
