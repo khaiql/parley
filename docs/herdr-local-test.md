@@ -26,7 +26,7 @@ If setup reports `coordinator_upgrade_required`, follow the [plugin-only upgrade
 
 ## 2. Add and reload shortcuts
 
-In `~/.config/herdr/config.toml`, add these bindings only if absent. Preserve existing entries; resolve any custom key conflicts first:
+On each host where the Parley actions run, add these bindings to `~/.config/herdr/config.toml` only if absent. Mac-only bindings do not advertise custom plugin actions on a saved SSH machine. Preserve existing entries; resolve any custom key conflicts first:
 
 ```toml
 [[keys.command]]
@@ -43,6 +43,8 @@ description = "Parley: Join room"
 ```
 
 For visible in-app toasts, set `delivery = "herdr"` in the existing `[ui.toast]` table, or create that table if absent. Open Herdr's global menu and choose **reload config**. Use `prefix+?`, search for `Parley`, and check both bindings. Default prefix means press Ctrl+B, release, then the next key.
+
+For a saved SSH machine, reload its config from the Mac with `herdr --machine <profile> server reload-config`. For standalone remote attach, use `herdr --remote <host> --remote-keybindings server`; its default local-keybinding mode omits custom plugin commands.
 
 ## 3. Check the actual agent terminals
 
