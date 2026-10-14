@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 )
 
+var ErrFormCancelled = errors.New("cancelled")
+
 // ReadForm treats terminal editing as input, never as an executable command.
 func ReadForm(r io.Reader, op string) (string, error) { return ReadTerminalForm(r, io.Discard, op) }
 
@@ -25,12 +27,15 @@ func ReadTerminalForm(r io.Reader, out io.Writer, op string) (string, error) {
 	reader := bufio.NewReader(r)
 	for {
 		b, err := reader.ReadByte()
+		if errors.Is(err, io.EOF) {
+			return "", ErrFormCancelled
+		}
 		if err != nil {
 			return "", err
 		}
 		switch b {
 		case 27, 3, 4:
-			return "", fmt.Errorf("cancelled")
+			return "", ErrFormCancelled
 		case '\r', '\n':
 			fmt.Fprint(out, "\r\n")
 			value := strings.TrimSpace(string(input))
