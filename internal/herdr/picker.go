@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 )
 
 type RoomChoice struct {
@@ -99,7 +100,7 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 	if err != nil {
 		return catalog, err
 	}
-	appendRoom := func(room Room, host string) {
+	appendRoom := func(ctx context.Context, room Room, host string) {
 		choice := RoomChoice{Room: room, Host: host, Status: "closed"}
 		if !room.Closed {
 			live, err := b.validateRoom(ctx, room)
@@ -114,7 +115,7 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 			}
 		}
 		for _, binding := range state.Bindings {
-			if binding.RoomID == room.ID && binding.SessionID != "" && binding.JoinPhase == "complete" && SameTerminal(binding.Target, target) && bindingMatchesRoom(binding, room, state, b.Client.LocalMachineID) {
+			if binding.RoomID == room.ID && binding.SessionID != "" && binding.JoinPhase == "complete" && SameTerminal(binding.Target, target) && bindingMatchesRoom(binding, room, b.Client.LocalMachineID) {
 				choice.Joined = true
 				break
 			}
@@ -122,11 +123,18 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 		catalog.Rooms = append(catalog.Rooms, choice)
 	}
 	for _, room := range local {
-		appendRoom(room, "Local")
+		appendRoom(ctx, room, "Local")
 	}
 	machines, err := b.Client.Machines(ctx)
 	if err != nil {
 		catalog.Warnings = append(catalog.Warnings, "Peer lookup: "+err.Error())
+	}
+	remaining := 0
+	for _, machine := range machines {
+		peer, ok := state.Peers[machine.ID]
+		if machine.Enabled && ok && peer.Machine.Target == machine.Target && peer.Machine.Session == machine.Session {
+			remaining++
+		}
 	}
 	for _, machine := range machines {
 		if !machine.Enabled {
@@ -141,8 +149,16 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 			catalog.Warnings = append(catalog.Warnings, host+": session_unverified (controller activation required)")
 			continue
 		}
-		binary, err := b.Client.helper(ctx, machine)
+		// Reserve time for later hosts when an unrelated peer stalls.
+		budget := 5 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			budget = min(budget, time.Until(deadline)/time.Duration(remaining))
+		}
+		remaining--
+		lookup, cancel := context.WithTimeout(ctx, budget)
+		binary, err := b.Client.helper(lookup, machine)
 		if err != nil || binary != peer.Binary {
+			cancel()
 			if err == nil {
 				err = fmt.Errorf("helper_changed (controller refresh required)")
 			}
@@ -150,7 +166,8 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 			continue
 		}
 		var records map[string]Room
-		if err := b.peerCall(ctx, peer, RPCRequest{Operation: "rooms"}, &records); err != nil {
+		if err := b.peerCall(lookup, peer, RPCRequest{Operation: "rooms"}, &records); err != nil {
+			cancel()
 			catalog.Warnings = append(catalog.Warnings, host+": "+err.Error())
 			continue
 		}
@@ -165,8 +182,9 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 				catalog.Warnings = append(catalog.Warnings, host+": "+err.Error())
 				continue
 			}
-			appendRoom(room, host)
+			appendRoom(lookup, room, host)
 		}
+		cancel()
 	}
 	counts := map[string]int{}
 	for _, choice := range catalog.Rooms {
@@ -192,14 +210,15 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 	return catalog, nil
 }
 
-func bindingMatchesRoom(binding Binding, room Room, state State, localMachine string) bool {
+func bindingMatchesRoom(binding Binding, room Room, localMachine string) bool {
 	ref := RoomHostReference(room, localMachine)
 	if binding.RoomHost != nil {
 		return *binding.RoomHost == ref
 	}
-	if binding.Target.HerdrSocket == room.Host.HerdrSocket && binding.Routed == room.Source {
-		return true
+	target := binding.Target
+	if target.MachineID == "self" {
+		target.MachineID = localMachine
 	}
-	cached, ok := state.Rooms[room.ID]
-	return ok && RoomHostReference(cached, localMachine) == ref && cached.Source == room.Source
+	// A room-ID cache cannot prove which host owns a legacy forwarded participant.
+	return target.MachineID == ref.MachineID && target.HerdrSocket == room.Host.HerdrSocket && binding.Routed == room.Source
 }

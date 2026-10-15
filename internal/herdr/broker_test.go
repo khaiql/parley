@@ -1029,6 +1029,7 @@ func TestHostJoinKnownNoEffectCrashAllowsNewRequestOnly(t *testing.T) {
 		t.Fatal(out, e, calls)
 	}
 	r.ID = "new"
+	r.Target.NativeSession = ""
 	out, e = h.Join(context.Background(), r, endpoints)
 	if e != nil || out.Binding == nil || calls != 1 {
 		t.Fatal(out, e, calls)

@@ -117,3 +117,15 @@ func TestPickRoomReturnsTerminalReadFailure(t *testing.T) {
 		t.Fatal("terminal read error retried", err)
 	}
 }
+
+func TestPickRoomRejectsWholeInvalidEntry(t *testing.T) {
+	for _, input := range []string{"\t1\n", strings.Repeat("x", 513) + "1\r"} {
+		catalog := herdr.RoomCatalog{Rooms: []herdr.RoomChoice{{Room: herdr.Room{ID: "room-a"}, Status: "open"}}}
+		got, err := pickRoom(strings.NewReader(input), &bytes.Buffer{}, func() (herdr.RoomCatalog, error) {
+			return catalog, nil
+		}, func(herdr.Room) error { t.Error("rejected entry triggered selection"); return nil })
+		if got != "" || !errors.Is(err, herdr.ErrFormCancelled) {
+			t.Fatalf("rejected entry joined %q, err=%v", got, err)
+		}
+	}
+}

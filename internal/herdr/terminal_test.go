@@ -33,6 +33,35 @@ func TestTerminalParticipantReusesLegacyBinding(t *testing.T) {
 	}
 }
 
+func TestTerminalParticipantRecoversLegacyIntent(t *testing.T) {
+	for _, phase := range []string{"intent", "uncertain"} {
+		t.Run(phase, func(t *testing.T) {
+			h, req, root := brokerFixture(t)
+			legacy := Binding{RoomID: req.RoomID, Target: req.Target, ParticipantName: "legacy", StateDir: root, Routed: Endpoints{Descriptor: "parley://127.0.0.1:49001/room-a", ArtifactURL: "http://127.0.0.1:49002/rooms/room-a/artifacts"}, JoinPhase: phase, JoinRequestID: req.ID}
+			if err := h.journal(req); err != nil {
+				t.Fatal(err)
+			}
+			originalFixture(t, root, legacy, true)
+			if err := h.saveBinding(legacy); err != nil {
+				t.Fatal(err)
+			}
+			req.ID, req.Target.NativeSession = "retry", ""
+			h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) {
+				t.Fatal("created a duplicate participant")
+				return nil, nil
+			}
+			result, err := h.Join(context.Background(), req, legacy.Routed)
+			if err != nil || result.Binding == nil || result.Binding.SessionID != "psn_original" {
+				t.Fatal(result, err)
+			}
+			binding, err := h.Store.Binding(HostBindingKey(legacy.RoomID, legacy.Target))
+			if err != nil || binding.JoinPhase != "complete" {
+				t.Fatal("legacy key was not recovered", binding, err)
+			}
+		})
+	}
+}
+
 func TestLegacyJoinUsesTerminalTransactionLock(t *testing.T) {
 	h, req, root := brokerFixture(t)
 	terminal := req.Target

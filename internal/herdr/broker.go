@@ -379,9 +379,6 @@ func (h *HostOperations) reuseTerminalBinding(req *Request, endpoints Endpoints)
 		return "binding_ambiguous", err
 	}
 	if prior.Target.NativeSession != req.Target.NativeSession {
-		if prior.JoinPhase != "complete" {
-			return "operation_uncertain", fmt.Errorf("legacy participant intent requires recovery")
-		}
 		req.Target.NativeSession = prior.Target.NativeSession
 	}
 	if prior.Routed != (Endpoints{}) && prior.Routed != endpoints || prior.RoomHost != nil && req.RoomHost != nil && *prior.RoomHost != *req.RoomHost {
@@ -897,11 +894,7 @@ func (b *Broker) checkBindingHost(ctx context.Context, req Request, existing Bin
 	if err != nil {
 		return "room_unavailable", err
 	}
-	state, err := b.Store.Read()
-	if err != nil {
-		return "room_unavailable", err
-	}
-	if !bindingMatchesRoom(existing, selected, state, b.Client.LocalMachineID) {
+	if !bindingMatchesRoom(existing, selected, b.Client.LocalMachineID) {
 		return "room_mismatch", fmt.Errorf("existing participant belongs to another host")
 	}
 	return "", nil

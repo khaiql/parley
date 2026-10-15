@@ -25,6 +25,7 @@ func ReadTerminalForm(r io.Reader, out io.Writer, op string) (string, error) {
 		return "", fmt.Errorf("unsupported action")
 	}
 	input := []byte{}
+	var inputErr error
 	reader := bufio.NewReader(r)
 	for {
 		b, err := reader.ReadByte()
@@ -39,6 +40,9 @@ func ReadTerminalForm(r io.Reader, out io.Writer, op string) (string, error) {
 			return "", ErrFormCancelled
 		case '\r', '\n':
 			fmt.Fprint(out, "\r\n")
+			if inputErr != nil {
+				return "", inputErr
+			}
 			value := strings.TrimSpace(string(input))
 			if value == "" || !utf8.Valid(input) {
 				return "", fmt.Errorf("%w: nonempty UTF-8 input required", ErrFormInput)
@@ -56,13 +60,17 @@ func ReadTerminalForm(r io.Reader, out io.Writer, op string) (string, error) {
 				fmt.Fprint(out, "\b \b")
 			}
 		default:
+			if inputErr != nil {
+				continue
+			}
 			if b < 32 {
-				return "", fmt.Errorf("%w: control character rejected", ErrFormInput)
+				inputErr = fmt.Errorf("%w: control character rejected", ErrFormInput)
+				continue
 			}
 			input = append(input, b)
 			_, _ = out.Write([]byte{b})
 			if len(input) > 512 {
-				return "", fmt.Errorf("%w: input exceeds 512 bytes", ErrFormInput)
+				inputErr = fmt.Errorf("%w: input exceeds 512 bytes", ErrFormInput)
 			}
 		}
 	}
