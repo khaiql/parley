@@ -323,7 +323,10 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 			if err := broker.Drain(ctx, local); err != nil {
 				return err
 			}
-			return (&HostOperations{Store: h.Store, Client: c}).ReconcileTerminal(ctx)
+			if err := (&HostOperations{Store: h.Store, Client: c}).ReconcileTerminal(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, "terminal cleanup:", err)
+			}
+			return nil
 		}); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
@@ -389,7 +392,10 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 					if err := broker.Drain(ctx, peer); err != nil {
 						return err
 					}
-					return broker.reconcileTerminalPeer(ctx, peer)
+					if err := broker.reconcileTerminalPeer(ctx, peer); err != nil {
+						fmt.Fprintln(os.Stderr, "peer", peer.Machine.ID, "terminal cleanup:", err)
+					}
+					return nil
 				})
 				if e != nil && streamCtx.Err() == nil {
 					fmt.Fprintln(os.Stderr, "peer", p.Machine.ID, e)

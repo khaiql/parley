@@ -34,6 +34,8 @@ func eventFixture(t *testing.T) *eventHelperFixture {
 	root, _ = filepath.EvalSymlinks(root)
 	f := &eventHelperFixture{root: root, socket: filepath.Join(root, "h.sock"), inventory: filepath.Join(root, "inventory"), fail: filepath.Join(root, "fail"), relay: make(chan net.Conn, 4)}
 	t.Setenv("PATH", root+":"+os.Getenv("PATH"))
+	// Avoid the race runtime's artificial exit delay in helper subprocesses.
+	t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
 	t.Setenv("PARLEY_RPC_REJECTION_CHILD", "1")
 	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
 	write := func(name, body string) {

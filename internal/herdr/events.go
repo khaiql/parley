@@ -32,7 +32,7 @@ func EventFailureCode(err error) string {
 }
 
 func isEventTransportError(err error) bool {
-	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, errEventProcess) {
+	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, errEventProcess) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
 	var network *net.OpError
@@ -371,7 +371,7 @@ func (c *Client) OpenEvents(ctx context.Context, p Peer) (io.ReadCloser, error) 
 		return nil, e
 	}
 	// #nosec G204 -- The saved target is validated; the trusted executable is shell-quoted and operation data uses stdin.
-	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ClearAllForwardings=yes", "--", p.Machine.Target, helperCommand(p.Binary))
+	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "--", p.Machine.Target, helperCommand(p.Binary))
 	cmd.Stdin = bytes.NewReader(b)
 	stderr := &boundedBuffer{limit: 64 * 1024, cancel: cancel}
 	cmd.Stderr = stderr

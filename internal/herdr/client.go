@@ -7,9 +7,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -38,10 +40,15 @@ func (c *Client) runner() Run {
 	return func(ctx context.Context, binary string, args []string, stdin []byte) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		if c.Run != nil {
-			return c.Run(ctx, binary, args, stdin)
+		run := c.Run
+		if run == nil {
+			run = RunProcess
 		}
-		return RunProcess(ctx, binary, args, stdin)
+		data, err := run(ctx, binary, args, stdin)
+		if err != nil && ctx.Err() != nil {
+			return data, errors.Join(ctx.Err(), err)
+		}
+		return data, err
 	}
 }
 func (c *Client) Machines(ctx context.Context) ([]Machine, error) {
@@ -320,7 +327,12 @@ func (c *Client) Call(ctx context.Context, p Peer, r RPCRequest) ([]byte, error)
 	if e != nil {
 		return nil, e
 	}
-	return c.runner()(ctx, "ssh", []string{"-T", "-o", "BatchMode=yes", "-o", "ClearAllForwardings=yes", "--", p.Machine.Target, helperCommand(p.Binary)}, b)
+	data, err := c.runner()(ctx, "ssh", []string{"-T", "-o", "BatchMode=yes", "-o", "ClearAllForwardings=yes", "--", p.Machine.Target, helperCommand(p.Binary)}, b)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 255 {
+		err = fmt.Errorf("%w: %w", ErrHostUnavailable, err)
+	}
+	return data, err
 }
 
 // Parley accepts only a fixed helper operation; operation data belongs in stdin.
