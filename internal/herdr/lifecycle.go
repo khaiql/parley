@@ -505,7 +505,7 @@ func (h HostSession) CheckCoordinator(ctx context.Context) error {
 		return fmt.Errorf("coordinator_unavailable: %w", err)
 	}
 	if result.Version != HelperVersion {
-		return fmt.Errorf("coordinator_upgrade_required: rebuild the plugin, disable/enable only Parley, then run parley herdr setup; existing SSH routes close during this plugin restart, agents remain running")
+		return fmt.Errorf("coordinator_upgrade_required: install the matching plugin bundle on each host, disable only Parley, wait for its coordinator to exit, enable it, then run parley herdr setup; existing SSH routes close during this plugin restart, agents remain running")
 	}
 	return nil
 }

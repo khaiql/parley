@@ -2,24 +2,64 @@
 
 For a review checkout, use the [local test procedure and verifier](herdr-local-test.md) to exercise the real shortcuts and both message/artifact endpoints.
 
-Install Parley on every participating host. Herdr 0.9.3 or newer, Go, and OpenSSH are required. The first manifest builds the CLI during installation.
+### Install a prebuilt release
+
+Install the same release on every participating host. Requirements: Herdr 0.9.3+, OpenSSH, `sh`, `curl`, `tar`, standard Unix tools, and `sha256sum` (Linux) or `shasum` (macOS). Go and a compiler are development/CI dependencies only.
+
+Choose a tag from [GitHub Releases](https://github.com/khaiql/parley/releases) that includes `install-herdr.sh` and `parley-herdr_v<version>_<OS>_<arch>.tar.gz`. Older CLI-only releases do not contain the plugin. Until the first bundle release is published, use the contributor workflow below; these assets do not exist on older tags.
+
+On the controller and on each participant host, with the intended Herdr session running:
 
 ```sh
-herdr plugin install khaiql/parley
-parley herdr setup
+VERSION=vX.Y.Z  # Replace with the chosen bundle release; prerelease tags work too.
+INSTALLER="$(mktemp)"
+curl -fsSL "https://github.com/khaiql/parley/releases/download/$VERSION/install-herdr.sh" -o "$INSTALLER" &&
+  PLUGIN_ROOT="$(sh "$INSTALLER" "$VERSION")" &&
+  rm -f "$INSTALLER" &&
+  printf 'Staged plugin: %s\n' "$PLUGIN_ROOT"
 ```
 
-Run setup on the local controller, with the intended Herdr session selected. Setup records a unique controller identity for that server socket and starts its detached coordinator immediately, including when the server is already running. Later Herdr server startups restore that coordinator. Linking or enabling a plugin does not run Herdr startup hooks; run setup after first activation. Unconfigured and participant sessions do not launch a coordinator.
+After successful staging, link/enable **only for first installation**:
 
-For development, build before linking the absolute checkout; link does not run builds:
+```sh
+herdr plugin link "$PLUGIN_ROOT" --disabled &&
+  herdr plugin enable parley &&
+  "$PLUGIN_ROOT/bin/parley" version
+```
+
+If Parley is already installed or linked, follow [update and rollback](#update-and-rollback) before changing its registration.
+
+The installer selects Linux/macOS and amd64/arm64 using the host's OS/architecture. It downloads only the selected tagged bundle plus that release's `checksums.txt`, verifies SHA-256, and checks the executable, manifest version, bundled skill, and helper protocol before staging an immutable directory under `~/.local/share/parley/herdr/<tag>/<OS>_<arch>`. It prints the absolute directory to link. Repeating the same installation reuses matching files; a differing existing release is refused. Missing assets, unsupported platforms, download/checksum failures, and incompatible or unlaunchable helpers leave existing releases usable. No Go process, module fetch, checkout, or manual executable copy is involved. Checksums protect download integrity; the release publisher and downloaded installer remain trusted code.
+
+[Herdr 0.9.3 installation](https://github.com/herdrdev/herdr/blob/v0.9.3/docs/next/website/src/content/docs/plugins.mdx#install-and-link) supports GitHub source clones and local directory links, not release-archive URLs or manifest download fields. Use the staged bundle with `plugin link`; `herdr plugin install khaiql/parley` is not the prebuilt install path. Installing the standalone CLI with Homebrew or `install.sh` also does not supply the plugin's manifest, `bin/parley`, and skill together. CLI/Homebrew distribution remains independent.
+
+Run setup **only on the controller**, with the intended Herdr session selected:
+
+```sh
+"$PLUGIN_ROOT/bin/parley" herdr setup
+```
+
+Setup records a unique controller identity for that server socket and starts its detached coordinator immediately, including when the server is already running. Later Herdr server startups restore that coordinator. Linking or enabling a plugin does not run Herdr startup hooks; run setup after first controller activation. Unconfigured and participant sessions do not launch a coordinator.
+
+### SSH participants
+
+For a Mac controller and Ubuntu participant, install/link/enable the same version on both hosts using the commands above. Run setup on the Mac only; setup on Ubuntu would create a conflicting controller. Keep each host's own config/state and credentials local. The controller verifies helper protocol/capabilities and claims the remote session before subscribing; it never copies an executable or credentials to the remote host.
+
+Enable the intended saved SSH profiles in Herdr. Each profile must identify its named Herdr session, or select one uniquely verified running session. Helper and tunnel connections require noninteractive SSH authentication; verify `ssh -o BatchMode=yes <saved-target> true`. A Herdr connection authenticated with a server password does not authenticate those separate connections. Fixed helper calls use the login shell environment so Herdr installed in `~/.local/bin` is found. A different remote controller owner, missing helper, disabled plugin, incompatible capability, authentication failure, or host-key refusal remains visible in the coordinator log. Configure SSH permission and trust normally; installing the bundle does not configure either.
+
+Add the [focused-pane shortcuts](#set-up-focused-pane-shortcuts) on each host too. On Ubuntu, opening Join requests the controller's room catalog through the existing activated connection. Validate Start/Join, the agent's delivered binary/skill paths, and actual message/artifact exchange; listing rooms alone does not prove collaboration. See the [native acceptance procedure](herdr-distribution-proof.md).
+
+### Build from source (contributors)
+
+Contributors need Go matching `go.mod`. Build before linking an absolute checkout; link does not run builds, and the manifest has no build command:
 
 ```sh
 go build -o bin/parley ./cmd/parley
 herdr plugin link /absolute/path/to/parley
-parley herdr setup
+/absolute/path/to/parley/bin/parley herdr setup  # Controller only.
 ```
 
-Enable the intended saved SSH profiles in Herdr. Each remote profile must identify its named Herdr session, or select one uniquely verified running session. Install/link the same plugin on those hosts normally. Run `parley herdr setup` only on the controller (the Mac in a Mac-to-Ubuntu flow), not on its remote participants; setup on both hosts creates conflicting controllers. The coordinator verifies the installed helper and claims its session before subscribing. It does not copy a helper to a remote host. Its helper and tunnel connections require noninteractive SSH authentication; verify `ssh -o BatchMode=yes <saved-target> true`. A Herdr connection authenticated with a server password does not by itself authenticate those separate connections. Fixed helper calls use the login shell environment so Herdr installed in `~/.local/bin` is found. A different remote controller owner, missing helper, disabled plugin, incompatible capability, authentication failure, or host-key refusal remains visible in the coordinator log. Configure SSH permission and trust normally; Parley never bypasses either.
+The source checkout must retain `skills/parley/`, including `scripts/ensure-parley`. Release packaging uses the existing GoReleaser build matrix and stamps the packaged manifest with the same version as the binary. Standalone CLI archives and Homebrew retain their original layout.
 
 ### Set up focused-pane shortcuts
 
@@ -51,7 +91,7 @@ Parley targets the captured Herdr socket, terminal ID, and detected harness kind
 
 Preflight and form failures request a silent Herdr notification and retain structured JSON/plugin-log diagnostics. Shell targets explain how to focus an agent; missing terminal or harness detection explains the native targeting requirement; incompatible helpers and busy modals give recovery steps. Failed submitted outcomes stay visible in the form until Enter and then exit unsuccessfully. Escape or EOF cancels input without a failure notification.
 
-Notifications follow Herdr's configured toast delivery. To display them inside Herdr, use `delivery = "herdr"` in your existing `[ui.toast]` table, then reload configuration. With delivery disabled, no foreground client, a busy toast, or rate limiting, delivery can fail; the original diagnostic includes `notification_failed` and the native reason. An unavailable socket also prevents notification; it never falls back to another local session. If the Parley executable cannot be launched at all, inspect Herdr's own action launch log and repair the plugin build/install:
+Notifications follow Herdr's configured toast delivery. To display them inside Herdr, use `delivery = "herdr"` in your existing `[ui.toast]` table, then reload configuration. With delivery disabled, no foreground client, a busy toast, or rate limiting, delivery can fail; the original diagnostic includes `notification_failed` and the native reason. An unavailable socket also prevents notification; it never falls back to another local session. If the Parley executable cannot be launched at all, inspect Herdr's own action launch log and repair the plugin bundle installation:
 
 ```sh
 herdr --session <name> plugin log list --plugin parley --limit 5
@@ -97,18 +137,42 @@ When a snapshot proves the original terminal is absent, the host helper takes th
 
 The coordinator scans on event subscription startup, lifecycle events, reconnection, and its two-second reconciliation loop. This recovers missed events and retries pending cleanup after restart. An unavailable snapshot or SSH helper preserves the room and participant. Failed cleanup appears as `cleanup_status: "pending"` and `cleanup_error` in `parley herdr status`. Idle/readiness changes and a harness ending while its shell remains open do not trigger cleanup; Herdr 0.9.3 exposes no definitive agent-end event for that case, so cleanup waits for terminal closure.
 
-### Upgrading the helper protocol
+### Update and rollback
 
-This flow uses helper protocol 4. Install/build this plugin on every participating host; incompatible helpers are rejected before participant mutation. Exact binary version equality is unnecessary, but all helpers and the controller must support protocol 4.
+The bundle installer only stages files. It does not link/enable plugins, run setup, restart coordinators, edit configuration, touch standalone binaries, or change SSH authentication. Keep the old release directories: running coordinators/agents may still reference their executable and skill paths.
 
-A running older coordinator is not replaced silently: doing so would close its active SSH routes. Finish existing routed work, rebuild the plugin, then restart **only the Parley plugin** on the controller and run setup:
+Record each host's currently linked `plugin_root` with `herdr plugin list --json`. Stage the new **same tag on all hosts** with the download/staging commands above (stop before the first-install link/enable commands), before changing any registration. If staging fails, keep using the old registration. Plugin registration and enabled state are global to the OS user across Herdr sessions. Before activation, finish routed work in every affected session: disabling or relinking the plugin can make routes unavailable. Do not restart Herdr or agents.
+
+After routed work is finished, disable only Parley on the controller. Relink/enable the matching staged bundles on participants, then relink/enable the controller and run its setup:
 
 ```sh
+# Controller first, after draining routed work:
 herdr plugin disable parley
-herdr plugin enable parley
-parley herdr setup
 ```
 
-Agents and Herdr servers remain running. Existing rooms, participant IDs, runtime pins, ownership, and cursors remain stored; routes close during the plugin restart. Startup and local cross-host submission report `coordinator_upgrade_required` until this restart. No participant is recreated to repair an incompatible helper.
+Keep the controller plugin disabled until all its previous coordinator processes exit. Use `ps -axo pid,command` to identify the exact old bundle executable running `herdr broker --native-session <name>` for each affected session; confirm those PIDs disappear before continuing. The coordinator observes disable on its two-second polling loop, and shutdown may wait for owned work to finish. A quick disable/enable can leave the old process running, even when setup reports success for the same protocol. If it does not exit, keep Parley disabled and inspect its coordinator log; do not replace a live coordinator.
+
+Then activate the staged bundles:
+
+```sh
+# Each participant: NEW_ROOT is its staged absolute bundle directory. No setup.
+herdr plugin link "$NEW_ROOT" --disabled
+herdr plugin enable parley
+
+# Controller last: NEW_ROOT is this host's staged absolute bundle directory.
+herdr plugin link "$NEW_ROOT" --disabled
+herdr plugin enable parley
+"$NEW_ROOT/bin/parley" herdr setup
+```
+
+Herdr link keeps the plugin ID `parley` and its separate config/state directories. Do not uninstall, delete config/state, or copy another host's files. Existing controller/participant ownership, runtime-root pins, rooms, participant IDs, and cursors remain stored. After relinking, run setup only in each existing controller session to restore its coordinator; never run setup in participant sessions. Plugin restart closes owned SSH routes; an existing disconnected participant is not recreated or silently repaired. Use new disposable work to validate the upgraded flow, and inspect durable status for prior work.
+
+For rollback, finish any new routed work, disable Parley on the controller, confirm its coordinators exit, and repeat the same sequence using each host's recorded **old root**. Enable participants first and run setup only on the controller. Retain the same compatible release across hosts. This distribution change does not migrate runtime data; rollback to a release with incompatible runtime data is not supported. Neither update nor rollback restarts agents or Herdr.
+
+### Upgrading the helper protocol
+
+This flow uses helper protocol 4. The installer checks that the downloaded binary supports protocol 4, and runtime activation retains the existing protocol/capability checks before participant mutation. Use one release across hosts to keep the manifest, helper and skills aligned, even though the runtime protocol does not require exact version equality.
+
+A running older coordinator is never replaced silently: doing so would close active SSH routes. After installing the new matching bundles, follow [update and rollback](#update-and-rollback). When staying on the same linked source root, finish routed work, rebuild, then disable only Parley, confirm its coordinators exit, then enable it and run that root's `bin/parley herdr setup` on the controller. `coordinator_upgrade_required` remains visible until the explicit plugin restart. Participant setup is never required.
 
 Native API contracts follow the [Herdr 0.9.3 plugin documentation](https://github.com/herdrdev/herdr/blob/v0.9.3/docs/next/website/src/content/docs/plugins.mdx) and [socket API](https://github.com/herdrdev/herdr/blob/v0.9.3/docs/next/website/src/content/docs/socket-api.mdx).

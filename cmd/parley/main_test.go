@@ -20,6 +20,7 @@ import (
 	"github.com/khaiql/parley/internal/artifact"
 	"github.com/khaiql/parley/internal/descriptor"
 	"github.com/khaiql/parley/internal/eventlog"
+	"github.com/khaiql/parley/internal/herdr"
 	"github.com/khaiql/parley/internal/model"
 	"github.com/khaiql/parley/internal/paths"
 	parleyRuntime "github.com/khaiql/parley/internal/runtime"
@@ -186,15 +187,19 @@ func TestVersionJSON(t *testing.T) {
 	assertTopLevelStatus(t, out, "ok")
 
 	var body struct {
-		Status          string `json:"status"`
-		Version         string `json:"version"`
-		ProtocolVersion string `json:"protocol_version"`
+		Status             string `json:"status"`
+		Version            string `json:"version"`
+		ProtocolVersion    string `json:"protocol_version"`
+		HerdrHelperVersion int    `json:"herdr_helper_version"`
 	}
 	if err := json.Unmarshal(out, &body); err != nil {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
 	if body.Version != "dev" {
 		t.Fatalf("version = %q, want dev", body.Version)
+	}
+	if body.HerdrHelperVersion != herdr.HelperVersion {
+		t.Fatalf("herdr_helper_version = %d, want %d", body.HerdrHelperVersion, herdr.HelperVersion)
 	}
 	if body.ProtocolVersion != "v1" {
 		t.Fatalf("protocol_version = %q, want v1", body.ProtocolVersion)
