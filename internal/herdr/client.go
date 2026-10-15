@@ -19,6 +19,7 @@ import (
 
 const processWaitDelay = 2 * time.Second
 const PluginID = "parley"
+const HelperVersion = 2
 
 var RequiredCapabilities = []string{"events", "requests", "claim-request", "outcome", "claim-controller", "release-controller", "join-failure", "probe", "rooms", "room", "binding", "probe-route", "join"}
 
@@ -118,6 +119,9 @@ func (c *Client) Agent(ctx context.Context, t AgentTarget) (AgentTarget, string,
 		if e = json.Unmarshal(probe, &verified); e != nil {
 			return t, "", e
 		}
+		if verified.Version != HelperVersion {
+			return t, "", fmt.Errorf("helper_incompatible")
+		}
 		if verified.Config.HerdrSocket != peer.Config.HerdrSocket || verified.Config.SessionKey != peer.Config.SessionKey {
 			return t, "", fmt.Errorf("session_mismatch")
 		}
@@ -131,12 +135,13 @@ func (c *Client) Agent(ctx context.Context, t AgentTarget) (AgentTarget, string,
 		if live.MachineID != peer.Config.MachineID || live.HerdrSocket != peer.Config.HerdrSocket {
 			return t, "", fmt.Errorf("session_mismatch")
 		}
-		if t.TerminalID != "" && t.TerminalID != live.TerminalID || t.Kind != "" && t.Kind != live.Kind || t.NativeSession != "" && t.NativeSession != live.NativeSession {
+		if t.TerminalID != "" && t.TerminalID != live.TerminalID || t.Kind != "" && t.Kind != live.Kind {
 			return t, "", fmt.Errorf("agent_replaced")
 		}
 		if e := validateRequest(Request{ID: "identity", Op: "join", RoomID: "identity", Target: live}); e != nil {
 			return t, "", fmt.Errorf("agent_identity_required: %w", e)
 		}
+		live.NativeSession = t.NativeSession // Legacy storage key, never native identity authority.
 		return live, verified.AgentStatus, nil
 	}
 	if e != nil {
@@ -150,11 +155,6 @@ func (c *Client) Agent(ctx context.Context, t AgentTarget) (AgentTarget, string,
 				TerminalID  string `json:"terminal_id"`
 				Kind        string `json:"agent"`
 				Status      string `json:"agent_status"`
-				Session     *struct {
-					Kind  string `json:"kind"`
-					Agent string `json:"agent"`
-					Value string `json:"value"`
-				} `json:"agent_session"`
 			} `json:"agent"`
 		} `json:"result"`
 		Error *apiError `json:"error"`
@@ -166,17 +166,16 @@ func (c *Client) Agent(ctx context.Context, t AgentTarget) (AgentTarget, string,
 		return t, "", wire.Error
 	}
 	a := wire.Result.Agent
-	if safeID(a.Kind) != nil || a.TerminalID == "" || a.Session == nil || a.Session.Value == "" || (a.Session.Kind != "id" && a.Session.Kind != "path") || a.Session.Agent != a.Kind {
+	if safeID(a.Kind) != nil || a.Kind == "shell" || a.TerminalID == "" {
 		return t, "", fmt.Errorf("agent_identity_required")
 	}
-	if t.TerminalID != "" && t.TerminalID != a.TerminalID || t.Kind != "" && t.Kind != a.Kind || t.NativeSession != "" && t.NativeSession != a.Session.Value {
+	if t.TerminalID != "" && t.TerminalID != a.TerminalID || t.Kind != "" && t.Kind != a.Kind {
 		return t, "", fmt.Errorf("agent_replaced")
 	}
 	t.PaneID = a.PaneID
 	t.WorkspaceID = a.WorkspaceID
 	t.TerminalID = a.TerminalID
 	t.Kind = a.Kind
-	t.NativeSession = a.Session.Value
 	if e := validateRequest(Request{ID: "identity", Op: "join", RoomID: "identity", Target: t}); e != nil {
 		return t, "", fmt.Errorf("agent_identity_required: %w", e)
 	}

@@ -233,7 +233,10 @@ func (h HostSession) Startup(ctx context.Context, binary, session string) error 
 		return err
 	}
 	return lockFile(ctx, path+".launch", func() error {
-		return LaunchHelper(ctx, binary, []string{"herdr", "broker", "--native-session", session}, path)
+		if err := LaunchHelper(ctx, binary, []string{"herdr", "broker", "--native-session", session}, path); err != nil {
+			return err
+		}
+		return h.CheckCoordinator(ctx)
 	})
 }
 
@@ -327,7 +330,7 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 	failed := make(chan error, 1)
 	workers.Go(func() {
 		failed <- ServeLocal(ctx, path, local, func(ctx context.Context, p Peer, r Request) (Response, error) {
-			if r.Op == "status" {
+			if r.Op == "status" || r.Op == "probe" {
 				return broker.Handle(ctx, p, r)
 			}
 			if r.Op != "join" {
@@ -466,4 +469,24 @@ func (h HostSession) PinTrustedRuntime(c *Client) error {
 		return err
 	}
 	return h.Store.PinRuntimeRoot(p.Root)
+}
+
+// Do not replace a running older coordinator and silently drop its live routes.
+func (h HostSession) CheckCoordinator(ctx context.Context) error {
+	owner, err := h.CoordinatorConfig()
+	if err != nil {
+		return err
+	}
+	path, err := h.CoordinatorSocket()
+	if err != nil {
+		return err
+	}
+	result, err := CallLocal(ctx, path, Request{ID: "version", Op: "probe", Target: AgentTarget{MachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket}})
+	if err != nil {
+		return fmt.Errorf("coordinator_unavailable: %w", err)
+	}
+	if result.Version != HelperVersion {
+		return fmt.Errorf("coordinator_upgrade_required: rebuild the plugin, disable/enable only Parley, then run parley herdr setup; existing SSH routes close during this plugin restart, agents remain running")
+	}
+	return nil
 }

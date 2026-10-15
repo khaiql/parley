@@ -129,7 +129,15 @@ func (r RPCRequest) Validate() error {
 		allowed.ControllerID = r.ControllerID
 		allowed.SessionKey = r.SessionKey
 		allowed.BindingKey = r.BindingKey
-		if !validDigest(r.BindingKey) {
+		allowed.Request = r.Request
+		if r.Request != nil {
+			if r.BindingKey != "" || r.Request.Op != "join" {
+				return fmt.Errorf("binding requires join request or key")
+			}
+			if e := validateRequest(*r.Request); e != nil {
+				return e
+			}
+		} else if !validDigest(r.BindingKey) {
 			return fmt.Errorf("invalid binding key")
 		}
 	case "probe-route":
@@ -207,7 +215,7 @@ func ManagePeer(ctx context.Context, c *Client, s *Store, m Machine) (Peer, erro
 		return p, e
 	}
 	key, e := SessionKey(probe.Config.HerdrSocket)
-	if e != nil || key != probe.Config.SessionKey || probe.Version != 1 {
+	if e != nil || key != probe.Config.SessionKey || probe.Version != HelperVersion {
 		return p, fmt.Errorf("helper_incompatible")
 	}
 	for _, wanted := range RequiredCapabilities {
@@ -388,7 +396,7 @@ func (h HostSession) Dispatch(ctx context.Context, r RPCRequest) (any, error) {
 		return nil, e
 	}
 	if r.Operation == "probe" && r.Target == "" {
-		return ProbeResult{Version: 1, Config: h.Config, Capabilities: append([]string(nil), RequiredCapabilities...)}, nil
+		return ProbeResult{Version: HelperVersion, Config: h.Config, Capabilities: append([]string(nil), RequiredCapabilities...)}, nil
 	}
 	if r.SessionKey != h.Config.SessionKey {
 		return nil, fmt.Errorf("session_mismatch")
@@ -437,7 +445,7 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 		if e != nil {
 			return nil, e
 		}
-		return ProbeResult{Version: 1, Config: owner, Capabilities: append([]string(nil), RequiredCapabilities...), Agent: &agent, AgentStatus: status}, nil
+		return ProbeResult{Version: HelperVersion, Config: owner, Capabilities: append([]string(nil), RequiredCapabilities...), Agent: &agent, AgentStatus: status}, nil
 	case "claim-controller", "release-controller":
 		return owner, nil
 	case "requests":
@@ -523,52 +531,7 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 		c := &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket, RuntimeRoot: p.Root}
 		return (&HostOperations{h.Store, c}).liveRoom(ctx, room)
 	case "binding":
-		state, e := h.Store.Read()
-		if e != nil {
-			return nil, e
-		}
-		binding, ok := state.Bindings[r.BindingKey]
-		if !ok {
-			return nil, fmt.Errorf("binding_missing")
-		}
-		if e := safeID(binding.RoomID); e != nil {
-			return nil, e
-		}
-		target, e := h.normalizedTarget(binding.Target, owner)
-		if e != nil {
-			return nil, e
-		}
-		binding.Target = target
-		if HostBindingKey(binding.RoomID, target) != r.BindingKey {
-			return nil, fmt.Errorf("binding key mismatch")
-		}
-		if _, e = h.Store.pinnedPaths(); e != nil {
-			return nil, fmt.Errorf("runtime_root_unpinned: %w", e)
-		}
-		operations := &HostOperations{h.Store, &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket}}
-		e = h.Store.WithBinding(ctx, "join:"+r.BindingKey, func() error {
-			current, e := h.Store.Binding(r.BindingKey)
-			if e != nil {
-				return e
-			}
-			current.Target.MachineID = owner.MachineID
-			original, code, originalErr := operations.original(ctx, current)
-			switch code {
-			case "":
-				binding = original
-				return operations.saveBinding(original)
-			case "participant_disconnected":
-				binding = current
-				binding.Status = "offline"
-				return nil
-			default:
-				binding = current
-				binding.Status = "uncertain"
-				_ = originalErr
-				return nil
-			}
-		})
-		return binding, e
+		return h.readBinding(ctx, r, owner)
 	case "join-failure":
 		request, e := normalize(*r.Request, Peer{Machine: Machine{ID: owner.MachineID}, Config: owner})
 		if e != nil {
@@ -640,4 +603,67 @@ func (h HostSession) validRoom(room Room, owner SessionConfig) (Room, error) {
 		return room, fmt.Errorf("corrupt room endpoints: %w", e)
 	}
 	return room, nil
+}
+
+func (h HostSession) readBinding(ctx context.Context, r RPCRequest, owner SessionConfig) (any, error) {
+	if r.Request != nil {
+		target, e := h.normalizedTarget(r.Request.Target, owner)
+		if e != nil {
+			return nil, e
+		}
+		binding, e := h.Store.BindingForTarget(r.Request.RoomID, target)
+		if errors.Is(e, os.ErrNotExist) {
+			return nil, fmt.Errorf("binding_missing")
+		}
+		if e != nil {
+			return nil, e
+		}
+		r.BindingKey = HostBindingKey(binding.RoomID, binding.Target)
+	}
+	state, e := h.Store.Read()
+	if e != nil {
+		return nil, e
+	}
+	binding, ok := state.Bindings[r.BindingKey]
+	if !ok {
+		return nil, fmt.Errorf("binding_missing")
+	}
+	if e := safeID(binding.RoomID); e != nil {
+		return nil, e
+	}
+	target, e := h.normalizedTarget(binding.Target, owner)
+	if e != nil {
+		return nil, e
+	}
+	binding.Target = target
+	if HostBindingKey(binding.RoomID, target) != r.BindingKey {
+		return nil, fmt.Errorf("binding key mismatch")
+	}
+	if _, e = h.Store.pinnedPaths(); e != nil {
+		return nil, fmt.Errorf("runtime_root_unpinned: %w", e)
+	}
+	operations := &HostOperations{h.Store, &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket}}
+	e = h.Store.WithBinding(ctx, "join:"+terminalBindingKey(binding.RoomID, binding.Target), func() error {
+		current, e := h.Store.Binding(r.BindingKey)
+		if e != nil {
+			return e
+		}
+		current.Target.MachineID = owner.MachineID
+		original, code, originalErr := operations.original(ctx, current)
+		switch code {
+		case "":
+			binding = original
+			return operations.saveBinding(original)
+		case "participant_disconnected":
+			binding = current
+			binding.Status = "offline"
+			return nil
+		default:
+			binding = current
+			binding.Status = "uncertain"
+			_ = originalErr
+			return nil
+		}
+	})
+	return binding, e
 }

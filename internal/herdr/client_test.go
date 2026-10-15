@@ -37,7 +37,7 @@ func TestAgentIdentity(t *testing.T) {
 			t.Fatal(r, e)
 		}
 		live := AgentTarget{MachineID: "peer", HerdrSocket: "/tmp/herdr.sock", WorkspaceID: "w2", PaneID: "w2:p9", TerminalID: "term_a", Kind: "codex", NativeSession: "conversation_a"}
-		return json.Marshal(ProbeResult{Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/herdr.sock", SessionKey: key}, Agent: &live, AgentStatus: "idle"})
+		return json.Marshal(ProbeResult{Version: HelperVersion, Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/herdr.sock", SessionKey: key}, Agent: &live, AgentStatus: "idle"})
 	}}
 	c.managed.Store("peer", Peer{Machine: Machine{ID: "peer", Target: "host", Session: "agents"}, Binary: "/opt/parley", Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
 	got, state, e := c.Agent(context.Background(), target)
@@ -45,6 +45,10 @@ func TestAgentIdentity(t *testing.T) {
 		t.Fatal(got, state, e)
 	}
 	target.NativeSession = "different"
+	if live, _, e := c.Agent(context.Background(), target); e != nil || live.NativeSession != "different" {
+		t.Fatal(live, e)
+	}
+	target.Kind = "different"
 	if _, _, e = c.Agent(context.Background(), target); e == nil || !strings.Contains(e.Error(), "agent_replaced") {
 		t.Fatal(e)
 	}
@@ -72,7 +76,7 @@ func TestManagePeer(t *testing.T) {
 			t.Fatal(a)
 		}
 		if r.Operation == "probe" {
-			return json.Marshal(ProbeResult{Version: 1, Config: SessionConfig{HerdrSocket: "/tmp/peer.sock", SessionKey: key}, Capabilities: RequiredCapabilities})
+			return json.Marshal(ProbeResult{Version: HelperVersion, Config: SessionConfig{HerdrSocket: "/tmp/peer.sock", SessionKey: key}, Capabilities: RequiredCapabilities})
 		}
 		return json.Marshal(SessionConfig{ControllerID: "local", MachineID: "peer", HerdrSocket: "/tmp/peer.sock", SessionKey: key})
 	}}
@@ -130,7 +134,7 @@ func TestAgentIdentityLocalPinned(t *testing.T) {
 		return nil, fmt.Errorf("unexpected process")
 	}}
 	got, _, e := c.Agent(context.Background(), AgentTarget{MachineID: "self", PaneID: "w1:p2"})
-	if e != nil || got.HerdrSocket != socket || got.NativeSession != "conversation_a" || calls != 0 {
+	if e != nil || got.HerdrSocket != socket || got.NativeSession != "" || calls != 0 {
 		t.Fatal(got, e, calls)
 	}
 	if e = c.SignalRequest(context.Background(), got, "request"); e != nil {
@@ -144,7 +148,7 @@ func TestAgentIdentityLocalPinned(t *testing.T) {
 func TestAgentIdentityAbsent(t *testing.T) {
 	key, _ := SessionKey("/tmp/herdr.sock")
 	c := Client{LocalMachineID: "local", Run: func(context.Context, string, []string, []byte) ([]byte, error) {
-		return json.Marshal(ProbeResult{Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
+		return json.Marshal(ProbeResult{Version: HelperVersion, Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
 	}}
 	c.managed.Store("peer", Peer{Machine: Machine{ID: "peer", Target: "host", Session: "agents"}, Binary: "/opt/parley", Config: SessionConfig{MachineID: "peer", ControllerID: "controller", HerdrSocket: "/tmp/herdr.sock", SessionKey: key}})
 	if _, _, e := c.Agent(context.Background(), AgentTarget{MachineID: "peer", PaneID: "w1:p1"}); e == nil || !strings.Contains(e.Error(), "agent_identity_required") {
@@ -160,14 +164,14 @@ func TestAgentIdentityProfileRetarget(t *testing.T) {
 			if !strings.Contains(strings.Join(args, " "), "old-host") {
 				t.Fatal(args)
 			}
-			return []byte(`{"config":{"machine_id":"peer","controller_id":"controller","herdr_socket":"/tmp/old.sock","session_key":"` + key + `"},"agent":{"machine_id":"peer","herdr_socket":"/tmp/old.sock","workspace_id":"w1","pane_id":"w1:p1","terminal_id":"old-terminal","kind":"codex","native_session":"old-conversation"},"agent_status":"idle"}`), nil
+			return []byte(`{"version":2,"config":{"machine_id":"peer","controller_id":"controller","herdr_socket":"/tmp/old.sock","session_key":"` + key + `"},"agent":{"machine_id":"peer","herdr_socket":"/tmp/old.sock","workspace_id":"w1","pane_id":"w1:p1","terminal_id":"old-terminal","kind":"codex","native_session":"old-conversation"},"agent_status":"idle"}`), nil
 		}
 		mutableReads++
 		return []byte(`{"result":{"agent":{"pane_id":"w1:p1","workspace_id":"w1","terminal_id":"new-terminal","agent":"codex","agent_status":"idle","agent_session":{"agent":"codex","kind":"id","value":"new-conversation"}}}}`), nil
 	}}
 	c.managed.Store("peer", p)
 	live, _, e := c.Agent(context.Background(), AgentTarget{MachineID: "peer", PaneID: "w1:p1"})
-	if e != nil || live.NativeSession != "old-conversation" || live.HerdrSocket != "/tmp/old.sock" || mutableReads != 0 {
+	if e != nil || live.NativeSession != "" || live.HerdrSocket != "/tmp/old.sock" || mutableReads != 0 {
 		t.Fatal(live, e, mutableReads)
 	}
 }

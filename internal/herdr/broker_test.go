@@ -103,6 +103,8 @@ func brokerFixtureIdentity(t *testing.T, replaced func(int64) bool) (*HostOperat
 						return
 					}
 					io.WriteString(conn, `{"result":{"agent":{"terminal_id":"term_a","pane_id":"w:p","workspace_id":"w","agent":"gemini","agent_status":"idle","agent_session":{"agent":"gemini","kind":"path","value":"/native/a session.json"}}}}`+"\n")
+				} else if r.Method == "agent.prompt" {
+					io.WriteString(conn, `{"result":{"type":"agent_prompted","agent":{"terminal_id":"term_a","agent":"gemini"}}}`+"\n")
 				} else if r.Method == "pane.report_metadata" && r.Params["pane_id"] == nil {
 					io.WriteString(conn, `{"error":{"code":"invalid_params","message":"native pane_id required"}}`+"\n")
 				} else {
@@ -574,7 +576,7 @@ func TestResolveRoomAmbiguousIncomplete(t *testing.T) {
 				case "rooms":
 					return json.Marshal(map[string]Room{room.ID: remoteRoom})
 				case "probe":
-					return json.Marshal(ProbeResult{Config: p.Config, Agent: &remoteRoom.Host, AgentStatus: "idle"})
+					return json.Marshal(ProbeResult{Version: HelperVersion, Config: p.Config, Agent: &remoteRoom.Host, AgentStatus: "idle"})
 				case "room":
 					return json.Marshal(remoteRoom)
 				case "probe-route":
@@ -746,7 +748,7 @@ func TestBrokerRemoteJoinLostOutcomeKeepsOneParticipantAndLease(t *testing.T) {
 					return []byte(`{}`), nil
 				case "probe":
 					live := remoteReq.Target
-					return json.Marshal(ProbeResult{Config: p.Config, Agent: &live, AgentStatus: "idle"})
+					return json.Marshal(ProbeResult{Version: HelperVersion, Config: p.Config, Agent: &live, AgentStatus: "idle"})
 				case "claim-request":
 					out, e := remote.Store.Claim(rpc.RequestID, rpc.Digest, rpc.ControllerID)
 					if e != nil {
@@ -760,7 +762,7 @@ func TestBrokerRemoteJoinLostOutcomeKeepsOneParticipantAndLease(t *testing.T) {
 					}
 					return json.Marshal(result)
 				case "binding":
-					binding, e := remote.Store.Binding(rpc.BindingKey)
+					binding, e := remote.Store.BindingForTarget(rpc.Request.RoomID, rpc.Request.Target)
 					if errors.Is(e, os.ErrNotExist) {
 						return []byte(`{"error":{"code":"binding_missing","message":"not yet joined"}}`), nil
 					}
@@ -872,7 +874,7 @@ func TestBrokerLocalJoinRemoteRoomCreatesLocalForwards(t *testing.T) {
 		case "room":
 			return json.Marshal(room)
 		case "probe":
-			return json.Marshal(ProbeResult{Config: p.Config, Agent: &room.Host, AgentStatus: "idle"})
+			return json.Marshal(ProbeResult{Version: HelperVersion, Config: p.Config, Agent: &room.Host, AgentStatus: "idle"})
 		}
 		return nil, fmt.Errorf("unexpected helper %s %v", rpc.Operation, args)
 	}
@@ -1027,6 +1029,7 @@ func TestHostJoinKnownNoEffectCrashAllowsNewRequestOnly(t *testing.T) {
 		t.Fatal(out, e, calls)
 	}
 	r.ID = "new"
+	r.Target.NativeSession = ""
 	out, e = h.Join(context.Background(), r, endpoints)
 	if e != nil || out.Binding == nil || calls != 1 {
 		t.Fatal(out, e, calls)
@@ -1216,9 +1219,9 @@ func TestBrokerUnsupportedRouteCompletesNoEffect(t *testing.T) {
 			return json.Marshal(room)
 		case "probe":
 			if rpc.SessionKey == sourceKey {
-				return json.Marshal(ProbeResult{Config: source.Config, Agent: &room.Host, AgentStatus: "idle"})
+				return json.Marshal(ProbeResult{Version: HelperVersion, Config: source.Config, Agent: &room.Host, AgentStatus: "idle"})
 			}
-			return json.Marshal(ProbeResult{Config: origin.Config, Agent: &r.Target, AgentStatus: "idle"})
+			return json.Marshal(ProbeResult{Version: HelperVersion, Config: origin.Config, Agent: &r.Target, AgentStatus: "idle"})
 		case "outcome":
 			if e := requests.Complete(r.ID, *rpc.Outcome); e != nil {
 				return nil, e
