@@ -987,9 +987,10 @@ func TestHostStartLostStdoutAndOriginalPaneJoin(t *testing.T) {
 }
 func TestBrokerReconcileClosedRoomReleasesOnlyOwnedLease(t *testing.T) {
 	h, r, _ := brokerFixture(t)
+	r.Target.MachineID = h.Client.LocalMachineID
 	room := brokerRoom(t, h, r)
 	binding := Binding{RoomID: room.ID, Target: r.Target, ParticipantName: "h_" + HostBindingKey(room.ID, r.Target)[:16], JoinPhase: "intent", JoinRequestID: r.ID}
-	if e := h.Store.saveBinding(binding); e != nil {
+	if e := h.saveBinding(binding); e != nil {
 		t.Fatal(e)
 	}
 	room.Closed = true
@@ -1004,6 +1005,38 @@ func TestBrokerReconcileClosedRoomReleasesOnlyOwnedLease(t *testing.T) {
 	}
 	if len(manager.leases) != 1 || manager.leases["other"] == nil {
 		t.Fatal(manager.leases)
+	}
+	durable, err := h.Store.Binding(HostBindingKey(binding.RoomID, binding.Target))
+	if err != nil || durable.Target.MachineID != "self" {
+		t.Fatal(durable, err)
+	}
+}
+
+func TestBrokerReconcileHostCanonicalLocalBinding(t *testing.T) {
+	for _, online := range []bool{false, true} {
+		t.Run(fmt.Sprint(online), func(t *testing.T) {
+			h, req, root := brokerFixture(t)
+			req.Target.MachineID = h.Client.LocalMachineID
+			binding := Binding{RoomID: req.RoomID, Target: req.Target, SessionID: "psn_original", ParticipantName: "owned", StateDir: root, JoinPhase: "complete", JoinRequestID: req.ID, Status: "uncertain"}
+			originalFixture(t, root, binding, online)
+			if err := h.saveBinding(binding); err != nil {
+				t.Fatal(err)
+			}
+			reference := "local:" + HostBindingKey(binding.RoomID, binding.Target)
+			manager := &TunnelManager{leases: map[string]*tunnelLease{"shared": {bindings: map[string]bool{reference: true, "other-member": true}}, "other": {bindings: map[string]bool{"unrelated": true}}}}
+			broker := Broker{Store: h.Store, Client: h.Client, Tunnels: manager}
+			if err := broker.Reconcile(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			shared := manager.leases["shared"]
+			if shared == nil || shared.bindings[reference] != online || !shared.bindings["other-member"] || manager.leases["other"] == nil {
+				t.Fatalf("local ownership not reconciled: %#v", manager.leases)
+			}
+			durable, err := h.Store.Binding(HostBindingKey(binding.RoomID, binding.Target))
+			if err != nil || durable.Target.MachineID != "self" || online && durable.Status != "online" {
+				t.Fatalf("host-canonical binding changed: %#v, %v", durable, err)
+			}
+		})
 	}
 }
 func TestHostJoinKnownNoEffectCrashAllowsNewRequestOnly(t *testing.T) {

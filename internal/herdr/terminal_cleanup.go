@@ -51,7 +51,10 @@ func terminalLockKey(target AgentTarget) string {
 	return "terminal:" + hashBytes([]byte(target.HerdrSocket+"\x00"+target.TerminalID+"\x00"+target.Kind))
 }
 
-func validCleanupTarget(target AgentTarget) bool {
+func (h *HostOperations) localCleanupTarget(target AgentTarget) bool {
+	if target.HerdrSocket != h.Client.HerdrSocket || target.MachineID != "self" && target.MachineID != h.Client.LocalMachineID {
+		return false
+	}
 	return target.TerminalID != "" && safeID(target.TerminalID) == nil && target.Kind != "" && safeID(target.Kind) == nil && target.HerdrSocket != ""
 }
 
@@ -63,7 +66,7 @@ func (h *HostOperations) ReconcileTerminal(ctx context.Context) error {
 	}
 	targets := map[string]AgentTarget{}
 	for _, binding := range state.Bindings {
-		if binding.Status != "left" && validCleanupTarget(binding.Target) {
+		if binding.Status != "left" && h.localCleanupTarget(binding.Target) {
 			targets[terminalLockKey(binding.Target)] = binding.Target
 		}
 	}
@@ -72,7 +75,7 @@ func (h *HostOperations) ReconcileTerminal(ctx context.Context) error {
 		return err
 	}
 	for _, room := range rooms {
-		if !room.Closed && validCleanupTarget(room.Host) {
+		if !room.Closed && h.localCleanupTarget(room.Host) {
 			targets[terminalLockKey(room.Host)] = room.Host
 		}
 	}
@@ -89,7 +92,7 @@ func (h *HostOperations) ReconcileTerminal(ctx context.Context) error {
 			}
 			var cleanupErrs []error
 			for _, binding := range latest.Bindings {
-				if binding.Status == "left" || !SameTerminal(binding.Target, target) {
+				if binding.Status == "left" || !h.localCleanupTarget(binding.Target) || !SameTerminal(binding.Target, target) {
 					continue
 				}
 				if err = h.leaveBinding(ctx, binding); err != nil {
@@ -101,7 +104,7 @@ func (h *HostOperations) ReconcileTerminal(ctx context.Context) error {
 				cleanupErrs = append(cleanupErrs, readErr)
 			} else {
 				for _, room := range freshRooms {
-					if room.Closed || !SameTerminal(room.Host, target) {
+					if room.Closed || !h.localCleanupTarget(room.Host) || !SameTerminal(room.Host, target) {
 						continue
 					}
 					if err = h.stopRoom(ctx, room); err != nil {

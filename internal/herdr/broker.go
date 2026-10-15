@@ -1087,6 +1087,9 @@ func (b *Broker) Reconcile(ctx context.Context) error {
 		if HostBindingKey(record.RoomID, record.Target) != key {
 			return fmt.Errorf("binding key mismatch")
 		}
+		if record.Target.MachineID == "self" && record.Target.HerdrSocket == b.Client.HerdrSocket {
+			record.Target.MachineID = b.Client.LocalMachineID
+		}
 		closed := false
 		if room, roomErr := b.Store.Room(record.RoomID); roomErr == nil {
 			closed = room.Closed
@@ -1163,11 +1166,12 @@ func (b *Broker) Reconcile(ctx context.Context) error {
 					tunnels := b.Tunnels
 					b.mu.Unlock()
 					if tunnels != nil {
-						return tunnels.Release(ctx, current.RoomID, current.Target)
+						return tunnels.Release(ctx, record.RoomID, record.Target)
 					}
 					return nil
 				}
 				if code == "" {
+					original.Target.MachineID = current.Target.MachineID
 					return b.Store.saveBinding(original)
 				}
 				return nil
