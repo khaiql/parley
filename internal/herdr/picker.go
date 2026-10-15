@@ -186,6 +186,11 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 		}
 		cancel()
 	}
+	sortRoomCatalog(&catalog)
+	return catalog, nil
+}
+
+func sortRoomCatalog(catalog *RoomCatalog) {
 	counts := map[string]int{}
 	for _, choice := range catalog.Rooms {
 		counts[choice.Room.ID+":"+choice.Room.Host.MachineID+":"+choice.Room.Host.HerdrSocket]++
@@ -207,7 +212,6 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 		return a.Room.ID < z.Room.ID
 	})
 	sort.Strings(catalog.Warnings)
-	return catalog, nil
 }
 
 func bindingMatchesRoom(binding Binding, room Room, localMachine string) bool {

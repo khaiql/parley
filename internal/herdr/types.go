@@ -35,6 +35,8 @@ type Room struct {
 	HostSessionID string      `json:"host_session_id"`
 	Source        Endpoints   `json:"source"`
 	Closed        bool        `json:"closed"`
+	CleanupStatus string      `json:"cleanup_status,omitempty"`
+	CleanupError  string      `json:"cleanup_error,omitempty"`
 }
 type Binding struct {
 	RoomHost        *RoomHostRef `json:"room_host,omitempty"`
@@ -48,6 +50,8 @@ type Binding struct {
 	Status          string       `json:"status"`
 	JoinPhase       string       `json:"join_phase"`
 	JoinRequestID   string       `json:"join_request_id"`
+	CleanupStatus   string       `json:"cleanup_status,omitempty"`
+	CleanupError    string       `json:"cleanup_error,omitempty"`
 }
 type SessionConfig struct {
 	Role         string `json:"role"`
@@ -87,6 +91,7 @@ func RoomHostReference(room Room, localMachine string) RoomHostRef {
 }
 
 type Response struct {
+	Catalog *RoomCatalog   `json:"catalog,omitempty"`
 	Version int            `json:"version,omitempty"`
 	Status  string         `json:"status"`
 	Code    string         `json:"code,omitempty"`

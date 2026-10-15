@@ -205,15 +205,14 @@ func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
 		fmt.Fprint(cmd.OutOrStdout(), "Parley start — Topic (Enter submits, Escape cancels):\r\n")
 		value, err = herdr.ReadTerminalForm(cmd.InOrStdin(), cmd.OutOrStdout(), op)
 	} else {
-		broker := herdr.Broker{Store: h.Store, Client: c}
 		value, err = pickRoom(cmd.InOrStdin(), cmd.OutOrStdout(), func() (herdr.RoomCatalog, error) {
 			lookup, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
-			return broker.RoomChoices(lookup, target)
+			return h.RoomChoices(lookup, c, target)
 		}, func(room herdr.Room) error {
 			check, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
-			if err := broker.CheckRoomChoice(check, target, room); err != nil {
+			if err := h.CheckRoomChoice(check, c, target, room); err != nil {
 				return err
 			}
 			host := herdr.RoomHostReference(room, c.LocalMachineID)

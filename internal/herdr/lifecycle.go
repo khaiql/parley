@@ -319,7 +319,12 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 	})
 	local := Peer{Machine: Machine{ID: owner.MachineID}, Config: owner}
 	workers.Go(func() {
-		if err := watchLocal(ctx, c.HerdrSocket, func(ctx context.Context) error { return broker.Drain(ctx, local) }); err != nil && ctx.Err() == nil {
+		if err := watchLocal(ctx, c.HerdrSocket, func(ctx context.Context) error {
+			if err := broker.Drain(ctx, local); err != nil {
+				return err
+			}
+			return (&HostOperations{Store: h.Store, Client: c}).ReconcileTerminal(ctx)
+		}); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
 	})
@@ -330,7 +335,7 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 	failed := make(chan error, 1)
 	workers.Go(func() {
 		failed <- ServeLocal(ctx, path, local, func(ctx context.Context, p Peer, r Request) (Response, error) {
-			if r.Op == "status" || r.Op == "probe" {
+			if r.Op == "status" || r.Op == "probe" || r.Op == "catalog" {
 				return broker.Handle(ctx, p, r)
 			}
 			if r.Op != "join" {
@@ -380,7 +385,12 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 			streamCtx, stop := context.WithCancel(ctx)
 			subscriptions[m.ID] = subscription{p, stop}
 			workers.Go(func() {
-				e := c.WatchRequests(streamCtx, p, broker.Drain)
+				e := c.WatchRequests(streamCtx, p, func(ctx context.Context, peer Peer) error {
+					if err := broker.Drain(ctx, peer); err != nil {
+						return err
+					}
+					return broker.reconcileTerminalPeer(ctx, peer)
+				})
 				if e != nil && streamCtx.Err() == nil {
 					fmt.Fprintln(os.Stderr, "peer", p.Machine.ID, e)
 				}
@@ -414,6 +424,9 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 					deactivate(s.peer)
 					delete(subscriptions, id)
 				}
+			}
+			if e := broker.ReconcileTerminals(ctx); e != nil {
+				fmt.Fprintln(os.Stderr, e)
 			}
 			if e := broker.Reconcile(ctx); e != nil {
 				fmt.Fprintln(os.Stderr, e)

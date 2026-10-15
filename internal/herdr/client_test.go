@@ -164,7 +164,7 @@ func TestAgentIdentityProfileRetarget(t *testing.T) {
 			if !strings.Contains(strings.Join(args, " "), "old-host") {
 				t.Fatal(args)
 			}
-			return []byte(`{"version":2,"config":{"machine_id":"peer","controller_id":"controller","herdr_socket":"/tmp/old.sock","session_key":"` + key + `"},"agent":{"machine_id":"peer","herdr_socket":"/tmp/old.sock","workspace_id":"w1","pane_id":"w1:p1","terminal_id":"old-terminal","kind":"codex","native_session":"old-conversation"},"agent_status":"idle"}`), nil
+			return []byte(`{"version":` + fmt.Sprint(HelperVersion) + `,"config":{"machine_id":"peer","controller_id":"controller","herdr_socket":"/tmp/old.sock","session_key":"` + key + `"},"agent":{"machine_id":"peer","herdr_socket":"/tmp/old.sock","workspace_id":"w1","pane_id":"w1:p1","terminal_id":"old-terminal","kind":"codex","native_session":"old-conversation"},"agent_status":"idle"}`), nil
 		}
 		mutableReads++
 		return []byte(`{"result":{"agent":{"pane_id":"w1:p1","workspace_id":"w1","terminal_id":"new-terminal","agent":"codex","agent_status":"idle","agent_session":{"agent":"codex","kind":"id","value":"new-conversation"}}}}`), nil
@@ -261,5 +261,12 @@ func TestNativeTerminalIdentityFollowsPane(t *testing.T) {
 	got, _, err := client.Agent(context.Background(), target)
 	if err != nil || got.PaneID != "w2:p9" || got.TerminalID != target.TerminalID {
 		t.Fatal(got, err)
+	}
+}
+
+func TestRemoteHelperUsesLoginEnvironment(t *testing.T) {
+	command := helperCommand("/opt/parley/bin/parley")
+	if !strings.HasPrefix(command, "sh -lc ") {
+		t.Fatal("remote helper cannot see Herdr installed through the user's login PATH", command)
 	}
 }

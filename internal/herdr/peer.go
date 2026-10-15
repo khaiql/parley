@@ -91,7 +91,7 @@ func (r RPCRequest) Validate() error {
 		if r.MachineID == "self" {
 			return fmt.Errorf("normalized machine required")
 		}
-	case "release-controller", "events", "requests", "rooms":
+	case "release-controller", "events", "requests", "rooms", "cleanup-terminals":
 		allowed.ControllerID = r.ControllerID
 		allowed.SessionKey = r.SessionKey
 	case "claim-request":
@@ -515,6 +515,14 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 			records[id] = room
 		}
 		return records, nil
+	case "cleanup-terminals":
+		c := &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket}
+		if e := (&HostOperations{Store: h.Store, Client: c}).ReconcileTerminal(ctx); e != nil {
+			return nil, e
+		}
+		return struct {
+			Status string `json:"status"`
+		}{"checked"}, nil
 	case "room":
 		room, e := h.Store.Room(r.RoomID)
 		if e != nil {

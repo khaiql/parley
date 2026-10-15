@@ -19,7 +19,7 @@ herdr plugin link /absolute/path/to/parley
 parley herdr setup
 ```
 
-Enable the intended saved SSH profiles in Herdr. Each remote profile must identify its named Herdr session, or select one uniquely verified running session. Install/link the same plugin on those hosts normally. The coordinator verifies the installed helper and claims its session before subscribing. It does not copy a helper to a remote host. A different remote controller owner, missing helper, disabled plugin, incompatible capability, authentication failure, or host-key refusal remains visible in the coordinator log. Configure SSH permission and trust normally; Parley never bypasses either.
+Enable the intended saved SSH profiles in Herdr. Each remote profile must identify its named Herdr session, or select one uniquely verified running session. Install/link the same plugin on those hosts normally. Run `parley herdr setup` only on the controller (the Mac in a Mac-to-Ubuntu flow), not on its remote participants; setup on both hosts creates conflicting controllers. The coordinator verifies the installed helper and claims its session before subscribing. It does not copy a helper to a remote host. Its helper and tunnel connections require noninteractive SSH authentication; verify `ssh -o BatchMode=yes <saved-target> true`. A Herdr connection authenticated with a server password does not by itself authenticate those separate connections. Fixed helper calls use the login shell environment so Herdr installed in `~/.local/bin` is found. A different remote controller owner, missing helper, disabled plugin, incompatible capability, authentication failure, or host-key refusal remains visible in the coordinator log. Configure SSH permission and trust normally; Parley never bypasses either.
 
 ### Set up focused-pane shortcuts
 
@@ -67,7 +67,7 @@ Discovery runs only on opening, explicit refresh, and selection validation. It r
 
 Numbered selection rejects legacy forwarded participants whose room host cannot be proved. Their existing sessions remain usable; manual room-ID entry can reuse the original participant without creating another one.
 
-A same-host room joins directly without SSH. Cross-host Join persists a request, reports its marker through the native socket, and waits for the local coordinator. The coordinator acquires both the message and HTTP artifact routes before invoking the fixed host-local Join helper. Both initiating-host directions work: local room with remote participant uses two reverse forwards; remote room with local participant uses two local forwards. Joining between two different remote hosts is unsupported. A remote-only UI needs the local controller's saved SSH profile active; the remote popup never starts another controller.
+A same-host room joins directly without SSH. Cross-host Join persists a request, reports its marker through the native socket, and waits for the local coordinator. The coordinator acquires both the message and HTTP artifact routes before invoking the fixed host-local Join helper. Both initiating-host directions work: local room with remote participant uses two reverse forwards; remote room with local participant uses two local forwards. Joining between two different remote hosts is unsupported. A remote-only UI needs the local controller's saved SSH profile active; the remote popup never starts another controller. Opening or refreshing its Join picker queues a read-only catalog request on the participant host. The existing controller subscription collects authoritative local and peer rooms and publishes the response back to that host. The picker lists controller-hosted rooms without copied IDs, rechecks the selected room through a fresh request, and carries its host/session pin into Join. Browsing creates no adapter, prompt, or SSH port forward. Same-host rooms remain usable during controller failure; discovery warnings identify missing activation, unavailable response, or helper errors. Rooms on other remote hosts are shown as unsupported for a remote participant.
 
 The form shows a request ID for pending or uncertain work. Inspect the original host's durable status before retrying:
 
@@ -89,9 +89,17 @@ The popup reports **submitted**, **failed**, or **uncertain** separately from ro
 
 Known pre-submission failures such as a blocked approval dialog are recorded. After resolving that dialog, **R + Enter** in the result popup retries only the instructions, preserving the participant and cursor. Reopening Join also shows the recorded result for that participant. Timeout, lost acknowledgement, or corrupt receipt stays uncertain and is never automatically retried. `parley herdr status` exposes durable handoff results keyed by participant session ID, including late completions. Agent sandbox permissions can still require normal user approval for participant socket access.
 
-### Upgrading from the identity-based helper
+### Automatic terminal cleanup
 
-This flow uses helper protocol 2. Install/build this plugin on every participating host; incompatible helpers are rejected before participant mutation. Exact binary version equality is unnecessary, but all helpers and the controller must support protocol 2.
+Parley subscribes to Herdr's `pane.closed`, `pane.exited`, `pane.moved`, `tab.closed`, and `workspace.closed` events. These events trigger an authoritative `session.snapshot` scan; event payloads, pane IDs, focus, and agent status do not identify an owned terminal. Parley matches the persisted terminal ID, harness kind, and Herdr socket. A pane move preserves its terminal ID and does not trigger cleanup. A replacement pane or changed harness cannot match the saved identity.
+
+When a snapshot proves the original terminal is absent, the host helper takes the same terminal transaction lock as Start and Join. It leaves each completed participant with its persisted Parley session ID. If the terminal owns a room, it stops that exact host session and waits for the room-stopped record and control socket shutdown before marking the room closed. The existing broker reconciliation then releases only that room's Parley-owned SSH routes. Other participants and rooms stay untouched.
+
+The coordinator scans on event subscription startup, lifecycle events, reconnection, and its two-second reconciliation loop. This recovers missed events and retries pending cleanup after restart. An unavailable snapshot or SSH helper preserves the room and participant. Failed cleanup appears as `cleanup_status: "pending"` and `cleanup_error` in `parley herdr status`. Idle/readiness changes and a harness ending while its shell remains open do not trigger cleanup; Herdr 0.9.3 exposes no definitive agent-end event for that case, so cleanup waits for terminal closure.
+
+### Upgrading the helper protocol
+
+This flow uses helper protocol 4. Install/build this plugin on every participating host; incompatible helpers are rejected before participant mutation. Exact binary version equality is unnecessary, but all helpers and the controller must support protocol 4.
 
 A running older coordinator is not replaced silently: doing so would close its active SSH routes. Finish existing routed work, rebuild the plugin, then restart **only the Parley plugin** on the controller and run setup:
 

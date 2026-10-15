@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -47,6 +48,51 @@ func TestEventsSubscribeFirst(t *testing.T) {
 	w.Close()
 	if e := <-done; e != io.EOF {
 		t.Fatal(e)
+	}
+}
+
+func TestTerminalLifecycleEventsTriggerWake(t *testing.T) {
+	r, w := io.Pipe()
+	woke := make(chan struct{})
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- ReadEvents(context.Background(), r, func() error { close(started); return nil }, func() error { close(woke); return nil })
+	}()
+	_, _ = io.WriteString(w, testEventAck)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("subscription acknowledgement did not start reconciliation")
+	}
+	_, _ = io.WriteString(w, `{"event":"pane_closed","data":{"type":"pane_closed"}}`+"\n")
+	select {
+	case <-woke:
+	case <-time.After(time.Second):
+		t.Fatal("pane close event did not wake reconciliation")
+	}
+	_ = w.Close()
+	if err := <-done; err != io.EOF {
+		t.Fatal(err)
+	}
+	_ = r.Close()
+	var params struct {
+		Subscriptions []struct {
+			Type string `json:"type"`
+		} `json:"subscriptions"`
+	}
+	b, err := json.Marshal(subscriptionParams())
+	if err != nil || json.Unmarshal(b, &params) != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, sub := range params.Subscriptions {
+		got[sub.Type] = true
+	}
+	for _, event := range []string{"pane.closed", "pane.exited", "pane.moved", "tab.closed", "workspace.closed"} {
+		if !got[event] {
+			t.Fatalf("missing subscription %q: %v", event, got)
+		}
 	}
 }
 func TestEventsReject(t *testing.T) {
