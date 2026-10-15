@@ -19,6 +19,9 @@ func TestRoomChoicesDurableLocalAndIsolation(t *testing.T) {
 	if err := h.Store.saveRoom(room); err != nil {
 		t.Fatal(err)
 	}
+	unjoined := req
+	unjoined.RoomID = "unjoined"
+	brokerRoom(t, h, unjoined)
 	closed := room
 	closed.ID = "closed"
 	closed.Closed = true
@@ -47,17 +50,20 @@ func TestRoomChoicesDurableLocalAndIsolation(t *testing.T) {
 	before, _ := h.Store.Read()
 	broker := Broker{Store: NewStore(h.Store.dir), Client: h.Client}
 	got, err := broker.RoomChoices(context.Background(), req.Target)
-	if err != nil || len(got.Rooms) != 3 || len(got.Warnings) != 0 {
+	if err != nil || len(got.Rooms) != 4 || len(got.Warnings) != 0 {
 		t.Fatalf("catalog=%+v err=%v", got, err)
 	}
 	statuses := map[string]string{}
 	for _, choice := range got.Rooms {
 		statuses[choice.Room.ID] = choice.Status
+		if choice.Joined != (choice.Room.ID == room.ID) {
+			t.Fatal("incorrect joined status", choice)
+		}
 		if choice.Room.ID == room.ID && (!choice.Joined || choice.Room.Topic != room.Topic || choice.Host != "Local") {
 			t.Fatal("lost room/agent metadata", choice)
 		}
 	}
-	if !reflect.DeepEqual(statuses, map[string]string{room.ID: "open", "closed": "closed", "stale": "stale"}) {
+	if !reflect.DeepEqual(statuses, map[string]string{room.ID: "open", "unjoined": "open", "closed": "closed", "stale": "stale"}) {
 		t.Fatal(statuses)
 	}
 	after, _ := h.Store.Read()

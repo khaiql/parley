@@ -72,7 +72,7 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 			}
 		}
 		for _, binding := range state.Bindings {
-			if binding.SessionID != "" && binding.JoinPhase == "complete" && HostBindingKey(room.ID, binding.Target) == HostBindingKey(room.ID, target) {
+			if isCompletedJoinFor(binding, room.ID, target) {
 				choice.Joined = true
 				break
 			}
@@ -148,4 +148,11 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 	})
 	sort.Strings(catalog.Warnings)
 	return catalog, nil
+}
+
+func isCompletedJoinFor(binding Binding, roomID string, target AgentTarget) bool {
+	return binding.RoomID == roomID &&
+		binding.SessionID != "" &&
+		binding.JoinPhase == "complete" &&
+		HostBindingKey(roomID, binding.Target) == HostBindingKey(roomID, target)
 }
