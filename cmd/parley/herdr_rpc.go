@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"os/exec"
 	"time"
 
 	"github.com/khaiql/parley/internal/herdr"
@@ -38,11 +37,11 @@ func runHerdrRPC(ctx context.Context, in io.Reader, out io.Writer, c *herdr.Clie
 }
 func herdrRPCCmd() *cobra.Command {
 	return &cobra.Command{Use: "rpc", Hidden: true, Args: noArgsJSON, RunE: func(cmd *cobra.Command, _ []string) error {
-		binary, e := exec.LookPath("herdr")
+		c, e := nativeClient()
 		if e != nil {
 			return writeJSONError(cmd, "helper_unavailable", e.Error())
 		}
-		r, e := runHerdrRPC(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), &herdr.Client{HerdrBinary: binary})
+		r, e := runHerdrRPC(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), c)
 		if e != nil {
 			return writeJSONError(cmd, herdr.EventFailureCode(e), e.Error())
 		}

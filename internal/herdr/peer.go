@@ -516,7 +516,11 @@ func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner Sess
 		}
 		return records, nil
 	case "cleanup-terminals":
-		c := &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket}
+		binary, e := os.Executable()
+		if e != nil {
+			return nil, e
+		}
+		c := &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket, ParleyBinary: binary}
 		if e := (&HostOperations{Store: h.Store, Client: c}).ReconcileTerminal(ctx); e != nil {
 			return nil, e
 		}

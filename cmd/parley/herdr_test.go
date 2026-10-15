@@ -214,6 +214,8 @@ func nativeActionFixture(t *testing.T, mode string) <-chan nativeActionFrame {
 				}
 				reply := `{"result":{"type":"subscription_started"}}`
 				switch frame.Method {
+				case "session.snapshot":
+					reply = `{"result":{"type":"session_snapshot","snapshot":{"panes":[]}}}`
 				case "agent.list":
 					reply = `{"result":{"agents":[{"pane_id":"w1:p1","terminal_id":"term_original"}]}}`
 				case "agent.get":
