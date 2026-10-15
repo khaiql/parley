@@ -28,5 +28,5 @@ id = "form"
 title = "Parley"
 placement = "popup"
 width = "70%"
-height = 12
+height = 22
 command = ["bin/parley", "herdr", "form"]

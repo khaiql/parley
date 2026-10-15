@@ -101,7 +101,7 @@ func TestHerdrFormFailedOutcome(t *testing.T) {
 	cmd := newRootCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	cmd.SetIn(strings.NewReader("missing-room\n\n"))
+	cmd.SetIn(strings.NewReader("m\nmissing-room\n\n"))
 	cmd.SetArgs([]string{"herdr", "form"})
 	if err := execute(cmd); err == nil {
 		t.Fatal("failed room setup exited successfully", out.String())
@@ -116,6 +116,23 @@ func TestHerdrFormFailedOutcome(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("failed form closed without notification")
+	}
+}
+
+func TestHerdrJoinOpensRoomPicker(t *testing.T) {
+	nativeActionFixture(t, "success")
+	t.Setenv("PARLEY_ACTION", "join")
+	t.Setenv("PARLEY_TARGET_JSON", fmt.Sprintf(`{"machine_id":"self","herdr_socket":%q,"workspace_id":"w1","pane_id":"w1:p1","terminal_id":"term_original","kind":"codex","native_session":"original"}`, os.Getenv("HERDR_SOCKET_PATH")))
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetIn(strings.NewReader("\x1b"))
+	cmd.SetArgs([]string{"herdr", "form"})
+	if err := execute(cmd); err == nil {
+		t.Fatal("missing cancellation")
+	}
+	if !strings.Contains(out.String(), "Choose a room") || !strings.Contains(out.String(), "M: enter room ID") {
+		t.Fatal("Join still requires copying a room ID", out.String())
 	}
 }
 
@@ -178,6 +195,8 @@ func nativeActionFixture(t *testing.T, mode string) <-chan nativeActionFrame {
 				}
 				reply := `{"result":{"type":"subscription_started"}}`
 				switch frame.Method {
+				case "agent.list":
+					reply = `{"result":{"agents":[{"pane_id":"w1:p1","terminal_id":"term_original"}]}}`
 				case "agent.get":
 					reply = `{"result":{"agent":{"pane_id":"w1:p1","workspace_id":"w1","terminal_id":"term_original","agent":"codex","agent_status":"idle","agent_session":{"agent":"codex","kind":"id","value":"original"}}}}`
 					if mode == "identity" {
@@ -211,7 +230,7 @@ func nativeActionFixture(t *testing.T, mode string) <-chan nativeActionFrame {
 		inventory = `{"sessions":[]}`
 	}
 	binary := filepath.Join(root, "herdr")
-	script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in\n--version) printf 'herdr %s\\n';;\n*'session list'*) printf '%%s\\n' '%s';;\n*'plugin list'*) printf '%%s\\n' '{\"result\":{\"plugins\":[{\"plugin_id\":\"parley\",\"enabled\":true,\"plugin_root\":\"%s\"}]}}';;\n*'plugin config-dir'*) printf '%%s\\n' '%s/config';;\nesac\n", version, inventory, root, root)
+	script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in\n--version) printf 'herdr %s\\n';;\n*'session list'*) printf '%%s\\n' '%s';;\n*'plugin list'*) printf '%%s\\n' '{\"result\":{\"plugins\":[{\"plugin_id\":\"parley\",\"enabled\":true,\"plugin_root\":\"%s\"}]}}';;\n*'plugin config-dir'*) printf '%%s\\n' '%s/config';;\n*'machine list'*) printf '%%s\\n' '[]';;\nesac\n", version, inventory, root, root)
 	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
