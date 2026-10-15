@@ -26,10 +26,6 @@ func (h HostSession) RoomChoices(ctx context.Context, c *Client, target AgentTar
 	if err != nil {
 		return RoomCatalog{}, err
 	}
-	fallback, err := broker.RoomChoices(ctx, target)
-	if err != nil {
-		return fallback, err
-	}
 	id, err := NewID()
 	if err != nil {
 		return RoomCatalog{}, err
@@ -39,11 +35,20 @@ func (h HostSession) RoomChoices(ctx context.Context, c *Client, target AgentTar
 	if err = h.Store.Enqueue(req); err != nil {
 		return RoomCatalog{}, err
 	}
-	if err = c.SignalRequest(ctx, target, id); err == nil {
+	signalErr := c.SignalRequest(ctx, target, id)
+	// Start the controller request before bounded fallback discovery can stall.
+	fallbackCtx, stopFallback := context.WithTimeout(ctx, 2*time.Second)
+	fallback, fallbackErr := broker.RoomChoices(fallbackCtx, target)
+	stopFallback()
+	if fallbackErr != nil {
+		fallback.Warnings = append(fallback.Warnings, "Local catalog unavailable: "+fallbackErr.Error())
+	}
+	err = signalErr
+	if err == nil {
 		var reply Response
 		reply, err = h.WaitOutcome(ctx, id)
 		if err == nil && reply.Status == "catalog" && reply.Catalog != nil {
-			return *reply.Catalog, nil
+			return mergeLocalCatalog(*reply.Catalog, fallback, owner), nil
 		}
 		if err == nil {
 			err = fmt.Errorf("%s: %s (request %s)", reply.Code, reply.Message, id)
@@ -59,7 +64,7 @@ func (h HostSession) CheckRoomChoice(ctx context.Context, c *Client, target Agen
 	if err != nil {
 		return err
 	}
-	if owner.Role != "participant" || selected.Host.HerdrSocket == owner.HerdrSocket {
+	if owner.Role != "participant" || (RoomHostReference(selected, owner.MachineID).MachineID == owner.MachineID && selected.Host.HerdrSocket == owner.HerdrSocket) {
 		return (&Broker{Store: h.Store, Client: c}).CheckRoomChoice(ctx, target, selected)
 	}
 	catalog, err := h.RoomChoices(ctx, c, target)
@@ -93,7 +98,10 @@ func (b *Broker) serveCatalog(ctx context.Context, peer Peer, req Request) (Resp
 		return outcome.Response, nil
 	}
 	// Leave time to publish healthy rows even when an unrelated peer stalls.
-	lookup, stopLookup := context.WithTimeout(ctx, 8*time.Second)
+	deadline, _ := ctx.Deadline()
+	remaining := time.Until(deadline)
+	reserve := min(4*time.Second, remaining/3)
+	lookup, stopLookup := context.WithTimeout(ctx, min(8*time.Second, remaining-reserve))
 	catalog, lookupErr := b.RoomChoices(lookup, req.Target)
 	stopLookup()
 	response := Response{Status: "catalog", Catalog: &catalog}
@@ -127,4 +135,28 @@ func (b *Broker) serveCatalog(ctx context.Context, peer Peer, req Request) (Resp
 		err = b.peerCall(ctx, peer, RPCRequest{Operation: "outcome", RequestID: req.ID, Outcome: &outcome}, &published)
 	}
 	return response, err
+}
+
+// Only this host can supply authoritative fallback rows; never import its peer cache.
+func mergeLocalCatalog(catalog, fallback RoomCatalog, owner SessionConfig) RoomCatalog {
+	for _, choice := range fallback.Rooms {
+		ref := RoomHostReference(choice.Room, owner.MachineID)
+		if choice.Status != "open" || ref.MachineID != owner.MachineID || choice.Room.Host.HerdrSocket != owner.HerdrSocket {
+			continue
+		}
+		choice.Room.Host.MachineID = owner.MachineID
+		found := false
+		for i, row := range catalog.Rooms {
+			if row.Room.ID == choice.Room.ID && RoomHostReference(row.Room, owner.MachineID) == ref {
+				catalog.Rooms[i] = choice
+				found = true
+			}
+		}
+		if !found {
+			catalog.Rooms = append(catalog.Rooms, choice)
+		}
+	}
+	catalog.Warnings = append(catalog.Warnings, fallback.Warnings...)
+	sortRoomCatalog(&catalog)
+	return catalog
 }

@@ -40,6 +40,17 @@ func TestCatalogRequestIsReadOnly(t *testing.T) {
 }
 
 func TestRemotePickerGetsControllerRooms(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"healthy", "partial", "same-socket", "slow-fallback", "slow-claim"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			testRemotePickerCatalog(t, mode)
+		})
+	}
+}
+
+func testRemotePickerCatalog(t *testing.T, mode string) {
+	t.Helper()
 	local, req, _ := brokerFixture(t)
 	room := brokerRoom(t, local, req)
 	room.Topic = "Mac room"
@@ -48,6 +59,15 @@ func TestRemotePickerGetsControllerRooms(t *testing.T) {
 		t.Fatal(err)
 	}
 	remote, target, root := brokerFixture(t)
+	if mode == "same-socket" {
+		remote.Client.HerdrSocket = local.Client.HerdrSocket
+		target.Target.HerdrSocket = local.Client.HerdrSocket
+	}
+	participantRoom := brokerRoom(t, remote, target)
+	participantRoom.Topic, participantRoom.Host.MachineID = "Ubuntu room", "self"
+	if err := remote.Store.saveRoom(participantRoom); err != nil {
+		t.Fatal(err)
+	}
 	owner := SessionConfig{Role: "participant", ControllerID: "local", MachineID: "ubuntu", HerdrSocket: remote.Client.HerdrSocket}
 	owner.SessionKey, _ = SessionKey(owner.HerdrSocket)
 	host := HostSession{Config: owner, ConfigDir: filepath.Join(root, "config"), Store: remote.Store}
@@ -70,11 +90,26 @@ func TestRemotePickerGetsControllerRooms(t *testing.T) {
 			if len(args) > 1 && args[0] == "--machine" {
 				return []byte(`{"result":{"plugins":[{"plugin_id":"parley","enabled":true,"plugin_root":"/opt/plugin"}]}}`), nil
 			}
+			if mode == "partial" {
+				return nil, fmt.Errorf("controller peer lookup unavailable")
+			}
+			if mode == "slow-claim" {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
 			return json.Marshal([]Machine{peer.Machine})
 		}
 		rpc, err := DecodeRPC(bytes.NewReader(data))
 		if err != nil {
 			return nil, err
+		}
+		if mode == "slow-claim" {
+			if rpc.Operation == "claim-request" {
+				time.Sleep(50 * time.Millisecond)
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 		}
 		reply, err := host.Dispatch(ctx, rpc)
 		if err != nil {
@@ -83,8 +118,12 @@ func TestRemotePickerGetsControllerRooms(t *testing.T) {
 		return json.Marshal(reply)
 	}
 	remote.Client.LocalMachineID = "ubuntu"
-	remote.Client.Run = func(_ context.Context, _ string, args []string, _ []byte) ([]byte, error) {
+	remote.Client.Run = func(ctx context.Context, _ string, args []string, _ []byte) ([]byte, error) {
 		if len(args) > 0 && args[0] == "machine" {
+			if mode == "slow-fallback" {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
 			return []byte(`[]`), nil
 		}
 		return nil, fmt.Errorf("unexpected command %v", args)
@@ -101,7 +140,14 @@ func TestRemotePickerGetsControllerRooms(t *testing.T) {
 				return
 			}
 			if len(pending) > 0 {
-				if err := b.Drain(ctx, peer); err != nil {
+				work := ctx
+				stop := func() {}
+				if mode == "slow-claim" {
+					work, stop = context.WithTimeout(ctx, 800*time.Millisecond)
+				}
+				err := b.Drain(work, peer)
+				stop()
+				if err != nil {
 					done <- err
 					return
 				}
@@ -124,21 +170,26 @@ func TestRemotePickerGetsControllerRooms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.Rooms) != 1 || catalog.Rooms[0].Room.ID != room.ID || catalog.Rooms[0].Room.Host.MachineID != "local" || catalog.Rooms[0].Status != "open" {
+	if len(catalog.Rooms) != 2 || catalog.Rooms[0].Room.ID != room.ID || catalog.Rooms[0].Room.Host.MachineID != "local" || catalog.Rooms[0].Status != "open" || catalog.Rooms[1].Room.ID != participantRoom.ID || catalog.Rooms[1].Status != "open" {
 		t.Fatal("Ubuntu did not get Mac room", catalog)
 	}
-	selected := catalog.Rooms[0].Room
-	if err := host.CheckRoomChoice(ctx, remote.Client, target.Target, selected); err != nil {
-		t.Fatal("fresh controller selection rejected", err)
+	if mode == "partial" && len(catalog.Warnings) == 0 {
+		t.Fatal("partial lookup warning lost")
 	}
-	room.HostSessionID = "psn_changed"
-	if err := local.Store.saveRoom(room); err != nil {
-		t.Fatal(err)
-	}
-	if err := host.CheckRoomChoice(ctx, remote.Client, target.Target, selected); err == nil {
-		t.Fatal("stale controller room accepted")
-	}
+	if mode != "slow-fallback" && mode != "slow-claim" {
+		selected := catalog.Rooms[0].Room
+		if err := host.CheckRoomChoice(ctx, remote.Client, target.Target, selected); err != nil {
+			t.Fatal("fresh controller selection rejected", err)
+		}
+		room.HostSessionID = "psn_changed"
+		if err := local.Store.saveRoom(room); err != nil {
+			t.Fatal(err)
+		}
+		if err := host.CheckRoomChoice(ctx, remote.Client, target.Target, selected); err == nil {
+			t.Fatal("stale controller room accepted")
+		}
 
+	}
 	for _, store := range []*Store{local.Store, remote.Store} {
 		state, _ := store.Read()
 		if len(state.Bindings) != 0 || len(state.Rooms) != 0 {
@@ -219,5 +270,24 @@ func TestCatalogLookupLeavesTimeToPublish(t *testing.T) {
 	outcome, err := h.Store.readOutcome(req.ID)
 	if err != nil || outcome.Phase != "complete" {
 		t.Fatal(outcome, err)
+	}
+}
+
+func TestCatalogMergeDoesNotImportOtherHosts(t *testing.T) {
+	owner := SessionConfig{MachineID: "participant", HerdrSocket: "/same/herdr.sock"}
+	room := Room{ID: "same-room", HostSessionID: "psn_host", Host: AgentTarget{MachineID: "controller", HerdrSocket: owner.HerdrSocket}}
+	controller := RoomChoice{Room: room, Status: "open", Host: "Controller"}
+	local := controller
+	local.Room.Host.MachineID, local.Host = "self", "Local"
+	foreign := controller
+	foreign.Room.Host.MachineID, foreign.Host = "unrelated", "Foreign"
+	result := mergeLocalCatalog(RoomCatalog{Rooms: []RoomChoice{controller}}, RoomCatalog{Rooms: []RoomChoice{local, foreign}}, owner)
+	if len(result.Rooms) != 2 {
+		t.Fatal("imported foreign fallback or lost same-ID room", result)
+	}
+	for _, row := range result.Rooms {
+		if row.Room.Host.MachineID != "controller" && row.Room.Host.MachineID != owner.MachineID {
+			t.Fatal("foreign fallback imported", row)
+		}
 	}
 }
