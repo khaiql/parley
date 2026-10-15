@@ -39,7 +39,7 @@ func pickRoom(in io.Reader, out io.Writer, lookup func() (herdr.RoomCatalog, err
 			fmt.Fprintf(out, "%d. %.56s\r\n   %.20s | %s\r\n   %s\r\n", i+1, pickerText(topic), pickerText(choice.Host), pickerText(status), pickerText(choice.Room.ID))
 		}
 		if len(catalog.Warnings) > 0 {
-			fmt.Fprint(out, "Lookup incomplete; numbered Join disabled.\r\n")
+			fmt.Fprint(out, "Lookup incomplete; confirmed hosts remain selectable.\r\n")
 			for _, warning := range catalog.Warnings[:min(2, len(catalog.Warnings))] {
 				fmt.Fprintf(out, "  %s\r\n", pickerText(warning))
 			}
@@ -92,7 +92,7 @@ func pickRoom(in io.Reader, out io.Writer, lookup func() (herdr.RoomCatalog, err
 			continue
 		}
 		choice := catalog.Rooms[index-1]
-		if len(catalog.Warnings) > 0 || choice.Status != "open" {
+		if choice.Status != "open" {
 			notice = fmt.Sprintf("Cannot join %s. Refresh with R or enter an ID with M.", choice.Status)
 			continue
 		}

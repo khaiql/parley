@@ -32,7 +32,6 @@ func TestHerdrRPCRejectBeforeProcess(t *testing.T) {
 func TestHerdrActionVisibleFailure(t *testing.T) {
 	for _, tc := range []struct{ name, code, hint string }{
 		{"shell", "herdr_failed", "agent pane"},
-		{"identity", "herdr_failed", "/hooks"},
 		{"modal", "herdr_failed", "modal"},
 		{"version", "helper_incompatible", "0.9.3"},
 		{"helper", "helper_unavailable", "install"},
@@ -87,10 +86,30 @@ func TestHerdrActionCapturesOriginalTarget(t *testing.T) {
 			if err := json.Unmarshal([]byte(env["PARLEY_TARGET_JSON"].(string)), &target); err != nil {
 				t.Fatal(err)
 			}
-			if frame.Method != "plugin.pane.open" || env["PARLEY_ACTION"] != op || target.PaneID != "w1:p1" || target.TerminalID != "term_original" || target.NativeSession != "original" || target.HerdrSocket != os.Getenv("HERDR_SOCKET_PATH") {
+			if frame.Method != "plugin.pane.open" || env["PARLEY_ACTION"] != op || target.PaneID != "w1:p1" || target.TerminalID != "term_original" || target.NativeSession != "" || target.HerdrSocket != os.Getenv("HERDR_SOCKET_PATH") {
 				t.Fatalf("popup lost original agent: %+v %+v", frame, target)
 			}
 		})
+	}
+}
+
+func TestHerdrActionWithoutConversationIdentity(t *testing.T) {
+	frames := nativeActionFixture(t, "identity")
+	cmd := newRootCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"herdr", "action", "start"})
+	if err := execute(cmd); err != nil {
+		t.Fatal(out.String(), err)
+	}
+	frame := <-frames
+	var target herdr.AgentTarget
+	env := frame.Params["env"].(map[string]any)
+	if err := json.Unmarshal([]byte(env["PARLEY_TARGET_JSON"].(string)), &target); err != nil {
+		t.Fatal(err)
+	}
+	if target.TerminalID != "term_original" || target.NativeSession != "" {
+		t.Fatal(target)
 	}
 }
 

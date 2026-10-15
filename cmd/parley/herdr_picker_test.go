@@ -26,7 +26,7 @@ func TestPickRoomSelectionRefreshAndValidation(t *testing.T) {
 				input, want, checks = "1\n\x1b", "", 0
 			case "incomplete":
 				catalog.Warnings = []string{"Work: unreachable"}
-				input, want, checks = "1\n\x1b", "", 0
+				input, want, checks = "1\n", "room-a", 1
 			case "manual":
 				input, want, checks = "m\nmanual-room\n", "manual-room", 0
 			case "cancel":
@@ -115,5 +115,17 @@ func TestPickRoomReturnsTerminalReadFailure(t *testing.T) {
 	_, err := pickRoom(&failedPickerReader{}, &bytes.Buffer{}, func() (herdr.RoomCatalog, error) { return herdr.RoomCatalog{}, nil }, func(herdr.Room) error { return nil })
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatal("terminal read error retried", err)
+	}
+}
+
+func TestPickRoomRejectsWholeInvalidEntry(t *testing.T) {
+	for _, input := range []string{"\t1\n", strings.Repeat("x", 513) + "1\r"} {
+		catalog := herdr.RoomCatalog{Rooms: []herdr.RoomChoice{{Room: herdr.Room{ID: "room-a"}, Status: "open"}}}
+		got, err := pickRoom(strings.NewReader(input), &bytes.Buffer{}, func() (herdr.RoomCatalog, error) {
+			return catalog, nil
+		}, func(herdr.Room) error { t.Error("rejected entry triggered selection"); return nil })
+		if got != "" || !errors.Is(err, herdr.ErrFormCancelled) {
+			t.Fatalf("rejected entry joined %q, err=%v", got, err)
+		}
 	}
 }
