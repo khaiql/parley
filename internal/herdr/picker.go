@@ -103,7 +103,11 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 	appendRoom := func(ctx context.Context, room Room, host string) {
 		choice := RoomChoice{Room: room, Host: host, Status: "closed"}
 		if !room.Closed {
-			live, err := b.validateRoom(ctx, room)
+			var live Room
+			err := ctx.Err()
+			if err == nil {
+				live, err = b.validateRoom(ctx, room)
+			}
 			choice.Status = "open"
 			if err != nil {
 				choice.Status, choice.Message = "stale", err.Error()
@@ -122,19 +126,42 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 		}
 		catalog.Rooms = append(catalog.Rooms, choice)
 	}
-	for _, room := range local {
-		appendRoom(ctx, room, "Local")
+	// Bound each lookup while reserving time for remaining rooms and hosts.
+	lookupBudget := func(remaining int) time.Duration {
+		budget := 5 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			budget = min(budget, time.Until(deadline)/time.Duration(remaining))
+		}
+		return budget
 	}
-	machines, err := b.Client.Machines(ctx)
+	remaining := 1 // Saved peer listing also needs a bounded share.
+	for _, room := range local {
+		if !room.Closed {
+			remaining++
+		}
+	}
+	lookup, cancel := context.WithTimeout(ctx, lookupBudget(remaining))
+	machines, err := b.Client.Machines(lookup)
+	cancel()
+	remaining--
 	if err != nil {
 		catalog.Warnings = append(catalog.Warnings, "Peer lookup: "+err.Error())
 	}
-	remaining := 0
 	for _, machine := range machines {
 		peer, ok := state.Peers[machine.ID]
 		if machine.Enabled && ok && peer.Machine.Target == machine.Target && peer.Machine.Session == machine.Session {
 			remaining++
 		}
+	}
+	for _, room := range local {
+		if room.Closed {
+			appendRoom(ctx, room, "Local")
+			continue
+		}
+		lookup, cancel := context.WithTimeout(ctx, lookupBudget(remaining))
+		remaining--
+		appendRoom(lookup, room, "Local")
+		cancel()
 	}
 	for _, machine := range machines {
 		if !machine.Enabled {
@@ -149,13 +176,8 @@ func (b *Broker) RoomChoices(ctx context.Context, target AgentTarget) (RoomCatal
 			catalog.Warnings = append(catalog.Warnings, host+": session_unverified (controller activation required)")
 			continue
 		}
-		// Reserve time for later hosts when an unrelated peer stalls.
-		budget := 5 * time.Second
-		if deadline, ok := ctx.Deadline(); ok {
-			budget = min(budget, time.Until(deadline)/time.Duration(remaining))
-		}
+		lookup, cancel := context.WithTimeout(ctx, lookupBudget(remaining))
 		remaining--
-		lookup, cancel := context.WithTimeout(ctx, budget)
 		binary, err := b.Client.helper(lookup, machine)
 		if err != nil || binary != peer.Binary {
 			cancel()

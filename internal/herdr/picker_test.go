@@ -4,13 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/khaiql/parley/internal/paths"
+	runtime "github.com/khaiql/parley/internal/runtime"
 )
 
 func TestRoomChoicesDurableLocalAndIsolation(t *testing.T) {
@@ -283,6 +290,85 @@ func TestRoomChoicesSlowPeerDoesNotHideHealthyPeer(t *testing.T) {
 		t.Fatalf("invalid healthy control: %+v, %v", control, controlErr)
 	}
 	t.Fatalf("healthy peer hidden by slow peer: %+v", catalog)
+}
+
+func TestRoomChoicesSlowLocalRoomDoesNotHideHealthyPeer(t *testing.T) {
+	h, req, root := brokerFixture(t)
+	local := brokerRoom(t, h, req)
+	stalled := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	t.Cleanup(stalled.Close)
+	local.Source.ArtifactURL = stalled.URL + "/rooms/" + local.ID + "/artifacts"
+	endpoint, _ := url.Parse(local.Source.ArtifactURL)
+	meta, err := runtime.LoadRoomRuntime(paths.New(root), local.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta.ArtifactLocalPort, _ = strconv.Atoi(endpoint.Port())
+	if err := runtime.SaveRoomRuntime(paths.New(root), meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Store.saveRoom(local); err != nil {
+		t.Fatal(err)
+	}
+	key, _ := SessionKey("/remote/herdr.sock")
+	peer := Peer{Machine: Machine{ID: "healthy", Target: "healthy", Session: "agents", Enabled: true}, Config: SessionConfig{MachineID: "healthy", ControllerID: "local", HerdrSocket: "/remote/herdr.sock", SessionKey: key}, Binary: "/opt/plugin/bin/parley"}
+	remote := Room{ID: "healthy-room", HostSessionID: "psn_host", Host: AgentTarget{MachineID: "healthy", HerdrSocket: peer.Config.HerdrSocket, TerminalID: "remote-term", Kind: "gemini"}, Source: Endpoints{Descriptor: "parley://127.0.0.1:40001/healthy-room", ArtifactURL: "http://127.0.0.1:40002/rooms/healthy-room/artifacts"}}
+	if err := h.Store.Update(func(s *State) error { s.Peers[peer.Machine.ID] = peer; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	h.Client.Run = func(ctx context.Context, binary string, args []string, input []byte) ([]byte, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if binary != "ssh" {
+			if len(args) > 1 && args[0] == "--machine" {
+				return []byte(`{"result":{"plugins":[{"plugin_id":"parley","enabled":true,"plugin_root":"/opt/plugin"}]}}`), nil
+			}
+			return json.Marshal([]Machine{peer.Machine})
+		}
+		var rpc RPCRequest
+		if err := json.Unmarshal(input, &rpc); err != nil {
+			return nil, err
+		}
+		switch rpc.Operation {
+		case "rooms":
+			return json.Marshal(map[string]Room{remote.ID: remote})
+		case "room":
+			return json.Marshal(remote)
+		case "probe":
+			return json.Marshal(ProbeResult{Version: HelperVersion, Config: peer.Config, Agent: &remote.Host})
+		default:
+			return nil, fmt.Errorf("unexpected operation %s", rpc.Operation)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	catalog, err := (&Broker{Store: h.Store, Client: h.Client}).RoomChoices(ctx, req.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]string{}
+	for _, choice := range catalog.Rooms {
+		statuses[choice.Room.ID] = choice.Status
+	}
+	if statuses[local.ID] != "unreachable" || statuses[remote.ID] != "open" {
+		t.Fatalf("local timeout hid healthy peer or reported stale certainty: %+v", catalog)
+	}
+}
+
+func TestRoomChoicesSlowPeerListingDoesNotHideLocalRoom(t *testing.T) {
+	h, req, _ := brokerFixture(t)
+	room := brokerRoom(t, h, req)
+	h.Client.Run = func(ctx context.Context, _ string, _ []string, _ []byte) ([]byte, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	catalog, err := (&Broker{Store: h.Store, Client: h.Client}).RoomChoices(ctx, req.Target)
+	if err != nil || len(catalog.Rooms) != 1 || catalog.Rooms[0].Room.ID != room.ID || catalog.Rooms[0].Status != "open" || len(catalog.Warnings) != 1 {
+		t.Fatalf("peer listing hid healthy local room: %+v, %v", catalog, err)
+	}
 }
 
 func TestSelectedHostRejectsUnprovenLegacyRoute(t *testing.T) {
