@@ -22,7 +22,7 @@ Linking changes which checkout the local Parley plugin uses. The old checkout an
 
 Every enabled saved SSH profile participates in discovery. Install and link Parley in that profile's selected Herdr session, then let the existing controller activate it. An enabled profile without a helper or activated session makes lookup incomplete, but confirmed local rows remain selectable. Do not disable unrelated profiles for a local-only test. An activated participant-only remote popup requests the controller’s authoritative catalog through its durable queue, so Mac-hosted rooms can be selected by number on Ubuntu. Missing activation or unavailable controller responses must produce warnings, rather than a complete empty list. Browsing never installs helpers or claims controller ownership.
 
-If setup reports `coordinator_upgrade_required`, follow the [plugin-only upgrade procedure](herdr-plugin.md#upgrading-from-the-identity-based-helper) before testing. Finish existing routed work first: restarting the owned coordinator closes its SSH routes. Agents do not need restarting.
+If setup reports `coordinator_upgrade_required`, follow the [plugin-only upgrade procedure](herdr-plugin.md#upgrading-the-helper-protocol) before testing. Finish existing routed work first: restarting the owned coordinator closes its SSH routes. Agents do not need restarting.
 
 ## 2. Add and reload shortcuts
 
@@ -126,7 +126,7 @@ To restore your former plugin checkout, link the exact old `plugin_root` recorde
 
 ## 8. SSH and harness coverage
 
-Install helper protocol 3 on both hosts and upgrade the owned coordinator using [the plugin procedure](herdr-plugin.md#upgrading-from-the-identity-based-helper). Repeat Start/Join with a local host and remote participant, then with a remote host and local participant. Verify both agents received their own host-local skill, binary, state root, and session ID. Exercise messages and artifacts in both directions; same-host proof does not establish SSH proof.
+Install helper protocol 4 on both hosts and upgrade the owned coordinator using [the plugin procedure](herdr-plugin.md#upgrading-the-helper-protocol). Repeat Start/Join with a local host and remote participant, then with a remote host and local participant. Verify both agents received their own host-local skill, binary, state root, and session ID. Exercise messages and artifacts in both directions; same-host proof does not establish SSH proof.
 
 Repeat with at least two Herdr-supported harness kinds. A working agent uses its harness's ordinary prompt behavior; no delayed-delivery guarantee is added. Record native shortcut, cross-harness, SSH authentication, sandbox approval, or acknowledgement failures separately. Do not claim an unexercised environment passes.
 
@@ -137,3 +137,15 @@ For Mac-hosted-room/Ubuntu-participant acceptance, keep a Mac room running, open
 Built helper protocol 3 for macOS and Linux amd64, linked separate prebuilt bundles on the live Mac and Ubuntu server, and restarted only Parley's coordinators. Existing checkout binaries were preserved. Ubuntu's unused second-controller configuration was backed up after verifying that it had no peers, rooms, bindings, requests, or handoffs; the Mac then activated Ubuntu as its participant. Run setup on the Mac controller only.
 
 The actual Ubuntu Join form, launched in an SSH PTY against its existing Herdr socket and Codex terminal, listed Mac room `room-1e7a728868ca7f6204b8`, topic `testing`, as `Controller | open`. Escape closed the form without choosing Join. This proves live cross-host catalog discovery; it does not prove GUI shortcut invocation, cross-host Join, prompt delivery, or messages/artifacts. Build, golangci-lint, and the full race suite passed. Regressions cover stale host-session selection, unavailable controller fallback, unactivated host warnings, bounded catalog lookup, and browsing without participant or route creation.
+
+## Terminal cleanup live proof
+
+Run only with fresh, disposable Herdr workspaces, agent terminals, rooms, and participants. Never close an existing user pane or use an existing room. Link the protocol 4 build on each host and restart only its Parley coordinator after confirming no user routes depend on it.
+
+1. On one host, create two disposable supported agent terminals. Start a room from one and Join from the other. Close only the joined terminal. Check the participant host's `parley herdr status`: its exact binding must be `left`; the host room and second participant must remain active.
+2. Start another disposable room from a host terminal. Close only that terminal. Check that its exact room record is closed and that unrelated rooms remain open. If a participant is on another host, confirm its route disappears after coordinator reconciliation.
+3. Repeat both cases with the participant and host on the other machine. Use at least two harness kinds when available; report unsupported or unavailable coverage.
+4. Move a test terminal to another pane before closing it. The move alone must preserve its participant and room. Close the moved terminal, then confirm cleanup uses the stored participant/host session IDs.
+5. Inspect `cleanup_status` and `cleanup_error` after any failed leave or stop. Do not report cleanup successful until Parley's leave acknowledgement or room-stopped record and socket shutdown are confirmed.
+
+This checkout has automated lifecycle regressions but no live terminal-close proof yet. Report local and SSH coverage separately; catalog discovery evidence above does not prove cleanup.

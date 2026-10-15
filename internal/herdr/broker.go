@@ -362,7 +362,12 @@ func (h *HostOperations) clearFailedIntent(key string, prior Binding) (bool, err
 	return true, nil
 }
 func (h *HostOperations) Join(ctx context.Context, req Request, endpoints Endpoints) (Response, error) {
-	result, err := h.join(ctx, req, endpoints)
+	var result Response
+	err := h.Store.WithBinding(ctx, terminalLockKey(req.Target), func() error {
+		var err error
+		result, err = h.join(ctx, req, endpoints)
+		return err
+	})
 	if result.Binding != nil {
 		result.Binding.Topic = req.RoomTopic
 	}
@@ -559,7 +564,12 @@ type startIntent struct {
 }
 
 func (h *HostOperations) Start(ctx context.Context, req Request) (Response, error) {
-	result, err := h.start(ctx, req)
+	var result Response
+	err := h.Store.WithBinding(ctx, terminalLockKey(req.Target), func() error {
+		var err error
+		result, err = h.start(ctx, req)
+		return err
+	})
 	if result.Binding != nil {
 		result.Binding.Topic = req.Topic
 	}

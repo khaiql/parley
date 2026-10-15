@@ -96,6 +96,8 @@ func brokerFixtureIdentity(t *testing.T, replaced func(int64) bool) (*HostOperat
 				}
 				if r.Method == "agent.list" {
 					io.WriteString(conn, `{"result":{"agents":[{"terminal_id":"term_a","pane_id":"w:p"}]}}`+"\n")
+				} else if r.Method == "session.snapshot" {
+					io.WriteString(conn, `{"result":{"type":"session_snapshot","snapshot":{"panes":[]}}}`+"\n")
 				} else if r.Method == "agent.get" {
 					count := agentCalls.Add(1)
 					if replaced != nil && replaced(count) {
