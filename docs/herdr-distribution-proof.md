@@ -25,6 +25,7 @@ The native archive test installs the actual snapshot bundle using a fixture down
 
 ## Local observations (2026-10-15)
 
+- Repository build, golangci-lint, and fresh `go test ./... -timeout 30s -race -count=1` passed after rebasing onto PR #129 head `70fc78c`.
 - GoReleaser v2.15.0 generated all four plugin archives and standalone CLI archives. All archive checks passed, including Homebrew selection.
 - macOS arm64: the real snapshot archive installed/reinstalled with Go absent from PATH. The delivered skill bootstrap resolved the supplied bundled executable. The packaged-binary integration test passed.
 - Ubuntu 24.04 amd64 container on an arm64 Docker host (emulated, not a physical Linux machine): the actual Linux amd64 snapshot installed/reinstalled with no Go installed. Native Herdr 0.9.3 link/enable, helper startup, controller setup and repeated setup passed. This container test used the same fixture download transport.
