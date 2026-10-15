@@ -185,23 +185,36 @@ func (h HostSession) directForm(ctx context.Context, operations HostOperations, 
 	if outcome.Phase == "complete" {
 		return operations.withHandoff(ctx, hostResponse(outcome.Response, owner.MachineID), nil)
 	}
+	finish := func(response Response, phase string, operationErr error) (Response, error) {
+		outcome.Response = hostResponse(response, "self")
+		outcome.Phase = phase
+		if err := h.Store.Complete(req.ID, outcome); err != nil {
+			return Response{}, err
+		}
+		return response, operationErr
+	}
 	room, err = operations.liveRoom(ctx, room)
 	if err != nil {
-		return Response{}, err
+		if outcome.Phase == "intent" || outcome.Phase == "uncertain" {
+			return finish(failure("operation_uncertain", err), "uncertain", err)
+		}
+		return finish(failure(err.Error(), err), "complete", err)
+	}
+	if outcome.Phase == "claimed" {
+		outcome.Phase, outcome.Response = "intent", Response{Status: "pending"}
+		if err = h.Store.Complete(req.ID, outcome); err != nil {
+			return Response{}, err
+		}
 	}
 	response, err := operations.Join(ctx, req, room.Source)
 	if err != nil {
-		return Response{}, err
+		return finish(failure("operation_uncertain", err), "uncertain", err)
 	}
-	outcome.Response = hostResponse(response, "self")
-	outcome.Phase = "complete"
+	phase := "complete"
 	if response.Code == "operation_uncertain" || response.Code == "participant_disconnected" {
-		outcome.Phase = "uncertain"
+		phase = "uncertain"
 	}
-	if err = h.Store.Complete(req.ID, outcome); err != nil {
-		return Response{}, err
-	}
-	return response, nil
+	return finish(response, phase, nil)
 }
 func (h HostSession) WaitOutcome(ctx context.Context, id string) (Response, error) {
 	timer := time.NewTicker(100 * time.Millisecond)
