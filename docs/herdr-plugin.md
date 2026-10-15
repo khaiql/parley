@@ -65,6 +65,8 @@ Invoke **Parley: Join room** from another existing agent pane. The popup lists t
 
 Discovery runs only on opening, explicit refresh, and selection validation. It reads the selected session's durable room records and its already activated enabled peers; it never starts a controller, claims a peer, creates a route, or joins a participant while browsing. Closed, stale, unreachable, and ambiguous records cannot be selected. Incomplete peer lookup is shown explicitly. Confirmed rooms remain selectable; selection revalidates only the selected authoritative host and the room’s original host participant session, including delayed queued requests. Manual ID lookup still requires complete discovery to avoid choosing the wrong host. Removed or changed saved profiles cannot silently reuse an old peer. The original agent and selected room are checked again before submission. Sibling local Herdr sessions and cached coordinator room records are not scanned.
 
+Numbered selection rejects legacy forwarded participants whose room host cannot be proved. Their existing sessions remain usable; manual room-ID entry can reuse the original participant without creating another one.
+
 A same-host room joins directly without SSH. Cross-host Join persists a request, reports its marker through the native socket, and waits for the local coordinator. The coordinator acquires both the message and HTTP artifact routes before invoking the fixed host-local Join helper. Both initiating-host directions work: local room with remote participant uses two reverse forwards; remote room with local participant uses two local forwards. Joining between two different remote hosts is unsupported. A remote-only UI needs the local controller's saved SSH profile active; the remote popup never starts another controller.
 
 The form shows a request ID for pending or uncertain work. Inspect the original host's durable status before retrying:
@@ -81,7 +83,7 @@ Detaching the Herdr UI leaves the owned coordinator, event readers, and SSH mast
 
 ### Automatic agent handoff
 
-After confirmed Start/Join, the participant host calls Herdr `agent.prompt` for the captured terminal. Instructions include the room, topic, existing participant/session, bundled Parley skill, executable, and pinned runtime root. The agent sends a presence message and continues its task using that session. No session ID copying or second agent-side Join is needed. An operation that completes after the popup closes still submits its instructions.
+After confirmed Start/Join, the participant host calls Herdr `agent.prompt` for the captured terminal. The short handoff supplies the room, topic, existing session, bundled Parley skill, executable, and pinned runtime root. The skill covers session reuse and communication: check the inbox for task context, continue work, and send useful task messages without automatic join announcements or acknowledgement-only replies. No session ID copying or second agent-side Join is needed. An operation that completes after the popup closes still submits its instructions.
 
 The popup reports **submitted**, **failed**, or **uncertain** separately from room creation. Submitted means Herdr accepted the input; it does not prove the agent finished processing it. Each harness controls its normal input behavior, including input while working. Parley adds no next-turn queue, agent restart, hook change, or receive worker.
 

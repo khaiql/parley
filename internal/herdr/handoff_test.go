@@ -165,8 +165,11 @@ func serveHandoffFixture(t *testing.T, listener net.Listener, mode, kind string,
 					reply = fmt.Sprintf(`{"result":{"type":"agent_prompted","agent":{"terminal_id":"term_a","agent":%q}}}`, kind)
 					prompts.Add(1)
 					text, _ := frame.Params["text"].(string)
-					if frame.Params["target"] != "w2:p9" || !strings.Contains(text, "psn_here") || !strings.Contains(text, "skills/parley/SKILL.md") || !strings.Contains(text, "PARLEY_STATE_DIR") || !strings.Contains(text, "already joined") {
+					if frame.Params["target"] != "w2:p9" || !strings.Contains(text, "room-a") || !strings.Contains(text, "psn_here") || !strings.Contains(text, "skills/parley/SKILL.md") || !strings.Contains(text, "PARLEY_STATE_DIR") || !strings.Contains(text, "PARLEY_BIN") {
 						t.Errorf("wrong handoff %+v", frame.Params)
+					}
+					if strings.Contains(text, "presence message") || strings.Contains(text, "every participant command") || strings.Contains(text, "Do not start or join") {
+						t.Error("handoff repeats skill instructions or requests automatic chatter")
 					}
 					if frame.Params["wait"] != nil {
 						t.Error("waits for agent completion")

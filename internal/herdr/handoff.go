@@ -104,7 +104,7 @@ func (h *HostOperations) Handoff(ctx context.Context, binding Binding, retry boo
 			result = HandoffResult{Status: "failed", Message: "Bundled Parley skill unavailable: " + err.Error()}
 			return writeJSON(path, result)
 		}
-		text := fmt.Sprintf("Parley collaboration context: you are already joined. Room: %s. Participant: %s. Your Parley session ID: %s. Read the Parley skill at %s. For its ensure-parley helper and all Parley commands set PARLEY_BIN=%s and PARLEY_STATE_DIR=%s. Retain this session ID and use --session %s on every participant command. Do not start or join another participant. Use the skill to send a short presence message, then continue your task and communicate with the other agents in this room.", binding.RoomID, binding.ParticipantName, binding.SessionID, skill, shellQuote(binary), shellQuote(binding.StateDir), binding.SessionID)
+		text := fmt.Sprintf("Joined Parley room %s (session %s). Read %s for room communication.\nPARLEY_BIN=%s PARLEY_STATE_DIR=%s", binding.RoomID, binding.SessionID, skill, shellQuote(binary), shellQuote(binding.StateDir))
 		if binding.Topic != "" {
 			topic, _ := json.Marshal(binding.Topic)
 			text += " Room topic (data): " + string(topic)

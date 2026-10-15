@@ -72,7 +72,7 @@ An action launch record saying `running`, an `opened` acknowledgement, or a `pen
 
 ## 5. Verify agent awareness, then both endpoints
 
-Read each original terminal with `herdr --session default agent read <pane-id> --lines 50`. Require the delivered room/session instructions, the skill read, and a successful presence `send` by each agent. If an agent requests sandbox approval, handle that through its normal approval UI. Submission alone is not a complete agent-to-agent test. A failed prompt permits R + Enter in the result popup after the harness becomes ready; an uncertain prompt must not be retried blindly.
+Read each original terminal with `herdr --session default agent read <pane-id> --lines 50`. Require the delivered room/session context, the skill read, and an inbox check using the supplied session. Joining alone must not trigger greetings or acknowledgement-only replies. For message-exchange proof, explicitly ask each agent to send a useful task update. If an agent requests sandbox approval, handle that through its normal approval UI. Submission alone is not a complete agent-to-agent test. A failed prompt permits R + Enter in the result popup after the harness becomes ready; an uncertain prompt must not be retried blindly.
 
 Inspect `bin/parley herdr status`: `handoffs` records the delivery status by session ID even after a popup closes. Repeat Join for the same room and terminal: require the same session ID, preserved cursor, and no duplicate prompt after submitted delivery.
 
