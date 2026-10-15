@@ -1,0 +1,204 @@
+package herdr
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync/atomic"
+	"testing"
+)
+
+func TestRoomChoicesDurableLocalAndIsolation(t *testing.T) {
+	h, req, root := brokerFixture(t)
+	room := brokerRoom(t, h, req)
+	room.Topic = "parser discussion"
+	if err := h.Store.saveRoom(room); err != nil {
+		t.Fatal(err)
+	}
+	unjoined := req
+	unjoined.RoomID = "unjoined"
+	brokerRoom(t, h, unjoined)
+	closed := room
+	closed.ID = "closed"
+	closed.Closed = true
+	if err := h.Store.saveRoom(closed); err != nil {
+		t.Fatal(err)
+	}
+	stale := room
+	stale.ID = "stale"
+	if err := h.Store.saveRoom(stale); err != nil {
+		t.Fatal(err)
+	}
+	sibling := NewStore(filepath.Join(root, "sibling"))
+	other := room
+	other.ID = "sibling-room"
+	if err := sibling.saveRoom(other); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Store.Update(func(state *State) error {
+		state.Rooms[other.ID] = other // Discovery cache must not become a host registry.
+		state.Bindings[HostBindingKey(room.ID, req.Target)] = Binding{RoomID: room.ID, Target: req.Target, SessionID: "psn_existing", JoinPhase: "complete"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) { return []byte(`[]`), nil }
+	before, _ := h.Store.Read()
+	broker := Broker{Store: NewStore(h.Store.dir), Client: h.Client}
+	got, err := broker.RoomChoices(context.Background(), req.Target)
+	if err != nil || len(got.Rooms) != 4 || len(got.Warnings) != 0 {
+		t.Fatalf("catalog=%+v err=%v", got, err)
+	}
+	statuses := map[string]string{}
+	for _, choice := range got.Rooms {
+		statuses[choice.Room.ID] = choice.Status
+		if choice.Joined != (choice.Room.ID == room.ID) {
+			t.Fatal("incorrect joined status", choice)
+		}
+		if choice.Room.ID == room.ID && (!choice.Joined || choice.Room.Topic != room.Topic || choice.Host != "Local") {
+			t.Fatal("lost room/agent metadata", choice)
+		}
+	}
+	if !reflect.DeepEqual(statuses, map[string]string{room.ID: "open", "unjoined": "open", "closed": "closed", "stale": "stale"}) {
+		t.Fatal(statuses)
+	}
+	after, _ := h.Store.Read()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("browsing changed durable state")
+	}
+}
+
+func TestRoomChoiceRechecksBeforeJoin(t *testing.T) {
+	for _, change := range []string{"unchanged", "closed", "target", "missing", "host", "session"} {
+		t.Run(change, func(t *testing.T) {
+			var replaced atomic.Bool
+			h, req, _ := brokerFixtureIdentity(t, func(int64) bool { return replaced.Load() })
+			room := brokerRoom(t, h, req)
+			h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) { return []byte(`[]`), nil }
+			broker := Broker{Store: h.Store, Client: h.Client}
+			catalog, err := broker.RoomChoices(context.Background(), req.Target)
+			if err != nil || len(catalog.Rooms) != 1 || catalog.Rooms[0].Status != "open" {
+				t.Fatal(catalog, err)
+			}
+			switch change {
+			case "closed":
+				room.Closed = true
+				if err := h.Store.saveRoom(room); err != nil {
+					t.Fatal(err)
+				}
+			case "target":
+				replaced.Store(true)
+			case "missing":
+				if err := os.Remove(filepath.Join(h.Store.dir, "rooms", room.ID+".json")); err != nil {
+					t.Fatal(err)
+				}
+			case "host":
+				room.Host.NativeSession = "different"
+				if err := h.Store.saveRoom(room); err != nil {
+					t.Fatal(err)
+				}
+			case "session":
+				room.HostSessionID = "psn_replaced"
+				if err := h.Store.saveRoom(room); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, _ := h.Store.Read()
+			if err := broker.CheckRoomChoice(context.Background(), req.Target, catalog.Rooms[0].Room); (err == nil) != (change == "unchanged") {
+				t.Fatal("selection validation", change, err)
+			}
+			after, _ := h.Store.Read()
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("selection validation mutated state")
+			}
+		})
+	}
+}
+
+func TestRoomChoicesPeersAndAmbiguity(t *testing.T) {
+	for _, mode := range []string{"open", "offline", "ambiguous", "changed-profile", "forged-session", "unactivated"} {
+		t.Run(mode, func(t *testing.T) {
+			h, req, _ := brokerFixture(t)
+			local := brokerRoom(t, h, req)
+			key, _ := SessionKey("/remote/herdr.sock")
+			peer := Peer{Machine: Machine{ID: "peer", Label: "Work", Target: "host", Session: "agents", Enabled: true}, Config: SessionConfig{MachineID: "peer", ControllerID: "local", HerdrSocket: "/remote/herdr.sock", SessionKey: key}, Binary: "/opt/plugin/bin/parley"}
+			if mode != "unactivated" {
+				if err := h.Store.Update(func(state *State) error { state.Peers[peer.Machine.ID] = peer; return nil }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			remote := local
+			remote.ID = "remote-room"
+			remote.Host.MachineID = peer.Machine.ID
+			remote.Host.HerdrSocket = peer.Config.HerdrSocket
+			if mode == "ambiguous" {
+				remote.ID = local.ID
+			}
+			remote.Source.Descriptor = strings.ReplaceAll(local.Source.Descriptor, local.ID, remote.ID)
+			remote.Source.ArtifactURL = strings.ReplaceAll(local.Source.ArtifactURL, local.ID, remote.ID)
+			if mode == "forged-session" {
+				remote.Host.HerdrSocket = "/sibling/herdr.sock"
+			}
+			h.Client.Run = func(_ context.Context, binary string, args []string, input []byte) ([]byte, error) {
+				if binary != "ssh" {
+					if len(args) > 1 && args[0] == "--machine" {
+						return []byte(`{"result":{"plugins":[{"plugin_id":"parley","enabled":true,"plugin_root":"/opt/plugin"}]}}`), nil
+					}
+					machine := peer.Machine
+					if mode == "changed-profile" {
+						machine.Target = "different-host"
+					}
+					return json.Marshal([]Machine{machine})
+				}
+				if mode == "offline" {
+					return nil, fmt.Errorf("host unreachable")
+				}
+				var rpc RPCRequest
+				if err := json.Unmarshal(input, &rpc); err != nil {
+					t.Fatal(err)
+				}
+				switch rpc.Operation {
+				case "rooms":
+					return json.Marshal(map[string]Room{remote.ID: remote})
+				case "room":
+					return json.Marshal(remote)
+				case "probe":
+					return json.Marshal(ProbeResult{Config: peer.Config, Agent: &remote.Host, AgentStatus: "idle"})
+				default:
+					t.Fatalf("browsing attempted mutation: %s %v", rpc.Operation, args)
+					return nil, nil
+				}
+			}
+			broker := Broker{Store: h.Store, Client: h.Client}
+			before, _ := h.Store.Read()
+			got, err := broker.RoomChoices(context.Background(), req.Target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "open" || mode == "ambiguous" {
+				if len(got.Rooms) != 2 || len(got.Warnings) != 0 {
+					t.Fatal(got)
+				}
+				for _, choice := range got.Rooms {
+					want := "open"
+					if mode == "ambiguous" {
+						want = "ambiguous"
+					}
+					if choice.Status != want {
+						t.Fatal(choice)
+					}
+				}
+			} else if len(got.Warnings) == 0 || len(got.Rooms) != 1 {
+				t.Fatal("failed lookup presented as complete or leaked foreign records", got)
+			}
+			after, _ := h.Store.Read()
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("browsing changed peer ownership, bindings, or requests")
+			}
+		})
+	}
+}
