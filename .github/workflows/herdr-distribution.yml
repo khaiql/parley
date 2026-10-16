@@ -1,0 +1,47 @@
+name: Herdr distribution
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  bundles:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Installer failure and preservation tests (no Go on PATH)
+        run: python3 scripts/test-herdr-install.py
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --snapshot --clean --skip=publish
+      - name: Check all four archives and standalone CLI parity
+        run: python3 scripts/check-herdr-release.py dist
+      - name: Install native archive without Go and exercise helper forms
+        run: |
+          python3 scripts/test-herdr-install.py --release-dist dist
+          go test -c -o "$RUNNER_TEMP/herdr.test" ./internal/herdr
+          BUNDLE="$(cat dist/test-plugin-root.txt)"
+          PATH=/usr/bin:/bin PARLEY_HERDR_TEST_BUNDLE="$BUNDLE" "$RUNNER_TEMP/herdr.test" -test.run '^TestIntegrationNativeFormsAndActivation$' -test.timeout 30s -test.v
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herdr-bundles-${{ matrix.os }}
+          path: |
+            dist/parley-herdr_*.tar.gz
+            dist/checksums.txt

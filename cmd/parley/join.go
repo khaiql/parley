@@ -16,6 +16,7 @@ func joinCmd() *cobra.Command {
 	var role string
 	var dir string
 	var repo string
+	var artifactEndpoint string
 
 	cmd := &cobra.Command{
 		Use:   "join <descriptor>",
@@ -29,6 +30,11 @@ func joinCmd() *cobra.Command {
 			if err != nil {
 				return writeJSONError(cmd, "invalid_descriptor", fmt.Sprintf("invalid descriptor: %v", err))
 			}
+			if artifactEndpoint != "" {
+				if err := validateArtifactEndpoint(artifactEndpoint, desc.RoomID); err != nil {
+					return writeJSONError(cmd, "invalid_artifact_endpoint", err.Error())
+				}
+			}
 			if name == "" {
 				generated, err := generatedParticipantName()
 				if err != nil {
@@ -37,11 +43,12 @@ func joinCmd() *cobra.Command {
 				name = generated
 			}
 			pid, err := launchParticipantDaemon(participantDaemonConfig{
-				Descriptor: desc,
-				Name:       name,
-				Role:       role,
-				Directory:  dir,
-				Repo:       repo,
+				Descriptor:       desc,
+				Name:             name,
+				Role:             role,
+				Directory:        dir,
+				Repo:             repo,
+				ArtifactEndpoint: artifactEndpoint,
 			})
 			if err != nil {
 				return writeJSONError(cmd, "runtime_error", fmt.Sprintf("start participant daemon: %v", err))
@@ -91,6 +98,8 @@ func joinCmd() *cobra.Command {
 	cmd.Flags().StringVar(&role, "role", "participant", "Participant role")
 	cmd.Flags().StringVar(&dir, "dir", "", "Participant working directory")
 	cmd.Flags().StringVar(&repo, "repo", "", "Participant repository URL")
+
+	cmd.Flags().StringVar(&artifactEndpoint, "artifact-endpoint", "", "Artifact HTTP endpoint for a separately mapped tunnel")
 
 	return cmd
 }

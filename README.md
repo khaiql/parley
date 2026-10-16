@@ -94,7 +94,14 @@ Artifact limits are fixed in v1: 100 MiB per file, 10 files per message, and 250
 
 Use `"$PARLEY" info $SESSION_ARGS` to rediscover artifact endpoint metadata and limits for an active session. `sessions` includes the key artifact endpoint fields for local recovery.
 
-For remote participants, create your own tunnels to both ports returned by `start`, `invite`, `info`, or `sessions`: the room protocol `local_port` and the artifact HTTP `artifact_local_port`. Share a descriptor that uses the room protocol tunnel host and port with the same room id. Parley does not create or manage tunnels.
+For remote participants, create your own tunnels to both ports returned by `start`, `invite`, `info`, or `sessions`: the room protocol `local_port` and the artifact HTTP `artifact_local_port`. Share a descriptor that uses the room protocol tunnel host and port with the same room id. Parley does not create or manage tunnels. If the artifact tunnel uses a different local port, pass its HTTP URL when joining:
+
+```bash
+"$PARLEY" join parley://127.0.0.1:49001/room-1 --name reviewer \
+  --artifact-endpoint http://127.0.0.1:49002/rooms/room-1/artifacts
+```
+
+The override must use `http`, an explicit port from 1 to 65535, and the exact `/rooms/<room-id>/artifacts` path. Credentials, query strings, and fragments are rejected. Without this flag, Parley uses the descriptor host and the room's advertised artifact port. The override applies only to the joining participant; room metadata remains unchanged.
 
 ## Agent Skill
 
@@ -178,6 +185,10 @@ go test ./internal/e2e -run TestHeadlessRoomTwoParticipants -count=100
 
 ## Release
 
-Push a SemVer tag such as `v0.1.0` to run the GoReleaser workflow. The workflow publishes GitHub release archives and updates the Homebrew cask in `khaiql/homebrew-parley`; it requires a `HOMEBREW_TAP_GITHUB_TOKEN` secret with contents write access to that tap repository.
+Push a SemVer tag such as `v0.1.0` to run the GoReleaser workflow. The workflow publishes standalone CLI archives, versioned Herdr plugin bundles (manifest, `bin/parley`, and agent skills) for Linux/macOS amd64/arm64, a plugin installer, and SHA-256 checksums. The [plugin guide](docs/herdr-plugin.md) covers installation, updates, and rollback. It also updates the Homebrew cask in `khaiql/homebrew-parley`; it requires a `HOMEBREW_TAP_GITHUB_TOKEN` secret with contents write access to that tap repository.
 
 See [CLAUDE.md](CLAUDE.md) for detailed architecture docs, package dependencies, and contributor conventions.
+
+### Herdr rooms
+
+Herdr 0.9.3+ can start and join rooms from existing agent panes, with both message and artifact SSH ports opened automatically. [Install the same prebuilt plugin release](docs/herdr-plugin.md#install-a-prebuilt-release) on every participating host (no Go/compiler required), run the bundled `bin/parley herdr setup` only on the local controller, and add the [focused-pane Start/Join shortcuts](docs/herdr-plugin.md#set-up-focused-pane-shortcuts). Start accepts a topic; Join offers numbered room selection. After either succeeds, Herdr sends the existing agent its room/session and bundled Parley skill automatically. Any supported harness can participate; native conversation identity, Codex flags, and agent restarts are unnecessary. See [delivery and upgrade behavior](docs/herdr-plugin.md#automatic-agent-handoff), [local verification](docs/herdr-local-test.md), and [handoff evidence](docs/herdr-handoff-proof.md).

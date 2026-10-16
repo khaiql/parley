@@ -1,0 +1,427 @@
+package herdr
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+)
+
+// ErrHostUnavailable marks a temporary host/session outage at its source.
+var ErrHostUnavailable = errors.New("host temporarily unavailable")
+
+func EventFailureCode(err error) string {
+	if errors.Is(err, ErrHostUnavailable) || errors.Is(err, io.EOF) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "helper_transport_failed"
+	}
+	var network *net.OpError
+	if errors.As(err, &network) {
+		return "helper_transport_failed"
+	}
+	return "helper_startup_failed"
+}
+
+func isEventTransportError(err error) bool {
+	if err == nil || errors.Is(err, io.EOF) || errors.Is(err, errEventProcess) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var network *net.OpError
+	if errors.Is(err, ErrHostUnavailable) || errors.As(err, &network) {
+		return true
+	}
+	var api *apiError
+	return errors.As(err, &api) && (api.Code == "events_lost" || api.Code == "helper_transport_failed")
+}
+
+func subscriptionParams() any {
+	return map[string]any{"subscriptions": []map[string]string{
+		{"type": "workspace.metadata_updated"}, {"type": "workspace.closed"}, {"type": "tab.closed"},
+		{"type": "pane.closed"}, {"type": "pane.exited"}, {"type": "pane.moved"},
+	}}
+}
+func subscriptionRequest() any {
+	return map[string]any{"id": "parley-requests", "method": "events.subscribe", "params": subscriptionParams()}
+}
+
+// ReadEvents drains invalidations independently of slow authoritative queue reads.
+func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wake func() error) (result error) {
+	parent := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	if closer, ok := stream.(io.Closer); ok {
+		stopped := make(chan struct{})
+		defer close(stopped)
+		go func() {
+			select {
+			case <-ctx.Done():
+				closer.Close()
+			case <-stopped:
+			}
+		}()
+	}
+	ticks := make(chan bool, 1)
+	callbackErrors := make(chan error, 1)
+	var worker sync.WaitGroup
+	worker.Add(1)
+	defer func() {
+		cancel()
+		worker.Wait()
+		select {
+		case e := <-callbackErrors:
+			if parent.Err() == nil && isEventTransportError(result) && errors.Is(e, context.Canceled) {
+				return
+			}
+			result = e
+		default:
+		}
+	}()
+	go func() {
+		defer worker.Done()
+		first := true
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticks:
+				var e error
+				if first {
+					first = false
+					e = started()
+				} else {
+					e = wake()
+				}
+				if e != nil {
+					select {
+					case callbackErrors <- e:
+					default:
+					}
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	s := bufio.NewScanner(stream)
+	s.Buffer(make([]byte, 4096), 1024*1024)
+	acked := false
+	for s.Scan() {
+		if !utf8.Valid(s.Bytes()) {
+			return fmt.Errorf("malformed event frame: invalid UTF-8")
+		}
+		var f struct {
+			ID     string `json:"id"`
+			Result *struct {
+				Type string `json:"type"`
+			} `json:"result"`
+			Event string `json:"event"`
+			Data  struct {
+				Type string `json:"type"`
+			} `json:"data"`
+			Error *apiError `json:"error"`
+		}
+		if e := json.Unmarshal(s.Bytes(), &f); e != nil {
+			return fmt.Errorf("malformed event frame: %w", e)
+		}
+		if f.Error != nil {
+			if f.Error.Code == "events_lost" || f.Error.Code == "helper_transport_failed" {
+				return f.Error
+			}
+			return fmt.Errorf("capability_unavailable: %w", f.Error)
+		}
+		if e := ctx.Err(); e != nil {
+			select {
+			case e := <-callbackErrors:
+				return e
+			default:
+				return e
+			}
+		}
+		if !acked {
+			if f.ID != "parley-requests" || f.Result == nil || f.Result.Type != "subscription_started" {
+				return fmt.Errorf("subscription acknowledgement required")
+			}
+			acked = true
+			select {
+			case ticks <- true:
+			default:
+			}
+			continue
+		}
+		if f.Result != nil {
+			if f.ID == "parley-requests" && f.Result.Type == "parley_transport_keepalive" && validTransportKeepalive(s.Bytes()) {
+				continue
+			}
+			return fmt.Errorf("unexpected subscription response")
+		}
+		if f.Data.Type != f.Event {
+			return fmt.Errorf("malformed event frame: event data mismatch")
+		}
+		switch f.Event {
+		case "workspace_metadata_updated", "workspace_closed", "tab_closed", "pane_closed", "pane_exited", "pane_moved":
+			select {
+			case ticks <- false:
+			default:
+			}
+		default:
+			return fmt.Errorf("malformed event frame: unexpected event")
+		}
+	}
+	if parent.Err() != nil {
+		return parent.Err()
+	}
+	if e := s.Err(); e != nil {
+		return e
+	}
+	return io.EOF
+}
+
+// validTransportKeepalive accepts only the internal control frame, without native event data.
+func validTransportKeepalive(data []byte) bool {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	expect := func(want any) bool {
+		token, err := decoder.Token()
+		return err == nil && token == want
+	}
+	if !expect(json.Delim('{')) {
+		return false
+	}
+	id, result := false, false
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		switch key {
+		case "id":
+			if id || !expect("parley-requests") {
+				return false
+			}
+			id = true
+		case "result":
+			if result || !expect(json.Delim('{')) || !expect("type") || !expect("parley_transport_keepalive") || !expect(json.Delim('}')) {
+				return false
+			}
+			result = true
+		default:
+			return false
+		}
+	}
+	if !id || !result || !expect(json.Delim('}')) {
+		return false
+	}
+	_, err := decoder.Token()
+	return err == io.EOF
+}
+
+func RelayEvents(ctx context.Context, socket string, out io.Writer) error {
+	conn, e := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socket)
+	if e != nil {
+		return e
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	defer func() { cancel(); conn.Close(); workers.Wait() }()
+	workers.Add(1)
+	go func() { defer workers.Done(); <-ctx.Done(); conn.Close() }()
+	if e = conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
+		return e
+	}
+	if e = json.NewEncoder(conn).Encode(subscriptionRequest()); e != nil {
+		return e
+	}
+	type eventFrame struct {
+		data []byte
+		err  error
+	}
+	frames := make(chan eventFrame, 1)
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		s := bufio.NewScanner(conn)
+		s.Buffer(make([]byte, 4096), 1024*1024)
+		for s.Scan() {
+			select {
+			case frames <- eventFrame{data: append([]byte(nil), s.Bytes()...)}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		err := s.Err()
+		if err == nil {
+			err = io.EOF
+		}
+		select {
+		case frames <- eventFrame{err: err}:
+		case <-ctx.Done():
+		}
+	}()
+	var ticker *time.Ticker
+	var timer <-chan time.Time
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
+	acked := false
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer:
+			if _, e = io.WriteString(out, `{"id":"parley-requests","result":{"type":"parley_transport_keepalive"}}`+"\n"); e != nil {
+				return e
+			}
+		case frame := <-frames:
+			if frame.err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return frame.err
+			}
+			if !utf8.Valid(frame.data) {
+				return fmt.Errorf("malformed event frame: invalid UTF-8")
+			}
+			var f struct {
+				ID     string `json:"id"`
+				Result struct {
+					Type string `json:"type"`
+				} `json:"result"`
+				Error *apiError `json:"error"`
+			}
+			if e = json.Unmarshal(frame.data, &f); e != nil {
+				return fmt.Errorf("malformed event frame: %w", e)
+			}
+			if !acked && f.Error == nil {
+				if f.ID != "parley-requests" || f.Result.Type != "subscription_started" {
+					return fmt.Errorf("subscription acknowledgement required")
+				}
+				acked = true
+			}
+			if _, e = out.Write(append(frame.data, '\n')); e != nil {
+				return e
+			}
+			if f.Error != nil {
+				return f.Error
+			}
+			if acked && timer == nil {
+				ticker = time.NewTicker(2 * time.Second)
+				timer = ticker.C
+			}
+		}
+	}
+}
+
+var errEventProcess = errors.New("event process failed")
+
+type processStream struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	cmd    *exec.Cmd
+	stderr *boundedBuffer
+	once   sync.Once
+	err    error
+}
+
+func (p *processStream) Close() error {
+	p.once.Do(func() { p.cancel(); p.ReadCloser.Close(); p.err = p.cmd.Wait() })
+	return p.err
+}
+func (p *processStream) Read(b []byte) (int, error) {
+	n, e := p.ReadCloser.Read(b)
+	if e == io.EOF {
+		wait := p.Close()
+		if wait != nil {
+			var helper struct {
+				Status string    `json:"status"`
+				Error  *apiError `json:"error"`
+			}
+			if json.Unmarshal(p.stderr.Bytes(), &helper) == nil && helper.Status == "error" && helper.Error != nil && (helper.Error.Code == "helper_startup_failed" || helper.Error.Code == "helper_unavailable") {
+				e = helper.Error
+			} else {
+				e = fmt.Errorf("%w: %v: %s", errEventProcess, wait, p.stderr.String())
+			}
+		}
+	}
+	return n, e
+}
+func (c *Client) OpenEvents(ctx context.Context, p Peer) (io.ReadCloser, error) {
+	r := RPCRequest{Operation: "events", Session: p.Machine.Session, SessionKey: p.Config.SessionKey, ControllerID: p.Config.ControllerID}
+	if e := r.Validate(); e != nil {
+		return nil, e
+	}
+	if !filepath.IsAbs(p.Binary) || filepath.Clean(p.Binary) != p.Binary || strings.ContainsRune(p.Binary, 0) {
+		return nil, fmt.Errorf("invalid installed helper")
+	}
+	if e := validateMachine(p.Machine); e != nil {
+		return nil, e
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	b, e := json.Marshal(r)
+	if e != nil {
+		cancel()
+		return nil, e
+	}
+	// #nosec G204 -- The saved target is validated; the trusted executable is shell-quoted and operation data uses stdin.
+	cmd := exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "--", p.Machine.Target, helperCommand(p.Binary))
+	cmd.Stdin = bytes.NewReader(b)
+	stderr := &boundedBuffer{limit: 64 * 1024, cancel: cancel}
+	cmd.Stderr = stderr
+	cmd.WaitDelay = processWaitDelay
+	out, e := cmd.StdoutPipe()
+	if e != nil {
+		cancel()
+		return nil, e
+	}
+	if e = cmd.Start(); e != nil {
+		out.Close()
+		cancel()
+		return nil, e
+	}
+	stream := &processStream{ReadCloser: out, cancel: cancel, cmd: cmd, stderr: stderr}
+	go func() { <-ctx.Done(); stream.Close() }()
+	return stream, nil
+}
+
+// WatchRequests always obtains a fresh acknowledgement before startup/recovery reads.
+func (c *Client) WatchRequests(ctx context.Context, p Peer, reconcile func(context.Context, Peer) error) error {
+	backoff := time.Second
+	for {
+		if e := ctx.Err(); e != nil {
+			return e
+		}
+		stream, e := c.OpenEvents(ctx, p)
+		if e == nil {
+			e = ReadEvents(ctx, stream, func() error { backoff = time.Second; return reconcile(ctx, p) }, func() error { return reconcile(ctx, p) })
+			stream.Close()
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !isEventTransportError(e) {
+			return e
+		}
+
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
+		}
+	}
+}
