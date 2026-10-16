@@ -74,7 +74,7 @@ func nativeErrorHint(code string, err error) string {
 	case strings.Contains(err.Error(), "ui_busy"):
 		return "Close the active Herdr modal, then retry the Parley Start/Join shortcut."
 	case code == "helper_unavailable":
-		return "Herdr helper unavailable. Install Herdr on this host and rebuild/relink Parley."
+		return "Herdr helper unavailable. Install Herdr on this host and install/relink the Parley bundle."
 	case code == "helper_incompatible":
 		return "Herdr 0.9.3 or newer required. Check the Herdr binary on this host."
 	case code == "native_context_required":

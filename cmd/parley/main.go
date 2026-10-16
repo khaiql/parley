@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/khaiql/parley/internal/adapter"
+	"github.com/khaiql/parley/internal/herdr"
 	"github.com/khaiql/parley/internal/jsonout"
 	"github.com/khaiql/parley/internal/model"
 )
@@ -91,13 +92,15 @@ func versionCmd() *cobra.Command {
 		Args:  noArgsJSON,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return writeJSON(cmd, struct {
-				Status          string `json:"status"`
-				Version         string `json:"version"`
-				ProtocolVersion string `json:"protocol_version"`
+				Status             string `json:"status"`
+				Version            string `json:"version"`
+				ProtocolVersion    string `json:"protocol_version"`
+				HerdrHelperVersion int    `json:"herdr_helper_version"`
 			}{
-				Status:          "ok",
-				Version:         version,
-				ProtocolVersion: protocolVersion,
+				Status:             "ok",
+				Version:            version,
+				ProtocolVersion:    protocolVersion,
+				HerdrHelperVersion: herdr.HelperVersion,
 			})
 		},
 	}

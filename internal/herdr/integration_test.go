@@ -14,23 +14,27 @@ import (
 func TestIntegrationNativeFormsAndActivation(t *testing.T) {
 	operations, start, root := brokerFixture(t)
 	binary := filepath.Join(root, "bin", "parley")
-	if err := os.MkdirAll(filepath.Dir(binary), 0700); err != nil {
-		t.Fatal(err)
-	}
-	skillDir := filepath.Join(root, "skills", "parley")
-	if err := os.MkdirAll(skillDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	skill, err := os.ReadFile("../../skills/parley/SKILL.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), skill, 0600); err != nil {
-		t.Fatal(err)
-	}
-	build := exec.Command("go", "build", "-o", binary, "../../cmd/parley")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %s %v", out, err)
+	if bundle := os.Getenv("PARLEY_HERDR_TEST_BUNDLE"); bundle != "" {
+		binary = filepath.Join(bundle, "bin", "parley")
+	} else {
+		if err := os.MkdirAll(filepath.Dir(binary), 0700); err != nil {
+			t.Fatal(err)
+		}
+		skillDir := filepath.Join(root, "skills", "parley")
+		if err := os.MkdirAll(skillDir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		skill, err := os.ReadFile("../../skills/parley/SKILL.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), skill, 0600); err != nil {
+			t.Fatal(err)
+		}
+		build := exec.Command("go", "build", "-o", binary, "../../cmd/parley")
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("build: %s %v", out, err)
+		}
 	}
 	operations.Client.ParleyBinary = binary
 	host := HostSession{Config: SessionConfig{HerdrSocket: operations.Client.HerdrSocket}, ConfigDir: filepath.Join(root, "config"), Store: operations.Store}

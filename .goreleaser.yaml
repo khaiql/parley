@@ -1,9 +1,13 @@
 version: 2
 project_name: parley
 
+before:
+  hooks:
+    - sh scripts/prepare-herdr-release.sh {{ .Version }}
+
 builds:
   - id: parley
-    binary: parley
+    binary: bin/parley
     main: ./cmd/parley
     env:
       - CGO_ENABLED=0
@@ -15,7 +19,9 @@ builds:
       - arm64
 
 archives:
-  - formats:
+  - id: cli
+    strip_binary_directory: true
+    formats:
       - tar.gz
     name_template: >-
       {{ .ProjectName }}_
@@ -24,12 +30,21 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
       {{- if .Arm }}v{{ .Arm }}{{ end }}
+  - id: herdr
+    formats: [tar.gz]
+    name_template: 'parley-herdr_v{{ .Version }}_{{ title .Os }}_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
+    files:
+      - src: .release/herdr-plugin.toml
+        dst: .
+        strip_parent: true
+      - skills/parley/**
 
 checksum:
   name_template: 'checksums.txt'
 
 homebrew_casks:
   - name: parley
+    ids: [cli]
     binaries:
       - parley
     repository:
@@ -50,6 +65,10 @@ homebrew_casks:
 
 snapshot:
   version_template: "0.0.0-next"
+
+release:
+  extra_files:
+    - glob: install-herdr.sh
 
 changelog:
   sort: asc
