@@ -141,7 +141,16 @@ The coordinator scans on event subscription startup, lifecycle events, reconnect
 
 ### Update and rollback
 
-For registrations made with `parley herdr install`, follow the [README upgrade steps](../README.md#upgrade-the-plugin). Disable the controller and wait for its old coordinators to exit before replacing participant registrations. After disabling a participant, rerun its new CLI's `parley herdr install`; update the controller last and rerun setup there. To roll back, disable Parley, wait for old coordinators, then `herdr plugin link <previous-plugin-root> --enabled` and run `<previous-plugin-root>/bin/parley herdr setup` on the controller only. `plugin_root` comes from `herdr plugin list --json`; keep those directories. The remaining procedure applies to explicitly downloaded pinned bundles.
+For registrations made with `parley herdr install`:
+
+1. Finish active room work. Disable Parley on the host that manages SSH connections with `herdr plugin disable parley`. Wait for its old `parley herdr broker` processes to exit; check `ps -axo pid,command`. Disabling affects every Herdr session for that OS user.
+2. Upgrade the CLI on every host using its original install method. Use the same release everywhere.
+3. On each other host, run `herdr plugin disable parley`, then `parley herdr install`.
+4. On the host that manages SSH connections, run `parley herdr install`, then `parley herdr setup` in the intended Herdr session.
+
+To roll back, disable Parley and wait for old coordinators to exit. Run `herdr plugin link <previous-plugin-root> --enabled` on each host, then `<previous-plugin-root>/bin/parley herdr setup` on the host that manages SSH connections only. Get `plugin_root` from `herdr plugin list --json` before upgrading and keep those directories.
+
+The remaining procedure applies to explicitly downloaded pinned bundles.
 
 The bundle installer only stages files. It does not link/enable plugins, run setup, restart coordinators, edit configuration, touch standalone binaries, or change SSH authentication. Keep the old release directories: running coordinators/agents may still reference their executable and skill paths.
 
