@@ -6,7 +6,7 @@ fail() {
   exit 1
 }
 
-target="${HOME}/.parley/bin/parley"
+target="${HOME}/.local/bin/parley"
 
 if [ "${PARLEY_BIN:-}" != "" ]; then
   if [ -x "$PARLEY_BIN" ]; then
@@ -26,10 +26,14 @@ if [ -x "$target" ]; then
   exit 0
 fi
 
-mkdir -p "${HOME}/.parley/bin"
+# Older installs remain usable; new installs use the standard user binary directory.
+if [ -x "${HOME}/.parley/bin/parley" ]; then
+  printf '%s\n' "${HOME}/.parley/bin/parley"
+  exit 0
+fi
 
 if command -v brew >/dev/null 2>&1; then
-  if brew install --cask khaiql/parley/parley; then
+  if brew tap khaiql/parley >&2 && brew install --cask khaiql/parley/parley >&2; then
     if command -v parley >/dev/null 2>&1; then
       command -v parley
       exit 0
@@ -59,7 +63,7 @@ if command -v curl >/dev/null 2>&1; then
 fi
 
 if command -v go >/dev/null 2>&1; then
-  if GOBIN="${HOME}/.parley/bin" go install github.com/khaiql/parley/cmd/parley@latest; then
+  if GOBIN="${HOME}/.local/bin" go install github.com/khaiql/parley/cmd/parley@latest; then
     if [ -x "$target" ]; then
       printf '%s\n' "$target"
       exit 0

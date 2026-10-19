@@ -1,194 +1,140 @@
 # Parley
 
-Parley is a headless, JSON-first room server for coordinating coding agents through short CLI commands.
+Parley lets coding agents share messages and files in collaboration rooms. Use it from the CLI or inside Herdr.
 
-## What It Does
+[Install](#install-and-upgrade) · [Herdr plugin](#herdr-plugin) · [CLI quick start](#cli-quick-start) · [Agent skill](#agent-skill)
 
-Parley starts a local room, writes a JSONL event log, and gives each participant a local adapter with a Unix control socket. Agent skills can call small commands such as `wait`, `inbox`, `send`, and `history` without owning a long-running terminal UI.
+## Install and upgrade
 
-## Features
+### Homebrew (macOS)
 
-- **Headless rooms** - TCP room server with line-delimited JSON protocol
-- **Participant adapters** - local mirrors and control sockets per agent
-- **JSON command output** - scriptable responses for agent skills and automation
-- **Event log first** - append-only room history with transcript filtering
-- **Descriptors** - `parley://host:port/room-id` invite strings for handoff
-- **Local runtime metadata** - session-scoped room and participant state in the first writable runtime root Parley can find
-
-## Quick Start
-
-### Install
-
-With Homebrew on macOS:
-
-```bash
+```sh
+brew tap khaiql/parley
 brew install --cask khaiql/parley/parley
 ```
 
-With the installer on macOS or Linux:
+To upgrade:
 
-```bash
+```sh
+brew update
+brew upgrade --cask khaiql/parley/parley
+```
+
+### Script (macOS or Linux)
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/khaiql/parley/main/install.sh | sh
 ```
 
-With Go:
+Run the same command to upgrade.
 
-```bash
-GOBIN="$HOME/.parley/bin" go install github.com/khaiql/parley/cmd/parley@latest
+### Go
+
+```sh
+GOBIN="$HOME/.local/bin" go install github.com/khaiql/parley/cmd/parley@latest
 ```
 
-The installer and Go commands place the binary at `~/.parley/bin/parley`.
+Script and Go installs use `~/.local/bin`. Add it to your `PATH` if needed.
 
-```bash
-PARLEY="$(command -v parley 2>/dev/null || printf '%s\n' "$HOME/.parley/bin/parley")"
+Check your installation with `parley version`.
+
+## Herdr plugin
+
+Start and join rooms from existing agent panes, with automatic SSH forwarding between hosts.
+
+### Install
+
+Install [Herdr](https://herdr.dev) 0.9.3+ and [Parley](#install-and-upgrade) on each host, then run:
+
+```sh
+parley herdr install
 ```
 
-### Use
+This adds and enables the plugin using your installed Parley binary. For Parley v0.3.0, use the [bundle installer](docs/herdr-plugin.md#install-a-prebuilt-release) instead.
 
-```bash
-# Start a room as the host participant
-"$PARLEY" start --topic "debug parser" --role host
-SESSION_ARGS="--session psn_..."
+On the Herdr host that manages your SSH connections, open the intended Herdr session and run:
 
-# Emit the descriptor for another participant
-"$PARLEY" invite $SESSION_ARGS
-
-# Join from another agent shell
-"$PARLEY" join "parley://127.0.0.1:49231/01j..." --role "auth reviewer"
-
-# Save the command_args returned by start or join, then use it for room and participant commands
-SESSION_ARGS="--session psn_..."
-"$PARLEY" wait $SESSION_ARGS --timeout 10m
-"$PARLEY" send $SESSION_ARGS "I found the issue"
-"$PARLEY" send $SESSION_ARGS --file trace.json "please inspect this"
-"$PARLEY" send $SESSION_ARGS --file trace.json
-
-# Recover local session handles if needed
-"$PARLEY" sessions
+```sh
+parley herdr setup
 ```
 
-`start` and `join` generate a participant name when `--name` is omitted, using `adjective_noun_number` format. Prefer `--session` for room and participant commands. Use `sessions` to list local session handles on the machine. Use `--room` and `--name` as an explicit fallback for participant commands. Bare participant commands only work when exactly one local participation exists.
+Run setup on **one host only**. For multiple machines, add and enable the other hosts as saved SSH machines in Herdr. Use the same Parley version on each host, with SSH authentication that works without a password prompt.
 
-`wait` is non-consuming: it blocks until unread message events are available and returns them with `status: "ready"`, but only `inbox` advances the seen cursor. Use `inbox --peek` to inspect unread events without acknowledging them.
+### Start and join rooms
 
-Parley stores runtime state in `~/.parley` by default. Set `PARLEY_STATE_DIR` to force a shared state directory. Without an override, Parley probes common agent-friendly roots in order: `~/.parley`, `$XDG_RUNTIME_DIR/parley`, `$XDG_STATE_HOME/parley`, the user cache directory, the OS temp directory, and finally `.parley` in the current working directory.
+On each host, add these shortcuts once to `~/.config/herdr/config.toml`:
 
-### Room Artifacts
+```toml
+[[keys.command]]
+key = "prefix+shift+s"
+type = "plugin_action"
+command = "parley.start"
+description = "Parley: Start room"
 
-Share files as room-owned artifacts with `send --file`. The file bytes are uploaded to the room server first, then the message is committed with artifact metadata (`id`, `name`, `size`, and `sha256`) visible in `inbox` and `history`.
-
-```bash
-"$PARLEY" send $SESSION_ARGS --file trace.json "please inspect this"
-"$PARLEY" send $SESSION_ARGS --file before.log --file after.log "compare these"
-"$PARLEY" send $SESSION_ARGS --file trace.json
+[[keys.command]]
+key = "prefix+shift+i"
+type = "plugin_action"
+command = "parley.join"
+description = "Parley: Join room"
 ```
 
-Fetch artifacts explicitly by id:
+Choose **reload config** from Herdr's global menu. With an agent pane focused and the default prefix:
 
-```bash
-"$PARLEY" artifact fetch $SESSION_ARGS art_123
-"$PARLEY" artifact fetch $SESSION_ARGS art_123 art_456 --out ./parley-artifacts
+- Press **Ctrl+B**, then **Shift+S** to start a room and enter a topic.
+- In another agent pane, press **Ctrl+B**, then **Shift+I** to choose a room to join.
+
+Parley gives each agent its session and communication instructions automatically.
+
+### Upgrade the plugin
+
+Finish active room work, then follow the [upgrade steps](docs/herdr-plugin.md#update-and-rollback).
+
+See the [Herdr guide](docs/herdr-plugin.md) for remote shortcuts, troubleshooting, and rollback.
+
+## CLI quick start
+
+Start a room and create an invitation:
+
+```sh
+parley start --topic "debug parser"
+parley invite --session psn_...
 ```
 
-Artifact limits are fixed in v1: 100 MiB per file, 10 files per message, and 250 MiB total per message. Directories and symlinks are rejected; hidden and empty regular files are allowed. Artifact bytes remain available only while the room server is active. `parley stop` makes the room inactive and artifact cleanup is room-scoped best effort.
+Use the `session_id` returned by `start` in place of `psn_...`. Share the invitation's descriptor with another agent, which joins with:
 
-Use `"$PARLEY" info $SESSION_ARGS` to rediscover artifact endpoint metadata and limits for an active session. `sessions` includes the key artifact endpoint fields for local recovery.
-
-For remote participants, create your own tunnels to both ports returned by `start`, `invite`, `info`, or `sessions`: the room protocol `local_port` and the artifact HTTP `artifact_local_port`. Share a descriptor that uses the room protocol tunnel host and port with the same room id. Parley does not create or manage tunnels. If the artifact tunnel uses a different local port, pass its HTTP URL when joining:
-
-```bash
-"$PARLEY" join parley://127.0.0.1:49001/room-1 --name reviewer \
-  --artifact-endpoint http://127.0.0.1:49002/rooms/room-1/artifacts
+```sh
+parley join "parley://host:port/room-id"
 ```
 
-The override must use `http`, an explicit port from 1 to 65535, and the exact `/rooms/<room-id>/artifacts` path. Credentials, query strings, and fragments are rejected. Without this flag, Parley uses the descriptor host and the room's advertised artifact port. The override applies only to the joining participant; room metadata remains unchanged.
+Each agent uses its own returned session ID to communicate:
 
-## Agent Skill
+```sh
+parley send --session psn_... "I found the issue"
+parley inbox --session psn_...
+parley wait --session psn_... --timeout 10m
+```
 
-Parley ships an agent skill at `skills/parley/SKILL.md` for coding agents that
-support `SKILL.md`-style skills. The skill tells agents how to bootstrap the
-`parley` binary, start or join rooms, handle `parley://` descriptors, and parse
-command JSON by `status`.
+`wait` blocks until messages arrive; `inbox` marks them as read. Use `parley sessions` to recover session IDs.
 
-### Install With `npx skills`
+Share and fetch files:
 
-The easiest install path is the open
-[`vercel-labs/skills`](https://github.com/vercel-labs/skills) CLI.
+```sh
+parley send --session psn_... --file trace.json "please inspect this"
+parley artifact fetch --session psn_... art_123
+```
 
-Install the Parley skill globally:
+Use the artifact ID from the message. Files remain available while the room is running.
 
-```bash
+Run `parley --help` or `parley <command> --help` for more options. For remote CLI rooms, [forward both the room and artifact ports](skills/parley/SKILL.md); the Herdr plugin handles this automatically.
+
+## Agent skill
+
+Install instructions for your coding agent:
+
+```sh
 npx skills add khaiql/parley --skill parley --global
 ```
 
-Install it into the current project instead of globally:
+Omit `--global` for a project-only installation. Restart the agent or reload its skills after installation.
 
-```bash
-npx skills add khaiql/parley --skill parley
-```
-
-For unattended setup, add `--yes`:
-
-```bash
-npx skills add khaiql/parley --skill parley --global --yes
-```
-
-To target a specific agent, pass the agent id supported by `skills`:
-
-```bash
-npx skills add khaiql/parley --skill parley --agent <agent-id>
-```
-
-After installing, restart the agent or reload its skills. The installed skill
-runs its bundled `scripts/ensure-parley` helper before Parley workflows; that
-helper uses `PARLEY_BIN`, `PATH`, `~/.parley/bin/parley`, Homebrew, the
-installer script, or `go install` to locate or install the binary.
-
-## Architecture
-
-```
-cmd/parley/         CLI commands and JSON error handling
-internal/
-  model/            Event envelope, payloads, participant and room metadata
-  descriptor/       parley:// descriptor parse/format helpers
-  paths/            Per-user room paths and file permissions
-  jsonout/          JSON success and error response helpers
-  eventlog/         Append/read/query JSONL event logs
-  protocol/         V1 request/response/event wire types over NDJSON
-  server/           Headless TCP room server and local control socket
-  adapter/          Participant TCP adapter, mirror log, and control API
-  runtime/          Active room, invite, and participant runtime metadata
-  e2e/              Headless room integration coverage
-```
-
-### How It Works
-
-```
-parley start -> room server -> event log
-      |             ^             |
-      v             |             v
- host adapter <- NDJSON -> participant adapter
-      |                           |
-      v                           v
- parley send/wait         parley send/wait
-```
-
-The server assigns sequence numbers, appends room events, and broadcasts them to connected adapters. Each adapter keeps a local event mirror and exposes a Unix control socket so short-lived CLI commands can inspect state, wait for unseen messages, or send responses.
-
-## Development
-
-```bash
-go test ./... -timeout 30s
-go test ./... -timeout 30s -race
-go test ./internal/e2e -run TestHeadlessRoomTwoParticipants -count=100
-```
-
-## Release
-
-Push a SemVer tag such as `v0.1.0` to run the GoReleaser workflow. The workflow publishes standalone CLI archives, versioned Herdr plugin bundles (manifest, `bin/parley`, and agent skills) for Linux/macOS amd64/arm64, a plugin installer, and SHA-256 checksums. The [plugin guide](docs/herdr-plugin.md) covers installation, updates, and rollback. It also updates the Homebrew cask in `khaiql/homebrew-parley`; it requires a `HOMEBREW_TAP_GITHUB_TOKEN` secret with contents write access to that tap repository.
-
-See [CLAUDE.md](CLAUDE.md) for detailed architecture docs, package dependencies, and contributor conventions.
-
-### Herdr rooms
-
-Herdr 0.9.3+ can start and join rooms from existing agent panes, with both message and artifact SSH ports opened automatically. [Install the same prebuilt plugin release](docs/herdr-plugin.md#install-a-prebuilt-release) on every participating host (no Go/compiler required), run the bundled `bin/parley herdr setup` only on the local controller, and add the [focused-pane Start/Join shortcuts](docs/herdr-plugin.md#set-up-focused-pane-shortcuts). Start accepts a topic; Join offers numbered room selection. After either succeeds, Herdr sends the existing agent its room/session and bundled Parley skill automatically. Any supported harness can participate; native conversation identity, Codex flags, and agent restarts are unnecessary. See [delivery and upgrade behavior](docs/herdr-plugin.md#automatic-agent-handoff), [local verification](docs/herdr-local-test.md), and [handoff evidence](docs/herdr-handoff-proof.md).
+For development, see the [contributor guide](CLAUDE.md).

@@ -86,6 +86,11 @@ func nativeErrorHint(code string, err error) string {
 func herdrCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "herdr", Short: "Herdr room actions and automatic SSH routing"}
 	setup := nativeCommand("setup", false, func(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession, session string, _ []string) error {
+		binary, err := c.InstalledBinary(cmd.Context())
+		if err != nil {
+			return err
+		}
+		c.ParleyBinary = binary
 		owner, err := h.Setup(cmd.Context(), c)
 		if err != nil {
 			return err
@@ -160,7 +165,7 @@ func herdrCmd() *cobra.Command {
 		return h.Coordinate(ctx, c)
 	}}
 	broker.Flags().String("native-session", "", "verified native session")
-	cmd.AddCommand(herdrRPCCmd(), setup, startup, action, form, status, broker)
+	cmd.AddCommand(herdrInstallCmd(), herdrRPCCmd(), setup, startup, action, form, status, broker)
 	return cmd
 }
 func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {

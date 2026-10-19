@@ -1,17 +1,19 @@
 # Herdr Start and Join
 
+For a new installation, start with the [README's Herdr plugin section](../README.md#herdr-plugin): install the CLI, run `parley herdr install`, choose the controller, and add shortcuts. That command embeds the matching plugin resources and reuses the installed executable. It is new after v0.3.0; the pinned bundle procedure below remains available for v0.3.0 and for rollback.
+
 For a review checkout, use the [local test procedure and verifier](herdr-local-test.md) to exercise the real shortcuts and both message/artifact endpoints.
 
 ### Install a prebuilt release
 
 Install the same release on every participating host. Requirements: Herdr 0.9.3+, OpenSSH, `sh`, `curl`, `tar`, standard Unix tools, and `sha256sum` (Linux) or `shasum` (macOS). Go and a compiler are development/CI dependencies only.
 
-Choose a tag from [GitHub Releases](https://github.com/khaiql/parley/releases) that includes `install-herdr.sh` and `parley-herdr_v<version>_<OS>_<arch>.tar.gz`. Older CLI-only releases do not contain the plugin. Until the first bundle release is published, use the contributor workflow below; these assets do not exist on older tags.
+v0.3.0 is the first release with plugin bundles. The following commands install that published release without a compiler. Use the same tag on every host. Older CLI-only releases do not contain the plugin.
 
 On the controller and on each participant host, with the intended Herdr session running:
 
 ```sh
-VERSION=vX.Y.Z  # Replace with the chosen bundle release; prerelease tags work too.
+VERSION=v0.3.0
 INSTALLER="$(mktemp)"
 curl -fsSL "https://github.com/khaiql/parley/releases/download/$VERSION/install-herdr.sh" -o "$INSTALLER" &&
   PLUGIN_ROOT="$(sh "$INSTALLER" "$VERSION")" &&
@@ -31,7 +33,7 @@ If Parley is already installed or linked, follow [update and rollback](#update-a
 
 The installer selects Linux/macOS and amd64/arm64 using the host's OS/architecture. It downloads only the selected tagged bundle plus that release's `checksums.txt`, verifies SHA-256, and checks the executable, manifest version, bundled skill, and helper protocol before staging an immutable directory under `~/.local/share/parley/herdr/<tag>/<OS>_<arch>`. It prints the absolute directory to link. Repeating the same installation reuses matching files; a differing existing release is refused. Missing assets, unsupported platforms, download/checksum failures, and incompatible or unlaunchable helpers leave existing releases usable. No Go process, module fetch, checkout, or manual executable copy is involved. Checksums protect download integrity; the release publisher and downloaded installer remain trusted code.
 
-[Herdr 0.9.3 installation](https://github.com/herdrdev/herdr/blob/v0.9.3/docs/next/website/src/content/docs/plugins.mdx#install-and-link) supports GitHub source clones and local directory links, not release-archive URLs or manifest download fields. Use the staged bundle with `plugin link`; `herdr plugin install khaiql/parley` is not the prebuilt install path. Installing the standalone CLI with Homebrew or `install.sh` also does not supply the plugin's manifest, `bin/parley`, and skill together. CLI/Homebrew distribution remains independent.
+[Herdr 0.9.3 installation](https://github.com/herdrdev/herdr/blob/v0.9.3/docs/next/website/src/content/docs/plugins.mdx#install-and-link) supports GitHub source clones and local directory links, not release-archive URLs or manifest download fields. Use the staged bundle with `plugin link`; `herdr plugin install khaiql/parley` is not the prebuilt install path. The v0.3.0 standalone CLI from Homebrew or `install.sh` does not supply plugin resources. Newer source builds (and the next release) embed them and support `parley herdr install`; use that command instead of this bundle procedure when available.
 
 Run setup **only on the controller**, with the intended Herdr session selected:
 
@@ -138,6 +140,17 @@ When a snapshot proves the original terminal is absent, the host helper takes th
 The coordinator scans on event subscription startup, lifecycle events, reconnection, and its two-second reconciliation loop. This recovers missed events and retries pending cleanup after restart. An unavailable snapshot or SSH helper preserves the room and participant. Failed cleanup appears as `cleanup_status: "pending"` and `cleanup_error` in `parley herdr status`. Idle/readiness changes and a harness ending while its shell remains open do not trigger cleanup; Herdr 0.9.3 exposes no definitive agent-end event for that case, so cleanup waits for terminal closure.
 
 ### Update and rollback
+
+For registrations made with `parley herdr install`:
+
+1. Finish active room work. Disable Parley on the host that manages SSH connections with `herdr plugin disable parley`. Wait for its old `parley herdr broker` processes to exit; check `ps -axo pid,command`. Disabling affects every Herdr session for that OS user.
+2. Upgrade the CLI on every host using its original install method. Use the same release everywhere.
+3. On each other host, run `herdr plugin disable parley`, then `parley herdr install`.
+4. On the host that manages SSH connections, run `parley herdr install`, then `parley herdr setup` in the intended Herdr session.
+
+To roll back, disable Parley and wait for old coordinators to exit. Run `herdr plugin link <previous-plugin-root> --enabled` on each host, then `<previous-plugin-root>/bin/parley herdr setup` on the host that manages SSH connections only. Get `plugin_root` from `herdr plugin list --json` before upgrading and keep those directories.
+
+The remaining procedure applies to explicitly downloaded pinned bundles.
 
 The bundle installer only stages files. It does not link/enable plugins, run setup, restart coordinators, edit configuration, touch standalone binaries, or change SSH authentication. Keep the old release directories: running coordinators/agents may still reference their executable and skill paths.
 

@@ -280,6 +280,16 @@ func (c *Client) helper(ctx context.Context, m Machine) (string, error) {
 	}
 	return installedHelper(b)
 }
+
+// InstalledBinary returns the enabled plugin helper, including its bundled skill location.
+func (c *Client) InstalledBinary(ctx context.Context) (string, error) {
+	data, err := c.runner()(ctx, c.HerdrBinary, []string{"plugin", "list", "--json"}, nil)
+	if err != nil {
+		return "", err
+	}
+	return installedHelper(data)
+}
+
 func installedHelper(b []byte) (string, error) {
 	var w struct {
 		Result struct {

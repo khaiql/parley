@@ -25,7 +25,9 @@ jobs:
         with:
           python-version: '3.13'
       - name: Installer failure and preservation tests (no Go on PATH)
-        run: python3 scripts/test-herdr-install.py
+        run: |
+          python3 scripts/test-herdr-install.py
+          python3 scripts/test-cli-install.py
       - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
