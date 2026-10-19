@@ -1,6 +1,6 @@
 # Installation user testing — 2026-10-19
 
-Tested on macOS arm64, with Homebrew and real Herdr 0.9.3. Script and plugin tests used isolated homes, config/state directories, and a separate Herdr server. No existing agent panes, room state, or plugin registration were changed.
+Tested on macOS arm64 with Homebrew, and on `ubuntu-server` over SSH (Ubuntu 24.04.5 LTS, x86_64), both with real Herdr 0.9.3. Script and plugin tests used isolated homes, config/state directories, and a separate Herdr server. No existing agent panes, room state, or plugin registration were changed.
 
 ## Findings before changes
 
@@ -38,6 +38,19 @@ Native plugin checks used source binaries stamped `0.4.0-test` and `0.5.0-test`;
 
 Automated regressions: `python3 scripts/test-cli-install.py`, `python3 scripts/test-herdr-install.py`, Go installation/registry tests, build, lint, and the full race suite. The full race suite exceeds this Mac's original 30-second per-package budget; it passes with `-timeout 120s`. No runtime or CI timeout was changed for that unrelated timing issue.
 
+## Ubuntu SSH verification
+
+Ran the updated script against actual GitHub release downloads on `ubuntu-server`. The plugin command used Linux binaries cross-compiled from this PR, stamped `0.4.0-test` and `0.5.0-test`; no Go, checkout, or plugin download was needed on the server. All checks passed:
+
+- Fresh 0.3.0 script install and repeat install, including checksum verification and retained executable links.
+- Migration from authentic 0.2.0 release bytes in `~/.parley/bin` to 0.3.0 in `~/.local/bin`; old binary preserved and PATH shadowing warning confirmed.
+- In-place 0.2.0-to-0.3.0 upgrade in `~/.local/bin`.
+- One-command plugin install through a symlinked CLI, repeated without a running Herdr server; hard link reused the installed Linux binary.
+- Start/Join action discovery, controller setup, status, and registered coordinator binary with a real isolated Herdr server.
+- Enabled upgrade refusal; disable/drain, upgrade, and setup; previous executable still usable.
+- Rollback to the previous plugin root and successful setup/status.
+- Existing Ubuntu plugin registry matched its pre-test snapshot. Test server stopped; isolated homes, downloads, candidate binaries, and broker directory removed.
+
 ## Limits
 
-No second physical laptop or interactive Linux environment was available. Native archive installation and helper runtime checks passed in both Ubuntu and macOS distribution CI on [PR #142](https://github.com/khaiql/parley/pull/142); its main CI build, lint, race tests, and coverage checks also passed. Installer failure and platform-selection cases are covered by fixtures. Actual cross-machine agent collaboration was not repeated for these installation changes. No release was published. Test Homebrew cask/tap and the isolated Herdr server were removed after testing; the pre-existing `~/.local/bin/parley` and user's Herdr registration were left alone.
+Native archive installation and helper runtime checks also passed in Ubuntu/macOS distribution CI on [PR #142](https://github.com/khaiql/parley/pull/142); its main CI build, lint, race tests, and coverage checks passed. Installer failure and platform-selection cases are covered by fixtures. Actual cross-machine agent collaboration was not repeated for these installation changes. No release was published. Test Homebrew cask/tap and isolated Herdr servers were removed after testing; existing user binaries, room state, and Herdr registrations were left alone.
