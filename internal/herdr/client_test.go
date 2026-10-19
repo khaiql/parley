@@ -270,3 +270,16 @@ func TestRemoteHelperUsesLoginEnvironment(t *testing.T) {
 		t.Fatal("remote helper cannot see Herdr installed through the user's login PATH", command)
 	}
 }
+
+func TestInstalledBinaryUsesRegisteredPlugin(t *testing.T) {
+	c := &Client{HerdrBinary: "herdr", Run: func(_ context.Context, binary string, args []string, _ []byte) ([]byte, error) {
+		if binary != "herdr" || strings.Join(args, " ") != "plugin list --json" {
+			t.Fatalf("unexpected lookup: %s %v", binary, args)
+		}
+		return []byte(`{"result":{"plugins":[{"plugin_id":"parley","enabled":true,"plugin_root":"/registered/plugin"}]}}`), nil
+	}}
+	binary, err := c.InstalledBinary(context.Background())
+	if err != nil || binary != "/registered/plugin/bin/parley" {
+		t.Fatal(binary, err)
+	}
+}
