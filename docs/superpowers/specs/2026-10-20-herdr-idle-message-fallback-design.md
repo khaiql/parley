@@ -2,6 +2,8 @@
 
 Status: proposed design, 2026-10-20. This is a follow-up to the [Herdr automatic SSH routing design](2026-10-12-herdr-plugin-design.md). That design remains scoped to Start/Join and routing; this document defines the separately deferred receive-notification feature. Neither document claims the plugin implementation already exists.
 
+Revised after the disconnect and host-reboot discussion: a restored connection or surviving pane never establishes recipient identity. Native conversation identity must be freshly verified before fallback delivery can resume.
+
 ## Intended outcome
 
 The agent owns normal Parley listening, inbox reads, and room replies. The Herdr plugin supplements that workflow when unread room messages remain while the agent is ready for input. A missing or forgotten agent listener must not require the human to notice and restart it.
@@ -18,6 +20,8 @@ Agreed behavior:
 - Use readiness events and a locally measured grace period rather than requiring a Herdr `ready_since` field.
 - Preserve inbox ownership: only the agent consumes messages.
 - Bind delivery to the existing native conversation, not whichever agent happens to occupy a pane later.
+- Invalidate the live pane mapping on disconnect. Reconnection must locate and verify the original conversation again, without assuming it remains in the same pane.
+- Suspend delivery when the original agent is gone, replaced, or unverifiable. Do not send room input to a restored shell or a different conversation.
 - Support local and remote participants through the existing local-coordinator architecture.
 - Ignore pane focus when deciding whether to deliver.
 
@@ -44,6 +48,8 @@ Neither the agent record nor the status event provides a readiness transition ti
 
 These facts were checked against the installed schema and published documentation. Live event delivery and end-to-end notification behavior still require the acceptance checks below. Activation must verify the selected running servers support the required fields and subscription, rather than trusting only the local CLI version.
 
+Existing terminal-and-agent-kind checks are insufficient for this feature. The separately inspected Parley plugin implementation does not use native conversation identity as participation authority. Fallback delivery therefore needs its own verified native recipient identity; it cannot treat existing binding validation or the presence of a legacy native-session storage field as proof. A binding without a freshly verified native reference remains valid for its existing room workflow but is ineligible for automatic reminders. This requirement does not claim that the currently installed plugin already enforces it.
+
 ## Ownership and placement
 
 Use the local coordinator described by the routing design. One coordinator owns fallback state and submission scheduling for its configured Herdr server session and managed remote sessions. Reuse the existing controller ownership rules; do not introduce a second independent controller.
@@ -69,13 +75,14 @@ Only participants with a validated plugin Start/Join binding are eligible. Do no
 A binding contains:
 
 - The participant machine identity and canonical Herdr server session key.
-- Terminal ID, agent kind, and native conversation reference.
+- Agent kind and verified native conversation reference, including its source, reference kind, and value.
 - Room ID, Parley participant session ID, and participant name.
-- The current pane ID as a refreshable routing address.
+- The terminal ID recorded at enrollment, retained for audit and existing binding-key compatibility.
+- A separately resolved live terminal ID and pane ID as refreshable delivery addresses, valid only for the current verified connection.
 
-Use the routing design's host-local binding key and normalize saved-profile aliases to that identity. Room message sequences are scoped to the room and participant cursors to the original participant session. A new native conversation or Parley session creates a different binding; it never inherits notification state.
+Keep the routing design's original host-local binding key as the storage handle and normalize saved-profile aliases to that identity. Do not recompute that key or rewrite routing participation when a verified conversation appears in a different terminal. Notification recipient identity is the participant machine, canonical Herdr server session, agent kind, and native conversation reference; a terminal or pane is its current location. Room message sequences are scoped to the room and participant cursors to the original participant session. A new native conversation or Parley session creates a different binding; it never inherits notification state.
 
-Before submission, resolve the live pane for the recorded terminal and compare agent kind and native conversation. Pane moves may update the routing address without changing the binding. Missing native identity, a replacement occupant, a different conversation, ambiguous resolution, or an unavailable server suspends delivery. Never fall back to the focused pane, another agent of the same kind, or a newly created participant.
+Before submission, resolve the original native conversation from authoritative Herdr state on the pinned participant host/server and require exactly one matching live agent. Verify its agent kind and native reference, then resolve its current terminal and pane. A cached pane may be a lookup hint only while the connection is verified; its occupant must still pass the same checks. Pane moves or a genuinely resumed original conversation can update the delivery address without changing recipient identity. Missing native identity, a different conversation, ambiguous resolution, or an unavailable server suspends delivery. Never fall back to the focused pane, a pane with the old ID, another agent of the same kind, or a newly created participant.
 
 ### Registering existing bindings
 
@@ -100,6 +107,7 @@ Durable state contains:
 The coordinator also keeps ephemeral state:
 
 - Current verified agent status, identity, and Herdr state sequence.
+- A connection generation for each managed host/server and the generation in which each live delivery address was verified.
 - `ready_since`, measured with a monotonic clock.
 - `unread_since`, measured with the same clock.
 - Current pending message range and next deadline.
@@ -115,6 +123,8 @@ Subscribe before reading authoritative agent state. Continue draining events whi
 On a verified transition from a non-ready state to `idle` or `done`, record `ready_since = now`. A confirmed `idle`/`done` change caused by seen-state presentation does not restart grace. Leaving the ready set cancels the delivery deadline. If intervening activity cannot be excluded, including an unexplained state-sequence change, restart grace conservatively rather than inferring uninterrupted readiness.
 
 At startup, an already-ready agent starts grace at observation time; the plugin cannot recover its earlier idle duration. Reconnect, `events_lost`, server replacement, or native identity uncertainty invalidate readiness history. Resubscribe and reconcile before starting a fresh timer. Do not preserve readiness across an outage merely because the final status is still idle.
+
+Tag subscriptions, asynchronous state/inbox reads, delivery addresses, and timers with their connection generation. Advance that generation when continuity is lost, and ignore obsolete callbacks when scheduling delivery or updating live observations. A queued timer from before disconnect must never become eligible merely because a new connection is online. A previously prepared or submitted notification is still durable work: preserve and reconcile its outcome rather than discarding it as a stale callback.
 
 ## Observing unread messages
 
@@ -152,7 +162,7 @@ For each covered binding:
 
 1. Reconcile the inbox and select the highest eligible pending message sequence `N`.
 2. Persist a `prepared` attempt containing the current seen cursor and `through_seq = N` before submitting any input.
-3. Revalidate the conversation and readiness immediately before `agent.prompt`. Use structured arguments through the pinned host helper, not raw pane input.
+3. Require the current connection generation, revalidate the original conversation and readiness, and resolve its current delivery address immediately before `agent.prompt`. The participant-host helper must perform these identity checks against live local Herdr state as well; it must not blindly submit to a pane address captured by the coordinator before SSH disconnected. Use structured arguments through the pinned host helper, not raw pane input.
 4. If submission succeeds, persist `accepted` and update `last_notified_seq = N`.
 5. Let the agent read `parley inbox --session <id>` and respond normally. Never consume the inbox in the coordinator.
 
@@ -174,6 +184,26 @@ For every submission, write one authoritative recipient attempt to `notification
 - Loss of a remote subscription or helper connection cancels deadlines for affected bindings. Other hosts continue normally. Recovery revalidates ownership, session identity, participant connectivity, and current state.
 - Leave, room stop, plugin disable, and coordinator shutdown cancel owned waits, relays, and timers. Retain unresolved submission outcomes for diagnosis; stop issuing prompts. Cleanup must not stop agents or unrelated tunnels.
 
+### SSH reconnect and host reboot
+
+Herdr may reconnect automatically once a remote machine boots. That restores reachability, not proof that the original agent or Parley adapter survived. A network-only interruption may leave those processes running; a host reboot ends them. A restored workspace, tab, pane, or terminal display must never substitute for native conversation verification.
+
+Treat Herdr observation transport, the Parley room tunnel, and an in-flight prompt request as separate failure boundaries:
+
+| Boundary | Required handling |
+| --- | --- |
+| Herdr subscription or helper disconnect | Invalidate live delivery addresses and readiness, advance connection generation, and suspend affected delivery. |
+| Parley room tunnel disconnect | Verify the original participant's adapter connectivity independently. Restoring SSH does not establish room participation or replay missing messages. |
+| Prompt submission interrupted | Preserve an uncertain attempt unless the outcome proves input was rejected or accepted. Closing SSH does not prove the remote helper stopped or that input was not written. |
+
+After reconnect, subscribe first and reconcile authoritative state. Search only the pinned host/server for the original verified native conversation. If its original pane now contains a shell or a different conversation, do not send input there. If the original conversation is uniquely present elsewhere, verify its live terminal/pane and the original Parley participant session before installing a new delivery address. Start fresh grace only after all checks succeed.
+
+If no matching conversation exists, expose `recipient_missing`; if identity cannot be established or several agents match, expose a suspended identity diagnostic. Keep notification journals and participant cursors. Do not start an agent, adopt a replacement conversation, or retry old room instructions using the old pane. Explicit enrollment of a different conversation is a new binding and cannot inherit the predecessor's pending attempts or notification coverage.
+
+If Herdr resumes the original conversation but the Parley adapter is disconnected, retain `participant_disconnected` and send no reminder until that original participation is verifiably online. Native agent resume does not restart its old background listener or establish participant recovery. Same-participant adapter restart, replay of messages missed during downtime, and boot-time room/coordinator restoration remain separate recovery work; this feature must not silently rejoin or reset unread state to simulate recovery.
+
+These rules prevent delivery based on stale pane assumptions. They do not make identity verification and input submission atomic; the final API race described below remains an explicit limitation.
+
 Current Herdr APIs leave a final race between identity/readiness checks and input submission. Another conversation or human action can intervene. Preflight checks reduce this risk but cannot remove it. A stronger guarantee requires a Herdr server-side prompt operation guarded by expected terminal, native conversation, and ready status. That upstream enhancement is deferred and must not be claimed by this implementation.
 
 ## Required integration changes
@@ -183,6 +213,8 @@ Extend the proposed routing coordinator and fixed helper, rather than building a
 Remote waits and subscriptions must not monopolize the connection used for prompt submission or authoritative reads. Drain streams independently, use bounded waits, and cancel them when a binding is removed. Maintain one active watcher per binding and one readiness stream per managed Herdr session where supported.
 
 Plugin status must show the bound target, participant session, current observation state, pending message sequence, outstanding coverage, and any suspended/uncertain outcome. Expose remaining grace only when timing continuity is valid. State explicitly that remote fallback depends on the local coordinator. Do not display a fabricated server-provided idle timestamp.
+
+Enrollment and recovered delivery must read the native reference from fresh Herdr responses. Do not silently reuse terminal-only validation from the current plugin implementation, reconstruct conversation identity from a pane label, or assume a saved terminal ID names the original conversation. Legacy bindings without verifiable native identity stay ineligible until explicitly enrolled with a verified reference.
 
 The existing Parley skill continues to tell agents to listen and consume inboxes. Plugin operation must not depend on the agent starting a listener, and must not install or rewrite harness hooks or skills.
 
@@ -199,14 +231,18 @@ Use a fake monotonic clock for scheduling tests and deterministic adapters/helpe
 7. Existing unread messages do not cause a busy wait loop. Pending reconciliation is bounded, and empty bindings return to non-consuming waits.
 8. New messages during an outstanding attempt remain unread and do not generate repeated reminders. Full consumption releases suppression; later uncovered messages become eligible after fresh grace.
 9. Two bindings for one conversation cannot submit concurrently; eligible rooms are batched and their shared attempt survives partial persistence failures.
-10. A pane move retains the original conversation binding. Pane reuse, missing identity, native session change, and identical pane IDs on different hosts cannot retarget delivery.
+10. A pane move retains the original conversation binding. Pane reuse, missing identity, native session change, and identical pane IDs on different hosts cannot retarget delivery. A terminal-only legacy binding cannot enable fallback without verified native enrollment.
 11. Restart, `events_lost`, delayed invalidations, and disconnect invalidate timer continuity. Subscribe-then-reconcile recovery cannot immediately submit using stale readiness.
 12. Crash before preparation, after preparation, during submission, and after terminal acceptance produce the documented accepted, rejected, or uncertain outcomes. No blind retry or cursor reset occurs.
 13. Start and direct same-host Join register watchers even when they bypass the routing coordinator. Coalesced or failed markers recover from durable binding records without room discovery, another Join, or new forwards.
 14. Explicit retry of an uncertain shared attempt retains its predecessor, cannot race with another retry, and recovers correctly between replacement persistence and predecessor update. No dismiss action causes an automatic resend.
 15. Leave, stop, disable, and shutdown prevent new prompts and clean up only owned watchers/resources.
+16. Disconnect followed by reconnect with the same pane ID but only a shell, or a different native conversation of the same agent kind, produces no input. A ready status or submitted historical handoff receipt cannot override that rejection.
+17. The original native conversation appearing uniquely in a different pane/terminal is located through fresh state. No prompt targets its previous pane; delivery resumes only with a verified original participant session and fresh grace. Duplicate native references suspend delivery.
+18. A delayed status event, inbox response, or delivery timer from a previous connection generation cannot reinstall a stale pane mapping or cause a prompt. Interrupted prepared submissions remain journaled and are not retried automatically.
+19. A reboot restoring layout without an agent leaves delivery suspended. A reboot resuming the original conversation with an offline participant adapter also leaves delivery suspended; no replacement participant is created and no seen cursor changes.
 
-Before claiming live support, prove same-host delivery and a local coordinator notifying an agent on a remote participant host through real Herdr/OpenSSH. Verify both local-room/remote-agent and remote-room/local-agent cases using the original participant sessions. Exercise agent-listener coexistence, a human-focused pane, native conversation replacement, remote disconnection, and process restart. Record versions and any unforced loss/crash cases as unverified.
+Before claiming live support, prove same-host delivery and a local coordinator notifying an agent on a remote participant host through real Herdr/OpenSSH. Verify both local-room/remote-agent and remote-room/local-agent cases using the original participant sessions. Exercise agent-listener coexistence, a human-focused pane, native conversation replacement, remote disconnection, and process restart. Use a disposable remote environment for host reboot, restored-shell, and resumed-conversation cases; never reboot a user's working host for acceptance. If no such environment is available, mark reboot safety unverified. Record versions and any unforced loss/crash cases as unverified.
 
 For implementation, run the repository's required build, lint, and race-test gates after focused tests pass. Documentation review alone proves none of the runtime acceptance conditions.
 
@@ -216,5 +252,7 @@ For implementation, run the repository's required build, lint, and race-test gat
 - [Herdr agent automation: lifecycle states and prompt/wait semantics](https://herdr.dev/docs/agent-automation/#choose-the-control-surface).
 - [Herdr CLI: agents](https://herdr.dev/docs/cli-reference/#agents).
 - [Herdr plugin startup hooks](https://herdr.dev/docs/plugins/#startup-hooks).
+- [Herdr remote reconnection and cached state](https://herdr.dev/docs/connecting-machines/).
+- [Herdr session restore and native conversation resume](https://herdr.dev/docs/session-state/).
 - Installed `herdr 0.9.3`, `herdr api schema --json`: `AgentInfo`, `AgentPromptParams`, and `PaneAgentStatusChangedEvent`.
 - Repository: `internal/adapter/adapter.go`, `internal/adapter/control.go`, `cmd/parley/participant_commands.go`, and the linked routing design.
