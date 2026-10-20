@@ -145,6 +145,8 @@ Acceptance: Start on either host; Join an existing opposite-host pane by room ID
 
 Message send/receive hooks, automatic prompting, readiness gating, notification workers, participant resume/unread replay, automatic adapter recovery after a tunnel outage, new-agent launch, different-remote-host relay, hosted discovery, concurrent controllers, and Windows support.
 
+The separate [idle message fallback design](2026-10-20-herdr-idle-message-fallback-design.md) specifies the proposed receive-notification follow-up. It does not expand this routing phase's implementation scope.
+
 ## Sources
 
 - [Herdr plugins](https://herdr.dev/docs/plugins/) and [connecting machines](https://herdr.dev/docs/connecting-machines/): host-local actions, startup and plugin state.
