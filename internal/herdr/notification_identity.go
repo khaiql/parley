@@ -140,7 +140,7 @@ func (h *HostOperations) notificationBinding(key string) (NotificationBinding, e
 	if err = readJSON(filepath.Join(dir, key+".json"), &result); err != nil {
 		return result, err
 	}
-	if result.Key != key || result.Binding.SessionID != b.SessionID || result.Binding.RoomID != b.RoomID || result.Binding.ParticipantName != b.ParticipantName || result.Binding.Target != b.Target {
+	if result.Key != key || HostBindingKey(result.Binding.RoomID, result.Binding.Target) != key || result.Binding.SessionID != b.SessionID || result.Binding.RoomID != b.RoomID || result.Binding.ParticipantName != b.ParticipantName {
 		return result, fmt.Errorf("notification_binding_mismatch")
 	}
 	result.Binding = b
@@ -259,4 +259,24 @@ func (h *HostOperations) ObserveNotification(ctx context.Context, key string) (N
 		}
 	}
 	return o, nil
+}
+
+// A moved enrolled conversation must not lose its participant to terminal cleanup.
+func (h *HostOperations) notificationRecipientPresent(ctx context.Context, target AgentTarget) (bool, error) {
+	bindings, err := h.NotificationBindings(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, n := range bindings {
+		if SameTerminal(n.Binding.Target, target) {
+			_, err := h.resolveNotification(ctx, n.Conversation)
+			if err == nil {
+				return true, nil
+			}
+			if err.Error() != "recipient_missing" {
+				return false, err
+			}
+		}
+	}
+	return false, nil
 }

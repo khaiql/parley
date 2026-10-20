@@ -49,6 +49,7 @@ func subscriptionParams() any {
 		{"type": "pane.closed"}, {"type": "pane.exited"}, {"type": "pane.moved"},
 	}}
 }
+
 // ReadEvents drains invalidations independently of slow authoritative queue reads.
 func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wake func() error) (result error) {
 	parent := ctx

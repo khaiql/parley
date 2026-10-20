@@ -9,6 +9,7 @@ import (
 )
 
 func TestNotificationWorkerWaitsForAckAndInvalidatesDisconnect(t *testing.T) {
+	t.Parallel()
 	h, b, _ := notificationFixture(t)
 	notificationUnread(t, h, b)
 	if err := h.EnrollNotifications(context.Background(), b); err != nil {
@@ -44,6 +45,7 @@ func TestNotificationWorkerWaitsForAckAndInvalidatesDisconnect(t *testing.T) {
 }
 
 func TestNotificationWorkerDeliversOneFixedReminder(t *testing.T) {
+	t.Parallel()
 	h, b, f := notificationFixture(t)
 	notificationUnread(t, h, b)
 	if err := h.EnrollNotifications(context.Background(), b); err != nil {

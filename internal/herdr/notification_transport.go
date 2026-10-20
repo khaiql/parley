@@ -78,6 +78,9 @@ func (h *HostOperations) DeliverNotification(ctx context.Context, a Notification
 		if !notificationReady(o.Agent.Status) {
 			return reject(fmt.Errorf("agent_not_ready"))
 		}
+		if o.Agent.StateChangeSeq != a.ReadyStateSeq || o.Agent.TerminalID != a.ReadyTerminalID || o.Agent.PaneID != a.ReadyPaneID {
+			return reject(fmt.Errorf("notification_readiness_changed"))
+		}
 		if o.SeenSeq < coverage.SeenSeq {
 			return reject(fmt.Errorf("notification_cursor_regression"))
 		}
@@ -114,6 +117,9 @@ func (h *HostOperations) DeliverNotification(ctx context.Context, a Notification
 	}
 	if !notificationReady(live.Status) {
 		return reject(fmt.Errorf("agent_not_ready"))
+	}
+	if live.StateChangeSeq != a.ReadyStateSeq || live.TerminalID != a.ReadyTerminalID || live.PaneID != a.ReadyPaneID {
+		return reject(fmt.Errorf("notification_readiness_changed"))
 	}
 	if err = ctx.Err(); err != nil {
 		return reject(err)

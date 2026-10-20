@@ -29,13 +29,14 @@ func (s *notificationSchedule) Observe(now time.Time, o NotificationObservation)
 		s.bindings[o.Key] = p
 	}
 	old := p.observation
+	presentationOnly := o.Agent.Status != old.Agent.Status && (o.Agent.StateChangeSeq == old.Agent.StateChangeSeq || (o.Agent.StateChangeSeq > old.Agent.StateChangeSeq && o.Agent.StateChangeSeq-old.Agent.StateChangeSeq == 1))
 	if o.SeenSeq < old.SeenSeq {
 		delete(s.bindings, o.Key)
 		return
 	}
 	if !notificationReady(o.Agent.Status) {
 		p.readySince = time.Time{}
-	} else if p.readySince.IsZero() || o.Agent.TerminalID != old.Agent.TerminalID || o.Agent.PaneID != old.Agent.PaneID || (o.Agent.StateChangeSeq != old.Agent.StateChangeSeq && o.Agent.Status == old.Agent.Status) {
+	} else if p.readySince.IsZero() || o.Agent.TerminalID != old.Agent.TerminalID || o.Agent.PaneID != old.Agent.PaneID || (o.Agent.StateChangeSeq != old.Agent.StateChangeSeq && !presentationOnly) {
 		p.readySince = now
 	}
 	if o.ThroughSeq <= o.SeenSeq {
@@ -49,7 +50,7 @@ func (s *notificationSchedule) Observe(now time.Time, o NotificationObservation)
 func (s *notificationSchedule) Due(now time.Time, attempts []NotificationAttempt) []NotificationObservation {
 	var result []NotificationObservation
 	for key, p := range s.bindings {
-		prior, err := notificationOutstanding(key, p.observation.SeenSeq, attempts)
+		prior, err := notificationOutstanding(key, p.observation.Binding.SessionID, p.observation.SeenSeq, attempts)
 		if err != nil {
 			continue
 		}

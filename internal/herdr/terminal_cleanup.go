@@ -86,6 +86,9 @@ func (h *HostOperations) ReconcileTerminal(ctx context.Context) error {
 			if err != nil || present {
 				return err
 			}
+			if present, err := h.notificationRecipientPresent(ctx, target); err != nil || present {
+				return err
+			}
 			latest, err := h.Store.Read()
 			if err != nil {
 				return err

@@ -182,9 +182,40 @@ Herdr link keeps the plugin ID `parley` and its separate config/state directorie
 
 For rollback, finish any new routed work, disable Parley on the controller, confirm its coordinators exit, and repeat the same sequence using each host's recorded **old root**. Enable participants first and run setup only on the controller. Retain the same compatible release across hosts. This distribution change does not migrate runtime data; rollback to a release with incompatible runtime data is not supported. Neither update nor rollback restarts agents or Herdr.
 
+### Room message fallback
+
+Source builds with helper protocol 5 add delayed inbox reminders. Agents still own normal listening, inbox reads, and room replies. The local coordinator sends a fixed reminder only after a verified native conversation has remained ready (`idle` or `done`) with unread messages for 30 seconds. It does not inject room message bodies or consume inboxes. Pane focus does not pause reminders.
+
+Successful Start/Join attempts enroll the detected native conversation separately from routing membership. The popup reports `enrolled`, `identity_unavailable`, `registration_pending`, or `coordinator_unavailable`. `enrolled` means that identity was recorded and its host-local invalidation was accepted; it does not guarantee that a remote coordinator is currently reachable. A failed invalidation keeps the enrollment for later reconnect or refresh. The configured local coordinator must be running for both local and remote fallback.
+
+Existing participants without a verified native reference remain ineligible. To enroll one explicitly, run this on its participant host in the intended Herdr server session:
+
+```sh
+parley herdr notification-enroll --participant-session <parley-session-id>
+```
+
+Enrollment never overwrites an already recorded conversation with a replacement. If Herdr cannot report the original native conversation, fallback stays suspended; ordinary Parley commands remain available.
+
+Inspect the controller's `parley herdr status` output for `notifications` and `notification_attempts`. Notification coverage is distinct from the participant's seen cursor. There is one outstanding reminder per binding; later messages do not create repeated nudges until the covered inbox batch is consumed. An interrupted submission remains `prepared` or `uncertain` because terminal input might already have arrived. Only an explicit retry authorizes another attempt:
+
+```sh
+# Run on the local coordinator host/session. Previous input may already have arrived.
+parley herdr notification-retry --attempt <attempt-id>
+```
+
+A retry waits through fresh readiness and unread grace, preserves all rooms covered by a shared attempt, and repeats identity checks. It does not acknowledge messages. A rejected retry retains the original delivery uncertainty; further retry must explicitly name the rejected replacement's attempt ID. First-attempt rejections that sent no input can be reconsidered after a new grace period.
+
+SSH loss invalidates the live pane mapping, pending timers, and readiness history. After reconnect, the coordinator searches fresh Herdr state for exactly one instance of the original native conversation, verifies its current terminal/pane and original participant connectivity, and starts a fresh grace period. It never assumes the original agent remains in the old pane. A shell, replacement conversation, missing native reference, or ambiguous match receives no fallback input. An enrolled conversation that moved to another terminal is protected from cleanup of its old terminal while its identity is verifiable.
+
+Reboot recovery remains separate. Herdr restoring a pane or resuming a conversation does not restart the old Parley adapter or background listener. A disconnected participant stays suspended; this feature does not rejoin, reset cursors, replay messages missed during downtime, or launch agents. Closing SSH during a prompt request does not prove the remote helper stopped, so that attempt is never blindly repeated.
+
+Current Herdr APIs still have a final race between live verification and prompt submission. The helper rechecks the authorized readiness sequence and native identity immediately before input, but atomic delivery guarded by conversation identity requires upstream API support.
+
+This source implementation has automated fixture and disposable Parley-adapter coverage. Real cross-host Herdr/OpenSSH delivery and host-reboot acceptance remain unverified until exercised in a disposable environment. Installing this feature or restarting an existing coordinator is an explicit deployment step; development tests do neither.
+
 ### Upgrading the helper protocol
 
-This flow uses helper protocol 4. The installer checks that the downloaded binary supports protocol 4, and runtime activation retains the existing protocol/capability checks before participant mutation. Use one release across hosts to keep the manifest, helper and skills aligned, even though the runtime protocol does not require exact version equality.
+Source builds with room fallback use helper protocol 5; published v0.3.0 bundles use protocol 4. The installer bundled with this source checks for protocol 5, and runtime activation checks matching protocol/capabilities before participant mutation. Install matching new helpers on the controller and each participant before enabling fallback. Use one release across hosts to keep the manifest, helper and skills aligned, even though the runtime protocol does not require exact version equality.
 
 A running older coordinator is never replaced silently: doing so would close active SSH routes. After installing the new matching bundles, follow [update and rollback](#update-and-rollback). When staying on the same linked source root, finish routed work, rebuild, then disable only Parley, confirm its coordinators exit, then enable it and run that root's `bin/parley herdr setup` on the controller. `coordinator_upgrade_required` remains visible until the explicit plugin restart. Participant setup is never required.
 

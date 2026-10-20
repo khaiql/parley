@@ -189,6 +189,9 @@ func herdrCmd() *cobra.Command {
 		if err = operations.EnrollNotifications(cmd.Context(), *selected); err != nil {
 			return err
 		}
+		if _, err = operations.ObserveNotification(cmd.Context(), herdr.HostBindingKey(selected.RoomID, selected.Target)); err != nil {
+			return err
+		}
 		if err = c.SignalRequest(cmd.Context(), selected.Target, selected.JoinRequestID); err != nil {
 			return err
 		}
@@ -303,6 +306,15 @@ func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
 	result, err := h.SubmitForm(wait, c, req)
 	if err != nil {
 		return fmt.Errorf("request %s: %w", id, err)
+	}
+	if result.NotificationStatus == "enrolled" {
+		if owner.ControllerID == "" {
+			result.NotificationStatus = "coordinator_unavailable"
+		} else if owner.Role == "controller" {
+			if err := h.CheckCoordinator(wait); err != nil {
+				result.NotificationStatus = "coordinator_unavailable"
+			}
+		}
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "\r\nRequest: %s\r\n", id)
 	if result.Room != nil {

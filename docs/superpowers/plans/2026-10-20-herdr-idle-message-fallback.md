@@ -36,8 +36,9 @@
 | File | Responsibility |
 | --- | --- |
 | `internal/herdr/notification_identity.go`, `_test.go` | Native conversation parsing, unique fresh resolution, binding enrollment and participant-host observations |
-| `internal/herdr/notification_store.go`, `_test.go` | Atomic authoritative attempt journal, recovery, explicit retry and status |
-| `internal/herdr/notifications.go`, `_test.go` | Monotonic scheduling, batching, suppression and host worker |
+| `internal/herdr/notification_store.go`, `notifications_test.go` | Atomic authoritative attempt journal, recovery, explicit retry and status |
+| `internal/herdr/notifications.go`, `_test.go` | Monotonic readiness/unread scheduling and suppression |
+| `internal/herdr/notification_worker.go`, `_test.go`, `notification_integration_test.go` | Host worker, batching, generation cancellation and real-adapter integration proof |
 | `internal/herdr/notification_transport.go`, `_test.go` | Fixed local/remote operations, live helper-side checks and readiness relay |
 | `internal/herdr/peer.go`, `client.go`, `events.go`, `lifecycle.go`, `handoff.go` | Authenticated dispatch, helper version, shared stream parsing, coordinator lifecycle and Start/Join enrollment |
 | `cmd/parley/herdr.go`, `herdr_rpc.go`, relevant tests | Notification diagnostics and explicit enrollment/retry commands; fixed stream dispatch |
@@ -45,7 +46,7 @@
 
 ## Task 1: Verified recipients and observations
 
-**Interfaces:** `NativeConversation` contains source, agent, kind and value. `NotificationEnrollment` pins the original `Binding` identity and native conversation. `HostOperations.EnrollNotifications(ctx, binding)` records it once; `HostOperations.NotificationBindings(ctx)` lists only local validated plugin bindings. `HostOperations.ObserveNotification(ctx, key)` returns current verified native agent, readiness sequence, participant connectivity, seen cursor and eligible unread range.
+**Interfaces:** `NativeConversation` contains source, agent, kind and value. `NotificationBinding` pins the original `Binding` identity and native conversation. `HostOperations.EnrollNotifications(ctx, binding)` records it once; `HostOperations.NotificationBindings(ctx)` lists only local validated plugin bindings. `HostOperations.ObserveNotification(ctx, key)` returns current verified native agent, readiness sequence, participant connectivity, seen cursor and eligible unread range.
 
 1. Write tests using a real temporary Herdr socket and real participant stores. Cover missing references, duplicate native references, replacement in same pane, original conversation moved to another terminal, legacy bindings, own/lifecycle events and file-only messages. Test that enrollment does not overwrite an existing identity.
 2. Run `go test ./internal/herdr -run 'TestNotificationIdentity|TestNotificationObservation|TestNotificationEnrollment' -count=1`; observe missing feature failures.
@@ -86,3 +87,9 @@
 ## Stop condition
 
 The fallback path, identity safeguards, durable recovery, lifecycle integration and diagnostics are implemented and exercised; build, lint and race suite pass; independent review has no unresolved material findings. Real remote/harness/reboot coverage that cannot be run is explicitly reported as unverified, not represented by fake fixtures.
+
+## Completion evidence
+
+Implemented on `codex/herdr-idle-message-fallback` on 2026-10-20. `go build ./...`, the repository golangci-lint command, `go test ./... -timeout 30s -race`, and all six `scripts/test-herdr-install.py` cases pass. Disposable real Parley adapters verify unread delivery, normal listener consumption, non-consuming notification waits, and cursor preservation. Authenticated remote dispatch uses a fixture transport, not a live SSH host.
+
+Independent review found and verified fixes for host-scoped suppression, shared retry coverage through rejected replacements, missed busy transitions, authorized readiness snapshots, moved-conversation cleanup, registration diagnostics, and mutable pane caches. The existing lifecycle fixture now distinguishes the two event subscriptions. Isolated notification tests run in parallel to retain the existing package timeout. Live Herdr/OpenSSH and reboot acceptance remain unverified; no installed plugin or user agent was changed.

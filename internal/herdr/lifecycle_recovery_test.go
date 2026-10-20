@@ -36,13 +36,24 @@ func TestCoordinateCleanupFailureKeepsLocalSubscription(t *testing.T) {
 			}
 			go func() {
 				defer conn.Close()
-				var request struct{ Method string }
+				var request struct {
+					Method string
+					Params struct {
+						Subscriptions []struct{ Type string }
+					}
+				}
 				if json.NewDecoder(conn).Decode(&request) != nil {
 					return
 				}
 				switch request.Method {
 				case "events.subscribe":
 					io.WriteString(conn, testEventAck)
+					for _, subscription := range request.Params.Subscriptions {
+						if subscription.Type == "pane.updated" {
+							io.Copy(io.Discard, conn)
+							return
+						}
+					}
 					events <- conn
 					io.Copy(io.Discard, conn)
 					close(closed)

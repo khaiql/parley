@@ -1,6 +1,6 @@
 # Herdr idle fallback for Parley messages
 
-Status: proposed design, 2026-10-20. This is a follow-up to the [Herdr automatic SSH routing design](2026-10-12-herdr-plugin-design.md). That design remains scoped to Start/Join and routing; this document defines the separately deferred receive-notification feature. Neither document claims the plugin implementation already exists.
+Status: source implementation complete and independently reviewed on `codex/herdr-idle-message-fallback`, 2026-10-20. Automated build, lint, race, installer, and disposable-adapter checks pass. This follows the [Herdr automatic SSH routing design](2026-10-12-herdr-plugin-design.md). The routing plugin now exists in the base implementation; this document defines its separate receive-notification follow-up. Source implementation does not establish live Herdr/OpenSSH or reboot acceptance.
 
 Revised after the disconnect and host-reboot discussion: a restored connection or surviving pane never establishes recipient identity. Native conversation identity must be freshly verified before fallback delivery can resume.
 
@@ -94,14 +94,14 @@ This enumerates existing plugin bindings, not rooms or unrelated Parley sessions
 
 ## Per-binding state
 
-Persist records under `notifications/<binding-key>.json` within the local coordinator's session namespace. Reuse the routing design's private directories, locked atomic writes, schema validation, and controller ownership. Do not store duplicate remote copies or mix records from different Herdr sessions.
+Persist attempts under `notifications/attempts/`, cursor high-water records under `notifications/cursors/`, and derived host diagnostics under `notifications/status/` within the local coordinator's session namespace. The participant host keeps its immutable native enrollment under `notifications/enrollments/`; it does not run a second scheduler or maintain a competing attempt journal. Reuse the routing design's private directories, locked atomic writes, schema validation, and controller ownership. Do not mix records from different Herdr sessions.
 
 Durable state contains:
 
 - Binding identity and record version.
 - Last observed Parley seen cursor, for diagnostics and reconciliation.
 - `last_notified_seq`, the highest eligible message sequence covered by a successfully accepted reminder; initially absent.
-- At most one pending attempt: random attempt ID, the seen cursor at preparation, covered-through message sequence, and outcome (`prepared`, `accepted`, `uncertain`, or definitely rejected).
+- At most one pending attempt: random attempt ID, the seen cursor at preparation, covered-through message sequence, authorized readiness sequence and current terminal/pane, and outcome (`prepared`, `accepted`, `uncertain`, or definitely rejected).
 - A bounded diagnostic reason when delivery is suspended or requires explicit recovery.
 
 The coordinator also keeps ephemeral state:
@@ -120,11 +120,13 @@ Keep a `pane.agent_status_changed` subscription for bound panes, plus the lifecy
 
 Subscribe before reading authoritative agent state. Continue draining events while a separate request reads state. Events invalidate cached state; they are not an unconditional replay onto the snapshot. Serialize refreshes and refresh again when events arrive during a read.
 
-On a verified transition from a non-ready state to `idle` or `done`, record `ready_since = now`. A confirmed `idle`/`done` change caused by seen-state presentation does not restart grace. Leaving the ready set cancels the delivery deadline. If intervening activity cannot be excluded, including an unexplained state-sequence change, restart grace conservatively rather than inferring uninterrupted readiness.
+On a verified transition from a non-ready state to `idle` or `done`, record `ready_since = now`. An `idle`/`done` presentation change with the same or exactly adjacent state sequence does not restart grace. Leaving the ready set cancels the delivery deadline. A sequence gap, regression, or same-status sequence change restarts grace conservatively because intervening activity cannot be excluded.
 
 At startup, an already-ready agent starts grace at observation time; the plugin cannot recover its earlier idle duration. Reconnect, `events_lost`, server replacement, or native identity uncertainty invalidate readiness history. Resubscribe and reconcile before starting a fresh timer. Do not preserve readiness across an outage merely because the final status is still idle.
 
 Tag subscriptions, asynchronous state/inbox reads, delivery addresses, and timers with their connection generation. Advance that generation when continuity is lost, and ignore obsolete callbacks when scheduling delivery or updating live observations. A queued timer from before disconnect must never become eligible merely because a new connection is online. A previously prepared or submitted notification is still durable work: preserve and reconcile its outcome rather than discarding it as a stale callback.
+
+The implementation represents a generation with a distinct cancellable context and isolated result channels. It cancels and drains the old generation before starting another. At submission, the helper compares the freshly observed Herdr state sequence and terminal/pane with the readiness snapshot authorized by the scheduler. An intervening working/idle cycle or relocation rejects submission and restarts grace rather than reusing the old deadline.
 
 ## Observing unread messages
 
@@ -170,6 +172,8 @@ The reminder states that messages may already have been read by the time the age
 
 An accepted attempt stays outstanding until the participant's seen cursor reaches or passes its `through_seq`. While it is outstanding, suppress further reminders for that binding, including for newer messages. Once the cursor covers the batch, clear the attempt and reevaluate any later pending messages. Partial cursor progress is visible but does not count as acknowledgement of the whole batch.
 
+Outstanding lookup is scoped by participant machine, canonical Herdr server session, original binding key, and Parley participant session. A host-local binding key alone cannot identify notification state across machines.
+
 `last_notified_seq` describes notification coverage, not message consumption. A successful prompt acknowledges terminal submission, not execution or understanding. The authoritative seen cursor means the inbox was consumed, not that the agent completed the requested work. No component infers task completion from these values.
 
 For every submission, write one authoritative recipient attempt to `notifications/attempts/<attempt-id>.json`, containing every covered binding and its cursor/range. Atomically replace this record to publish its outcome. Binding references and `last_notified_seq` are derived caches: recovery rebuilds them from attempt records before scheduling delivery. This avoids requiring an atomic transaction across several binding files. If a notification covers several rooms, recovery must retain that shared submission rather than send independent retries after a partial cache write. Keep this representation within the existing coordinator store, rather than adding a separate service.
@@ -179,6 +183,8 @@ For every submission, write one authoritative recipient attempt to `notification
 - A definitely rejected submission that wrote no input, such as an already-blocked rejection, does not advance `last_notified_seq`. Refresh state and wait for a new eligible period before another attempt; do not retry in a tight loop.
 - Transport failure, timeout, coordinator crash after preparation, or failure to persist an accepted result is an uncertain submission. Retain its journal and do not blindly retry. If the seen cursor covers the recorded batch, resolve it as consumed without claiming prompt success. Otherwise expose the attempt through plugin status and require an explicit retry. There is no dismiss operation that silently makes the same unread range eligible again. A retry warns that the previous prompt may already have arrived, restarts grace, and repeats all normal checks.
 - An explicit retry prepares one replacement recipient attempt with a reference to its predecessor and current unread coverage. Persist the replacement before marking the predecessor superseded. Recovery recognizes that reference even if the predecessor cache was not updated; only the replacement may proceed. Preserve the predecessor's uncertain outcome for diagnostics. Reject another concurrent retry of the same attempt. Command or action spelling is a builder choice, but retry must name the recipient attempt ID and remain scoped to its original validated bindings.
+- A shared retry retains every predecessor binding's coverage, including temporarily unavailable rooms. It must not globally supersede a shared intent with a partial record that releases another room's suppression. The helper revalidates the retained coverage before input; an unavailable participant can therefore suspend the shared retry.
+- A definitely rejected replacement retains the predecessor's delivery uncertainty and shared suppression. It does not automatically retry. A further explicit retry names that replacement attempt, preserves the entire coverage chain, and restarts grace. Ordinary first-attempt rejections have no uncertain predecessor and can be reconsidered automatically after fresh grace.
 - Keep accepted and uncertain attempt records across restart. Reconcile them before enabling any new delivery. Reconstruct readiness and unread grace from fresh observations.
 - Corrupt records, unexpected cursor regression, or a changed participant session suspend that binding. Do not reset cursors, discard journals, or rejoin automatically.
 - Loss of a remote subscription or helper connection cancels deadlines for affected bindings. Other hosts continue normally. Recovery revalidates ownership, session identity, participant connectivity, and current state.
@@ -215,6 +221,8 @@ Remote waits and subscriptions must not monopolize the connection used for promp
 Plugin status must show the bound target, participant session, current observation state, pending message sequence, outstanding coverage, and any suspended/uncertain outcome. Expose remaining grace only when timing continuity is valid. State explicitly that remote fallback depends on the local coordinator. Do not display a fabricated server-provided idle timestamp.
 
 Enrollment and recovered delivery must read the native reference from fresh Herdr responses. Do not silently reuse terminal-only validation from the current plugin implementation, reconstruct conversation identity from a pane label, or assume a saved terminal ID names the original conversation. Legacy bindings without verifiable native identity stay ineligible until explicitly enrolled with a verified reference.
+
+The source extension uses helper protocol 5 and fixed `notification-bindings`, `notification-events`, `notification-observe`, `notification-wait`, and `notification-prompt` operations. Enrollment is stored under `notifications/enrollments/<original-binding-key>.json`; original routing keys and participation remain unchanged. Existing terminal cleanup must preserve an enrolled original conversation that is freshly verified in another terminal instead of leaving its participant or stopping its room solely because the old terminal disappeared.
 
 The existing Parley skill continues to tell agents to listen and consume inboxes. Plugin operation must not depend on the agent starting a listener, and must not install or rewrite harness hooks or skills.
 

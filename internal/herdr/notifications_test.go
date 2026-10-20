@@ -11,6 +11,7 @@ func testNotificationObservation() NotificationObservation {
 }
 
 func TestNotificationScheduleGraceAndConsumption(t *testing.T) {
+	t.Parallel()
 	start := time.Now()
 	o := testNotificationObservation()
 	s := newNotificationSchedule()
@@ -35,8 +36,10 @@ func TestNotificationScheduleGraceAndConsumption(t *testing.T) {
 }
 
 func TestNotificationScheduleBusyAndPresentation(t *testing.T) {
+	t.Parallel()
 	for _, status := range []string{"working", "blocked", "unknown", "done"} {
 		t.Run(status, func(t *testing.T) {
+			t.Parallel()
 			start := time.Now()
 			o := testNotificationObservation()
 			s := newNotificationSchedule()
@@ -51,7 +54,27 @@ func TestNotificationScheduleBusyAndPresentation(t *testing.T) {
 	}
 }
 
+func TestNotificationScheduleMissedBusyTransitionResetsGrace(t *testing.T) {
+	t.Parallel()
+	for _, seq := range []uint64{2, 3} {
+		start := time.Now()
+		o := testNotificationObservation()
+		s := newNotificationSchedule()
+		s.Observe(start, o)
+		o.Agent.Status = "done"
+		o.Agent.StateChangeSeq = seq
+		s.Observe(start.Add(29*time.Second), o)
+		if got := s.Due(start.Add(30*time.Second), nil); (len(got) == 1) != (seq == 2) {
+			t.Fatalf("sequence %d delivered %d reminders", seq, len(got))
+		}
+		if got := s.Due(start.Add(59*time.Second), nil); len(got) != 1 {
+			t.Fatal("fresh grace never completed")
+		}
+	}
+}
+
 func TestNotificationScheduleOutstandingAndFreshGeneration(t *testing.T) {
+	t.Parallel()
 	start := time.Now()
 	o := testNotificationObservation()
 	s := newNotificationSchedule()
@@ -78,6 +101,7 @@ func TestNotificationScheduleOutstandingAndFreshGeneration(t *testing.T) {
 }
 
 func TestNotificationAttemptRecoveryAndRetry(t *testing.T) {
+	t.Parallel()
 	s := NewStore(t.TempDir())
 	o := testNotificationObservation()
 	first, err := s.PrepareNotification(context.Background(), "local", "/tmp/herdr.sock", []NotificationObservation{o}, "")
@@ -103,7 +127,22 @@ func TestNotificationAttemptRecoveryAndRetry(t *testing.T) {
 	}
 }
 
+func TestNotificationScheduleRetryDoesNotAuthorizeBusyAgent(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	o := testNotificationObservation()
+	o.Agent.Status = "working"
+	s := newNotificationSchedule()
+	s.Observe(start, o)
+	a := NotificationAttempt{ID: "uncertain", Outcome: "uncertain", RetryRequested: true, Coverage: []NotificationCoverage{{Key: o.Key, SessionID: o.Binding.SessionID, SeenSeq: o.SeenSeq, ThroughSeq: o.ThroughSeq}}}
+	s.Due(start, []NotificationAttempt{a})
+	if due := s.Due(start.Add(time.Minute), []NotificationAttempt{a}); len(due) != 0 {
+		t.Fatal("explicit retry bypassed readiness")
+	}
+}
+
 func TestNotificationAttemptSharedCoverageAndCorruption(t *testing.T) {
+	t.Parallel()
 	s := NewStore(t.TempDir())
 	one := testNotificationObservation()
 	two := one
@@ -127,5 +166,68 @@ func TestNotificationAttemptSharedCoverageAndCorruption(t *testing.T) {
 	}
 	if err = s.RetryNotification(context.Background(), a.ID); err == nil {
 		t.Fatal("known accepted submission retried")
+	}
+}
+
+func TestNotificationAttemptHostIsolation(t *testing.T) {
+	t.Parallel()
+	s := NewStore(t.TempDir())
+	o := testNotificationObservation()
+	if _, err := s.PrepareNotification(context.Background(), "host-a", "/tmp/herdr.sock", []NotificationObservation{o}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PrepareNotification(context.Background(), "host-b", "/tmp/herdr.sock", []NotificationObservation{o}, ""); err != nil {
+		t.Fatalf("another host inherited suppression: %v", err)
+	}
+}
+
+func TestNotificationAttemptPartialRetryPreservesUnavailableBinding(t *testing.T) {
+	t.Parallel()
+	s := NewStore(t.TempDir())
+	one := testNotificationObservation()
+	two := one
+	two.Key = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	two.Binding.SessionID = "psn_b"
+	first, err := s.PrepareNotification(context.Background(), "local", "/tmp/herdr.sock", []NotificationObservation{one, two}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RetryNotification(context.Background(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.PrepareNotification(context.Background(), "local", "/tmp/herdr.sock", []NotificationObservation{one}, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Coverage) != 2 {
+		t.Fatalf("retry discarded unavailable coverage: %+v", next)
+	}
+	afterCrash, err := s.NotificationAttempts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := notificationOutstanding(two.Key, two.Binding.SessionID, two.SeenSeq, afterCrash)
+	if err != nil || blocked == nil || blocked.ID != next.ID {
+		t.Fatalf("unavailable binding lost durable suppression: %+v %v", blocked, err)
+	}
+	if err = s.CompleteNotification(next.ID, "rejected", "room unavailable"); err != nil {
+		t.Fatal(err)
+	}
+	afterRejection, err := s.NotificationAttempts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []NotificationObservation{one, two} {
+		blocked, err := notificationOutstanding(o.Key, o.Binding.SessionID, o.SeenSeq, afterRejection)
+		if err != nil || blocked == nil || blocked.ID != next.ID || blocked.RetryRequested {
+			t.Fatalf("rejected retry released original uncertainty: %+v %v", blocked, err)
+		}
+	}
+	if err = s.RetryNotification(context.Background(), next.ID); err != nil {
+		t.Fatalf("explicit retry of inherited uncertainty: %v", err)
+	}
+	third, err := s.PrepareNotification(context.Background(), "local", "/tmp/herdr.sock", []NotificationObservation{one, two}, next.ID)
+	if err != nil || len(third.Coverage) != 2 {
+		t.Fatalf("shared retry chain lost coverage: %+v %v", third, err)
 	}
 }

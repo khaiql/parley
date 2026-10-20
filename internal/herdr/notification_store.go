@@ -17,19 +17,22 @@ type NotificationCoverage struct {
 }
 
 type NotificationAttempt struct {
-	ID             string                 `json:"id"`
-	MachineID      string                 `json:"machine_id"`
-	HerdrSocket    string                 `json:"herdr_socket"`
-	Conversation   NativeConversation     `json:"conversation"`
-	Coverage       []NotificationCoverage `json:"coverage"`
-	Outcome        string                 `json:"outcome"`
-	Message        string                 `json:"message,omitempty"`
-	Replaces       string                 `json:"replaces,omitempty"`
-	RetryRequested bool                   `json:"retry_requested,omitempty"`
+	ID              string                 `json:"id"`
+	MachineID       string                 `json:"machine_id"`
+	HerdrSocket     string                 `json:"herdr_socket"`
+	Conversation    NativeConversation     `json:"conversation"`
+	ReadyStateSeq   uint64                 `json:"ready_state_seq"`
+	ReadyTerminalID string                 `json:"ready_terminal_id"`
+	ReadyPaneID     string                 `json:"ready_pane_id"`
+	Coverage        []NotificationCoverage `json:"coverage"`
+	Outcome         string                 `json:"outcome"`
+	Message         string                 `json:"message,omitempty"`
+	Replaces        string                 `json:"replaces,omitempty"`
+	RetryRequested  bool                   `json:"retry_requested,omitempty"`
 }
 
 func (a NotificationAttempt) validate() error {
-	if safeID(a.ID) != nil || safeID(a.MachineID) != nil || a.Conversation.validate() != nil || len(a.Coverage) == 0 || len(a.Coverage) > 16 || len(a.Message) > 4096 {
+	if safeID(a.ID) != nil || safeID(a.MachineID) != nil || a.Conversation.validate() != nil || safeID(a.ReadyTerminalID) != nil || safeID(a.ReadyPaneID) != nil || len(a.Coverage) == 0 || len(a.Coverage) > 16 || len(a.Message) > 4096 {
 		return fmt.Errorf("invalid notification attempt")
 	}
 	if _, err := SessionKey(a.HerdrSocket); err != nil {
@@ -93,14 +96,25 @@ func notificationReplaced(attempts []NotificationAttempt) map[string]bool {
 	return result
 }
 
-func notificationOutstanding(key string, seen int64, attempts []NotificationAttempt) (*NotificationAttempt, error) {
+func notificationHostAttempts(attempts []NotificationAttempt, machine, socket string) []NotificationAttempt {
+	var scoped []NotificationAttempt
+	for _, a := range attempts {
+		if a.MachineID == machine && a.HerdrSocket == socket {
+			scoped = append(scoped, a)
+		}
+	}
+	return scoped
+}
+
+func notificationOutstanding(key, session string, seen int64, attempts []NotificationAttempt) (*NotificationAttempt, error) {
 	replaced := notificationReplaced(attempts)
 	for _, a := range attempts {
-		if replaced[a.ID] || a.Outcome == "rejected" {
+		// A rejected retry still inherits its predecessor's possible delivery.
+		if replaced[a.ID] || (a.Outcome == "rejected" && a.Replaces == "") {
 			continue
 		}
 		for _, c := range a.Coverage {
-			if c.Key == key {
+			if c.Key == key && c.SessionID == session {
 				if seen < c.SeenSeq {
 					return nil, fmt.Errorf("notification_cursor_regression")
 				}
@@ -126,6 +140,7 @@ func (s *Store) PrepareNotification(ctx context.Context, machine, socket string,
 		if err != nil {
 			return err
 		}
+		attempts = notificationHostAttempts(attempts, machine, socket)
 		if replaces != "" {
 			found := false
 			for _, a := range attempts {
@@ -141,12 +156,16 @@ func (s *Store) PrepareNotification(ctx context.Context, machine, socket string,
 		if err != nil {
 			return err
 		}
-		result = NotificationAttempt{ID: id, MachineID: machine, HerdrSocket: socket, Conversation: native, Outcome: "prepared", Replaces: replaces}
+		first := observations[0].Agent
+		result = NotificationAttempt{ID: id, MachineID: machine, HerdrSocket: socket, Conversation: native, ReadyStateSeq: first.StateChangeSeq, ReadyTerminalID: first.TerminalID, ReadyPaneID: first.PaneID, Outcome: "prepared", Replaces: replaces}
 		for _, o := range observations {
 			if o.Conversation != native {
 				return fmt.Errorf("notification_recipient_mismatch")
 			}
-			prior, err := notificationOutstanding(o.Key, o.SeenSeq, attempts)
+			if o.Agent.StateChangeSeq != first.StateChangeSeq || o.Agent.TerminalID != first.TerminalID || o.Agent.PaneID != first.PaneID {
+				return fmt.Errorf("notification_readiness_changed")
+			}
+			prior, err := notificationOutstanding(o.Key, o.Binding.SessionID, o.SeenSeq, attempts)
 			if err != nil {
 				return err
 			}
@@ -169,6 +188,24 @@ func (s *Store) PrepareNotification(ctx context.Context, machine, socket string,
 				}
 			}
 			result.Coverage = append(result.Coverage, NotificationCoverage{Key: o.Key, SessionID: o.Binding.SessionID, SeenSeq: o.SeenSeq, ThroughSeq: o.ThroughSeq})
+		}
+		// Retain unavailable rooms too: superseding a shared intent must not release their suppression.
+		if replaces != "" {
+			for _, previous := range attempts {
+				if previous.ID == replaces {
+					for _, coverage := range previous.Coverage {
+						found := false
+						for _, current := range result.Coverage {
+							if current.Key == coverage.Key && current.SessionID == coverage.SessionID {
+								found = true
+							}
+						}
+						if !found {
+							result.Coverage = append(result.Coverage, coverage)
+						}
+					}
+				}
+			}
 		}
 		if err = result.validate(); err != nil {
 			return err
@@ -222,7 +259,7 @@ func (s *Store) updateNotification(ctx context.Context, id string, update func(*
 
 func (s *Store) RetryNotification(ctx context.Context, id string) error {
 	return s.updateNotification(ctx, id, func(a *NotificationAttempt) error {
-		if a.Outcome != "prepared" && a.Outcome != "uncertain" {
+		if a.Outcome != "prepared" && a.Outcome != "uncertain" && !(a.Outcome == "rejected" && a.Replaces != "") {
 			return fmt.Errorf("notification_retry_unavailable")
 		}
 		attempts, err := s.NotificationAttempts()

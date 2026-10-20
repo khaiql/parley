@@ -26,8 +26,10 @@ func notificationUnread(t *testing.T, h *HostOperations, b Binding) {
 }
 
 func TestNotificationTransportFreshIdentityAndAcknowledgement(t *testing.T) {
-	for _, mode := range []string{"accepted", "replacement", "blocked", "eof", "consumed"} {
+	t.Parallel()
+	for _, mode := range []string{"accepted", "replacement", "blocked", "eof", "consumed", "cycled"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			h, b, f := notificationFixture(t)
 			notificationUnread(t, h, b)
 			if err := h.EnrollNotifications(context.Background(), b); err != nil {
@@ -48,6 +50,9 @@ func TestNotificationTransportFreshIdentityAndAcknowledgement(t *testing.T) {
 			}
 			if mode == "blocked" {
 				f.agents[0].Status = "blocked"
+			}
+			if mode == "cycled" {
+				f.agents[0].StateChangeSeq += 2
 			}
 			f.mu.Unlock()
 			if mode == "consumed" {
@@ -82,6 +87,7 @@ func TestNotificationTransportFreshIdentityAndAcknowledgement(t *testing.T) {
 }
 
 func TestNotificationTransportRPCFields(t *testing.T) {
+	t.Parallel()
 	key, _ := SessionKey("/tmp/herdr.sock")
 	for _, op := range []string{"notification-bindings", "notification-observe", "notification-wait", "notification-prompt", "notification-events"} {
 		r := RPCRequest{Operation: op, Session: "agents", SessionKey: key, ControllerID: "local"}
@@ -90,7 +96,7 @@ func TestNotificationTransportRPCFields(t *testing.T) {
 		}
 		if op == "notification-prompt" {
 			o := testNotificationObservation()
-			r.Notification = &NotificationAttempt{ID: "one", MachineID: "peer", HerdrSocket: "/tmp/herdr.sock", Conversation: o.Conversation, Outcome: "prepared", Coverage: []NotificationCoverage{{Key: o.Key, SessionID: "psn_a", SeenSeq: 4, ThroughSeq: 5}}}
+			r.Notification = &NotificationAttempt{ID: "one", MachineID: "peer", HerdrSocket: "/tmp/herdr.sock", Conversation: o.Conversation, ReadyStateSeq: 1, ReadyPaneID: "w:p1", ReadyTerminalID: "term_a", Outcome: "prepared", Coverage: []NotificationCoverage{{Key: o.Key, SessionID: "psn_a", SeenSeq: 4, ThroughSeq: 5}}}
 		}
 		data, _ := json.Marshal(r)
 		if _, err := DecodeRPC(strings.NewReader(string(data))); err != nil {

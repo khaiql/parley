@@ -75,6 +75,18 @@ func notificationFixture(t *testing.T) (*HostOperations, Binding, *notificationN
 							result = map[string]any{"agent": a}
 						}
 					}
+				case "session.snapshot":
+					panes := []map[string]string{}
+					for _, a := range f.agents {
+						panes = append(panes, map[string]string{"pane_id": a.PaneID, "terminal_id": a.TerminalID})
+					}
+					result = map[string]any{"type": "session_snapshot", "snapshot": map[string]any{"panes": panes}}
+				case "workspace.report_metadata":
+					if f.mode == "signal-failed" {
+						_ = json.NewEncoder(conn).Encode(map[string]any{"error": map[string]string{"code": "unavailable"}})
+						return
+					}
+					result = map[string]any{}
 				case "agent.prompt":
 					f.prompts = append(f.prompts, req.Params.Text)
 					if f.mode == "eof" {
@@ -109,6 +121,7 @@ func notificationFixture(t *testing.T) (*HostOperations, Binding, *notificationN
 }
 
 func TestNotificationEnrollmentPinsOriginalConversation(t *testing.T) {
+	t.Parallel()
 	h, b, f := notificationFixture(t)
 	if err := h.EnrollNotifications(context.Background(), b); err != nil {
 		t.Fatal(err)
@@ -129,6 +142,7 @@ func TestNotificationEnrollmentPinsOriginalConversation(t *testing.T) {
 }
 
 func TestNotificationEnrollmentAfterRoomHandoff(t *testing.T) {
+	t.Parallel()
 	h, b, _ := notificationFixture(t)
 	result, err := h.withHandoff(context.Background(), Response{Status: "joined", Binding: &b}, nil)
 	if err != nil || result.NotificationStatus != "enrolled" {
@@ -140,9 +154,46 @@ func TestNotificationEnrollmentAfterRoomHandoff(t *testing.T) {
 	}
 }
 
+func TestNotificationEnrollmentReportsPendingSignal(t *testing.T) {
+	t.Parallel()
+	h, b, f := notificationFixture(t)
+	f.mu.Lock()
+	f.mode = "signal-failed"
+	f.mu.Unlock()
+	result, err := h.withHandoff(context.Background(), Response{Status: "joined", Binding: &b}, nil)
+	if err != nil || result.NotificationStatus != "registration_pending" {
+		t.Fatalf("failed registration reported successful: %+v %v", result, err)
+	}
+	bindings, err := h.NotificationBindings(context.Background())
+	if err != nil || len(bindings) != 1 {
+		t.Fatalf("registration failure discarded enrollment: %v %v", bindings, err)
+	}
+}
+
+func TestNotificationEnrollmentPreservesMovedConversationDuringCleanup(t *testing.T) {
+	t.Parallel()
+	h, b, f := notificationFixture(t)
+	if err := h.EnrollNotifications(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.agents[0].TerminalID = "term_moved"
+	f.agents[0].PaneID = "w2:p1"
+	f.mu.Unlock()
+	if err := h.ReconcileTerminal(context.Background()); err != nil {
+		t.Fatalf("cleanup removed moved native conversation: %v", err)
+	}
+	stored, err := h.Store.Binding(HostBindingKey(b.RoomID, b.Target))
+	if err != nil || stored.Status != "online" {
+		t.Fatalf("moved participation was removed: %+v %v", stored, err)
+	}
+}
+
 func TestNotificationIdentityRequiresUniqueNativeConversation(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"missing", "duplicate", "moved", "shell"} {
 		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
 			h, b, f := notificationFixture(t)
 			if err := h.EnrollNotifications(context.Background(), b); err != nil {
 				t.Fatal(err)
@@ -173,6 +224,7 @@ func TestNotificationIdentityRequiresUniqueNativeConversation(t *testing.T) {
 }
 
 func TestNotificationObservationDoesNotConsumeInbox(t *testing.T) {
+	t.Parallel()
 	h, b, _ := notificationFixture(t)
 	if got, err := h.NotificationBindings(context.Background()); err != nil || len(got) != 0 {
 		t.Fatalf("legacy binding automatically enrolled: %v %v", got, err)
@@ -200,5 +252,26 @@ func TestNotificationObservationDoesNotConsumeInbox(t *testing.T) {
 	meta, err := s.LoadMeta()
 	if err != nil || meta.LastSeenSeq != 17 {
 		t.Fatalf("inbox consumed: %+v %v", meta, err)
+	}
+}
+
+func TestNotificationEnrollmentSurvivesPaneCacheUpdate(t *testing.T) {
+	t.Parallel()
+	h, b, f := notificationFixture(t)
+	if err := h.EnrollNotifications(context.Background(), b); err != nil {
+		t.Fatal(err)
+	}
+	key := HostBindingKey(b.RoomID, b.Target)
+	b.Target.PaneID = "w2:p9"
+	b.Target.WorkspaceID = "w2"
+	if err := h.Store.saveBinding(b); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.agents[0].PaneID = b.Target.PaneID
+	f.agents[0].WorkspaceID = b.Target.WorkspaceID
+	f.mu.Unlock()
+	if _, err := h.ObserveNotification(context.Background(), key); err != nil {
+		t.Fatalf("pane cache update invalidated original enrollment: %v", err)
 	}
 }

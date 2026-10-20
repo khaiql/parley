@@ -264,6 +264,7 @@ func (g *notificationGeneration) refresh(all bool) error {
 	if err != nil {
 		return err
 	}
+	attempts = notificationHostAttempts(attempts, g.peer.Machine.ID, g.peer.Config.HerdrSocket)
 	g.diagnostics = nil
 	keys := make([]string, 0, len(g.bindings))
 	for key := range g.bindings {
@@ -303,7 +304,7 @@ func (g *notificationGeneration) refresh(all bool) error {
 		if observation := g.schedule.bindings[key]; observation != nil {
 			d.SeenSeq = observation.observation.SeenSeq
 			d.ThroughSeq = observation.observation.ThroughSeq
-			prior, err := notificationOutstanding(key, d.SeenSeq, attempts)
+			prior, err := notificationOutstanding(key, n.Binding.SessionID, d.SeenSeq, attempts)
 			if err != nil {
 				return err
 			}
@@ -336,7 +337,7 @@ func (g *notificationGeneration) submitDue(attempts []NotificationAttempt) error
 	for len(due) > 0 {
 		first := due[0]
 		due = due[1:]
-		prior, err := notificationOutstanding(first.Key, first.SeenSeq, attempts)
+		prior, err := notificationOutstanding(first.Key, first.Binding.SessionID, first.SeenSeq, attempts)
 		if err != nil {
 			return err
 		}
@@ -347,7 +348,7 @@ func (g *notificationGeneration) submitDue(attempts []NotificationAttempt) error
 		group := []NotificationObservation{first}
 		rest := []NotificationObservation{}
 		for _, o := range due {
-			oPrior, err := notificationOutstanding(o.Key, o.SeenSeq, attempts)
+			oPrior, err := notificationOutstanding(o.Key, o.Binding.SessionID, o.SeenSeq, attempts)
 			if err != nil {
 				return err
 			}
@@ -397,6 +398,7 @@ func (g *notificationGeneration) submitDue(attempts []NotificationAttempt) error
 		if err != nil {
 			return err
 		}
+		attempts = notificationHostAttempts(attempts, g.peer.Machine.ID, g.peer.Config.HerdrSocket)
 	}
 	return nil
 }
