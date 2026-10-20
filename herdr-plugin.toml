@@ -1,0 +1,29 @@
+id = "parley"
+name = "Parley"
+version = "0.3.0"
+min_herdr_version = "0.9.3"
+description = "Start and join rooms with automatic SSH port forwarding"
+platforms = ["linux", "macos"]
+
+[[startup]]
+command = ["bin/parley", "herdr", "startup"]
+
+[[actions]]
+id = "start"
+title = "Parley: Start room"
+contexts = ["pane"]
+command = ["bin/parley", "herdr", "action", "start"]
+
+[[actions]]
+id = "join"
+title = "Parley: Join room"
+contexts = ["pane"]
+command = ["bin/parley", "herdr", "action", "join"]
+
+[[panes]]
+id = "form"
+title = "Parley"
+placement = "popup"
+width = "70%"
+height = 22
+command = ["bin/parley", "herdr", "form"]

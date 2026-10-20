@@ -22,6 +22,8 @@ Do not ask the human to choose a participant name. `start` and `join` generate a
 
 For remote joins, Parley reports local endpoint metadata and does not create or manage tunnels. If the user provides a tunnel endpoint, join with a descriptor that uses that tunnel host and port with the same room id. When artifact support is available, remote rooms need two reachable endpoints: the room protocol port and the artifact HTTP port. If the user asks for remote access or tunnel setup, proactively mention both ports from `start`, `info`, or `sessions`; if creating tunnels yourself, create one tunnel for each port.
 
+When Herdr supplies an already-joined room and session ID, reuse that participant with the supplied `PARLEY_BIN`/`PARLEY_STATE_DIR`. Herdr owns its SSH routes. Check the inbox for task context, then continue your work. Send useful task updates or coordination requests; skip automatic join announcements and acknowledgement-only replies.
+
 ## Core Workflow
 
 1. Host a room:

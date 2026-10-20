@@ -97,8 +97,8 @@ func (rt *participantAdapterRuntime) join() error {
 	if !resp.OK {
 		return responseError(resp)
 	}
-	artifactEndpoint := ""
-	if resp.Room != nil {
+	artifactEndpoint := rt.cfg.ArtifactEndpoint
+	if artifactEndpoint == "" && resp.Room != nil {
 		artifactEndpoint = deriveArtifactEndpoint(rt.cfg.Descriptor, parleyRuntime.RoomRuntime{
 			RoomID:            resp.Room.RoomID,
 			ArtifactLocalPort: resp.Room.ArtifactLocalPort,
