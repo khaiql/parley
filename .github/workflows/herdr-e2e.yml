@@ -1,0 +1,51 @@
+name: Herdr OpenSSH e2e
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'herdr-plugin.toml'
+      - 'skills/**'
+      - 'scripts/herdr_e2e/**'
+      - 'scripts/test-herdr-e2e.py'
+      - '.github/workflows/herdr-e2e.yml'
+
+jobs:
+  real-ssh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install disposable test prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y openssh-server
+          sudo mkdir -p /run/sshd
+          mkdir -p "$RUNNER_TEMP/herdr-bin"
+          curl --fail --location --retry 3 https://github.com/herdrdev/herdr/releases/download/v0.9.3/herdr-linux-x86_64 -o "$RUNNER_TEMP/herdr-bin/herdr"
+          echo "18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7  $RUNNER_TEMP/herdr-bin/herdr" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/herdr-bin/herdr"
+          echo "$RUNNER_TEMP/herdr-bin" >> "$GITHUB_PATH"
+      - name: Exercise real Herdr and OpenSSH
+        run: python3 -u scripts/test-herdr-e2e.py --output /tmp/ph-e2e-ci
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: herdr-openssh-evidence
+          path: |
+            /tmp/ph-e2e-ci/evidence.jsonl
+            /tmp/ph-e2e-ci/remote-commands.log
+            /tmp/ph-e2e-ci/sshd.log
+            /tmp/ph-e2e-ci/local/*.log
+            /tmp/ph-e2e-ci/local/*.jsonl
+            /tmp/ph-e2e-ci/remote/*.log
+            /tmp/ph-e2e-ci/remote/*.jsonl
+            /tmp/ph-e2e-ci/local/s/herdr/plugins/parley/sessions/*/notifications/**/*.json
+          if-no-files-found: warn

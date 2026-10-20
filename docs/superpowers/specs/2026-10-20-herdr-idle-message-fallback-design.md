@@ -1,6 +1,6 @@
 # Herdr idle fallback for Parley messages
 
-Status: source implementation complete and independently reviewed on `codex/herdr-idle-message-fallback`, 2026-10-20. Automated build, lint, race, installer, and disposable-adapter checks pass. This follows the [Herdr automatic SSH routing design](2026-10-12-herdr-plugin-design.md). The routing plugin now exists in the base implementation; this document defines its separate receive-notification follow-up. Source implementation does not establish live Herdr/OpenSSH or reboot acceptance.
+Status: source implementation complete and independently reviewed on `codex/herdr-idle-message-fallback`, 2026-10-20. Automated build, lint, race, installer, and disposable-adapter checks pass. A [disposable real Herdr/OpenSSH suite](../../herdr-e2e.md) now provides executable transport, identity and process-restart checks; see its execution evidence and limits. Physical host reboot remains unverified. This follows the [Herdr automatic SSH routing design](2026-10-12-herdr-plugin-design.md). The routing plugin now exists in the base implementation; this document defines its separate receive-notification follow-up.
 
 Revised after the disconnect and host-reboot discussion: a restored connection or surviving pane never establishes recipient identity. Native conversation identity must be freshly verified before fallback delivery can resume.
 
@@ -46,7 +46,7 @@ Neither the agent record nor the status event provides a readiness transition ti
 
 `agent.prompt --wait` submits first and waits afterward. It is not a wait-until-idle delivery primitive. A prompt can be submitted while an agent is working; an already blocked agent is rejected. The current request has no expected-terminal, expected-native-conversation, or idle-only guard.
 
-These facts were checked against the installed schema and published documentation. Live event delivery and end-to-end notification behavior still require the acceptance checks below. Activation must verify the selected running servers support the required fields and subscription, rather than trusting only the local CLI version.
+These facts were checked against the installed schema and published documentation. Live event delivery and end-to-end notification behavior are exercised by the disposable suite linked above, with the acceptance-to-test mapping recorded there. Activation must verify the selected running servers support the required fields and subscription, rather than trusting only the local CLI version.
 
 Existing terminal-and-agent-kind checks are insufficient for this feature. The separately inspected Parley plugin implementation does not use native conversation identity as participation authority. Fallback delivery therefore needs its own verified native recipient identity; it cannot treat existing binding validation or the presence of a legacy native-session storage field as proof. A binding without a freshly verified native reference remains valid for its existing room workflow but is ineligible for automatic reminders. This requirement does not claim that the currently installed plugin already enforces it.
 

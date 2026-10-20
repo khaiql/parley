@@ -353,8 +353,10 @@ func awaitBrokerFile(t *testing.T, path string) {
 	t.Fatalf("timeout: %s", path)
 }
 func TestConcurrentJoinSeparateProcesses(t *testing.T) {
+	t.Parallel()
 	for _, kill := range []bool{false, true} {
 		t.Run(fmt.Sprint(kill), func(t *testing.T) {
+			t.Parallel()
 			h, r, root := brokerFixture(t)
 			name := "h_" + HostBindingKey(r.RoomID, r.Target)[:16]
 			p := paths.New(root)

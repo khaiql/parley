@@ -26,6 +26,7 @@ func TestRunProcessChild(t *testing.T) {
 	os.Exit(0)
 }
 func TestRunProcessBounded(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"overflow", "sleep"} {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		started := time.Now()

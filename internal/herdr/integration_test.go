@@ -12,6 +12,7 @@ import (
 )
 
 func TestIntegrationNativeFormsAndActivation(t *testing.T) {
+	t.Parallel()
 	operations, start, root := brokerFixture(t)
 	binary := filepath.Join(root, "bin", "parley")
 	if bundle := os.Getenv("PARLEY_HERDR_TEST_BUNDLE"); bundle != "" {

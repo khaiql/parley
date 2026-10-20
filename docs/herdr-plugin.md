@@ -211,7 +211,7 @@ Reboot recovery remains separate. Herdr restoring a pane or resuming a conversat
 
 Current Herdr APIs still have a final race between live verification and prompt submission. The helper rechecks the authorized readiness sequence and native identity immediately before input, but atomic delivery guarded by conversation identity requires upstream API support.
 
-This source implementation has automated fixture and disposable Parley-adapter coverage. Real cross-host Herdr/OpenSSH delivery and host-reboot acceptance remain unverified until exercised in a disposable environment. Installing this feature or restarting an existing coordinator is an explicit deployment step; development tests do neither.
+The [disposable end-to-end suite](herdr-e2e.md) runs real Herdr servers, OpenSSH helpers/forwards, original Parley adapters, and terminal input recorders in two isolated host namespaces. Its coverage matrix and execution evidence distinguish real transport and process-restart checks from deterministic fault tests. Physical host reboot, GUI shortcuts and LLM behavior remain outside that suite. Installing this feature or restarting an existing coordinator is an explicit deployment step; development tests do neither.
 
 ### Upgrading the helper protocol
 

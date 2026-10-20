@@ -320,6 +320,7 @@ func TestBindingLockAcrossStores(t *testing.T) {
 		}
 		return
 	}
+	t.Parallel()
 	dir := t.TempDir()
 	s := NewStore(dir)
 	err := s.WithBinding(context.Background(), "route:key", func() error {
