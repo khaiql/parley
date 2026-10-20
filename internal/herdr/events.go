@@ -49,10 +49,6 @@ func subscriptionParams() any {
 		{"type": "pane.closed"}, {"type": "pane.exited"}, {"type": "pane.moved"},
 	}}
 }
-func subscriptionRequest() any {
-	return map[string]any{"id": "parley-requests", "method": "events.subscribe", "params": subscriptionParams()}
-}
-
 // ReadEvents drains invalidations independently of slow authoritative queue reads.
 func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wake func() error) (result error) {
 	parent := ctx
@@ -166,7 +162,7 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 			return fmt.Errorf("malformed event frame: event data mismatch")
 		}
 		switch f.Event {
-		case "workspace_metadata_updated", "workspace_closed", "tab_closed", "pane_closed", "pane_exited", "pane_moved":
+		case "workspace_metadata_updated", "workspace_closed", "tab_closed", "pane_closed", "pane_exited", "pane_moved", "pane_updated", "pane_agent_detected", "pane_agent_status_changed":
 			select {
 			case ticks <- false:
 			default:
@@ -223,6 +219,10 @@ func validTransportKeepalive(data []byte) bool {
 }
 
 func RelayEvents(ctx context.Context, socket string, out io.Writer) error {
+	return relayEvents(ctx, socket, out, subscriptionParams(), false)
+}
+
+func relayEvents(ctx context.Context, socket string, out io.Writer, params any, restartTopology bool) error {
 	conn, e := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socket)
 	if e != nil {
 		return e
@@ -235,7 +235,7 @@ func RelayEvents(ctx context.Context, socket string, out io.Writer) error {
 	if e = conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); e != nil {
 		return e
 	}
-	if e = json.NewEncoder(conn).Encode(subscriptionRequest()); e != nil {
+	if e = json.NewEncoder(conn).Encode(map[string]any{"id": "parley-requests", "method": "events.subscribe", "params": params}); e != nil {
 		return e
 	}
 	type eventFrame struct {
@@ -291,6 +291,7 @@ func RelayEvents(ctx context.Context, socket string, out io.Writer) error {
 				return fmt.Errorf("malformed event frame: invalid UTF-8")
 			}
 			var f struct {
+				Event  string `json:"event"`
 				ID     string `json:"id"`
 				Result struct {
 					Type string `json:"type"`
@@ -311,6 +312,9 @@ func RelayEvents(ctx context.Context, socket string, out io.Writer) error {
 			}
 			if f.Error != nil {
 				return f.Error
+			}
+			if restartTopology && f.Event != "" && f.Event != "pane_agent_status_changed" {
+				return io.EOF
 			}
 			if acked && timer == nil {
 				ticker = time.NewTicker(2 * time.Second)
@@ -354,7 +358,11 @@ func (p *processStream) Read(b []byte) (int, error) {
 	return n, e
 }
 func (c *Client) OpenEvents(ctx context.Context, p Peer) (io.ReadCloser, error) {
-	r := RPCRequest{Operation: "events", Session: p.Machine.Session, SessionKey: p.Config.SessionKey, ControllerID: p.Config.ControllerID}
+	return c.openEvents(ctx, p, "events")
+}
+
+func (c *Client) openEvents(ctx context.Context, p Peer, operation string) (io.ReadCloser, error) {
+	r := RPCRequest{Operation: operation, Session: p.Machine.Session, SessionKey: p.Config.SessionKey, ControllerID: p.Config.ControllerID}
 	if e := r.Validate(); e != nil {
 		return nil, e
 	}

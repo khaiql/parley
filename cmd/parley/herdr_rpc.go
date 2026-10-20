@@ -15,23 +15,33 @@ func runHerdrRPC(ctx context.Context, in io.Reader, out io.Writer, c *herdr.Clie
 	if e != nil {
 		return nil, e
 	}
-	if r.Operation != "events" {
+	stream := r.Operation == "events" || r.Operation == "notification-events"
+	if !stream {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 	}
 	h, e := herdr.ResolveHost(ctx, c, r.Session)
 	if e != nil {
-		if r.Operation == "events" {
+		if stream {
 			return nil, eventStartupError(out, e)
 		}
 		return nil, e
 	}
-	if r.Operation == "events" {
+	if stream {
 		if e = h.VerifyController(ctx, r); e != nil {
 			return nil, eventStartupError(out, e)
 		}
-		return nil, herdr.RelayEvents(ctx, h.Config.HerdrSocket, out)
+		if r.Operation == "events" {
+			return nil, herdr.RelayEvents(ctx, h.Config.HerdrSocket, out)
+		}
+		owner, err := h.Owner(ctx)
+		if err != nil {
+			return nil, eventStartupError(out, err)
+		}
+		c.LocalMachineID = owner.MachineID
+		c.HerdrSocket = h.Config.HerdrSocket
+		return nil, (&herdr.HostOperations{Store: h.Store, Client: c}).RelayNotificationEvents(ctx, out)
 	}
 	return h.Dispatch(ctx, r)
 }

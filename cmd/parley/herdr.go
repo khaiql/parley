@@ -145,11 +145,69 @@ func herdrCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
+		notifications, err := h.Store.NotificationStatuses()
+		if err != nil {
+			return err
+		}
+		attempts, err := h.Store.NotificationAttempts()
+		if err != nil {
+			return err
+		}
 		return writeJSON(cmd, struct {
 			herdr.State
-			Handoffs map[string]herdr.HandoffResult `json:"handoffs"`
-		}{state, handoffs})
+			Handoffs             map[string]herdr.HandoffResult `json:"handoffs"`
+			Notifications        []herdr.NotificationDiagnostic `json:"notifications"`
+			NotificationAttempts []herdr.NotificationAttempt    `json:"notification_attempts"`
+		}{state, handoffs, notifications, attempts})
 	})
+	enroll := nativeCommand("notification-enroll", false, func(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession, _ string, _ []string) error {
+		id, _ := cmd.Flags().GetString("participant-session")
+		owner, err := h.Owner(cmd.Context())
+		if err != nil {
+			return err
+		}
+		c.LocalMachineID = owner.MachineID
+		c.HerdrSocket = owner.HerdrSocket
+		state, err := h.Store.Read()
+		if err != nil {
+			return err
+		}
+		var selected *herdr.Binding
+		for _, binding := range state.Bindings {
+			if binding.SessionID == id {
+				if selected != nil {
+					return fmt.Errorf("participant session ambiguous")
+				}
+				candidate := binding
+				selected = &candidate
+			}
+		}
+		if selected == nil {
+			return fmt.Errorf("participant session not found")
+		}
+		operations := &herdr.HostOperations{Store: h.Store, Client: c}
+		if err = operations.EnrollNotifications(cmd.Context(), *selected); err != nil {
+			return err
+		}
+		if err = c.SignalRequest(cmd.Context(), selected.Target, selected.JoinRequestID); err != nil {
+			return err
+		}
+		return writeJSON(cmd, map[string]string{"status": "enrolled", "session_id": id})
+	})
+	enroll.Flags().String("participant-session", "", "Existing Parley participant session to enroll on this host")
+	_ = enroll.MarkFlagRequired("participant-session")
+	retry := nativeCommand("notification-retry", false, func(cmd *cobra.Command, _ *herdr.Client, h herdr.HostSession, _ string, _ []string) error {
+		if _, err := h.CoordinatorConfig(); err != nil {
+			return fmt.Errorf("retry requires the local coordinator session: %w", err)
+		}
+		id, _ := cmd.Flags().GetString("attempt")
+		if err := h.Store.RetryNotification(cmd.Context(), id); err != nil {
+			return err
+		}
+		return writeJSON(cmd, map[string]string{"status": "retry_requested", "attempt_id": id, "warning": "Previous input may already have arrived. Retry waits for fresh readiness and unread grace."})
+	})
+	retry.Flags().String("attempt", "", "Uncertain notification attempt ID from herdr status")
+	_ = retry.MarkFlagRequired("attempt")
 	broker := &cobra.Command{Use: "broker", Hidden: true, Args: noArgsJSON, RunE: func(cmd *cobra.Command, _ []string) error {
 		c, err := nativeClient()
 		if err != nil {
@@ -165,7 +223,7 @@ func herdrCmd() *cobra.Command {
 		return h.Coordinate(ctx, c)
 	}}
 	broker.Flags().String("native-session", "", "verified native session")
-	cmd.AddCommand(herdrInstallCmd(), herdrRPCCmd(), setup, startup, action, form, status, broker)
+	cmd.AddCommand(herdrInstallCmd(), herdrRPCCmd(), setup, startup, action, form, status, enroll, retry, broker)
 	return cmd
 }
 func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
@@ -258,6 +316,9 @@ func runForm(cmd *cobra.Command, c *herdr.Client, h herdr.HostSession) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "parley --session %s send \"message\"\r\n", result.Binding.SessionID)
 	}
 	fmt.Fprint(cmd.OutOrStdout(), "Press Enter to close.\r\n")
+	if result.NotificationStatus != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "Room message fallback: %s.\r\n", result.NotificationStatus)
+	}
 	if result.Handoff != nil {
 		for {
 			fmt.Fprintf(cmd.OutOrStdout(), "Agent instructions: %s. %s\r\n", result.Handoff.Status, result.Handoff.Message)

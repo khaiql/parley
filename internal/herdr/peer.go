@@ -22,19 +22,20 @@ type ProbeResult struct {
 	AgentStatus  string        `json:"agent_status,omitempty"`
 }
 type RPCRequest struct {
-	Operation    string     `json:"operation"`
-	Target       string     `json:"target,omitempty"`
-	Session      string     `json:"session"`
-	SessionKey   string     `json:"session_key,omitempty"`
-	ControllerID string     `json:"controller_id,omitempty"`
-	MachineID    string     `json:"machine_id,omitempty"`
-	RequestID    string     `json:"request_id,omitempty"`
-	Digest       string     `json:"digest,omitempty"`
-	Outcome      *Outcome   `json:"outcome,omitempty"`
-	RoomID       string     `json:"room_id,omitempty"`
-	BindingKey   string     `json:"binding_key,omitempty"`
-	Request      *Request   `json:"request,omitempty"`
-	Endpoints    *Endpoints `json:"endpoints,omitempty"`
+	Operation    string               `json:"operation"`
+	Target       string               `json:"target,omitempty"`
+	Session      string               `json:"session"`
+	SessionKey   string               `json:"session_key,omitempty"`
+	ControllerID string               `json:"controller_id,omitempty"`
+	MachineID    string               `json:"machine_id,omitempty"`
+	RequestID    string               `json:"request_id,omitempty"`
+	Digest       string               `json:"digest,omitempty"`
+	Outcome      *Outcome             `json:"outcome,omitempty"`
+	RoomID       string               `json:"room_id,omitempty"`
+	BindingKey   string               `json:"binding_key,omitempty"`
+	Request      *Request             `json:"request,omitempty"`
+	Endpoints    *Endpoints           `json:"endpoints,omitempty"`
+	Notification *NotificationAttempt `json:"notification,omitempty"`
 }
 
 func decodeRPC(r io.Reader, v *RPCRequest) error {
@@ -91,9 +92,26 @@ func (r RPCRequest) Validate() error {
 		if r.MachineID == "self" {
 			return fmt.Errorf("normalized machine required")
 		}
-	case "release-controller", "events", "requests", "rooms", "cleanup-terminals":
+	case "release-controller", "events", "requests", "rooms", "cleanup-terminals", "notification-bindings", "notification-events":
 		allowed.ControllerID = r.ControllerID
 		allowed.SessionKey = r.SessionKey
+	case "notification-observe", "notification-wait":
+		allowed.ControllerID = r.ControllerID
+		allowed.SessionKey = r.SessionKey
+		allowed.BindingKey = r.BindingKey
+		if !validDigest(r.BindingKey) {
+			return fmt.Errorf("invalid binding key")
+		}
+	case "notification-prompt":
+		allowed.ControllerID = r.ControllerID
+		allowed.SessionKey = r.SessionKey
+		allowed.Notification = r.Notification
+		if r.Notification == nil {
+			return fmt.Errorf("notification required")
+		}
+		if err := r.Notification.validate(); err != nil {
+			return err
+		}
 	case "claim-request":
 		allowed.ControllerID = r.ControllerID
 		allowed.SessionKey = r.SessionKey
@@ -400,6 +418,19 @@ func (h HostSession) Dispatch(ctx context.Context, r RPCRequest) (any, error) {
 	}
 	if r.SessionKey != h.Config.SessionKey {
 		return nil, fmt.Errorf("session_mismatch")
+	}
+	if strings.HasPrefix(r.Operation, "notification-") {
+		var owner SessionConfig
+		if err := h.controller(ctx, func(c *SessionConfig) error {
+			if c.ControllerID != r.ControllerID {
+				return fmt.Errorf("controller_conflict")
+			}
+			owner = *c
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		return h.dispatchNotification(ctx, r, owner)
 	}
 	var owner SessionConfig
 	var result any

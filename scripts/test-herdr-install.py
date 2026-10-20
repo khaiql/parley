@@ -74,7 +74,7 @@ cat "$FIXTURE/$name" > "$4"
         path.write_text(text)
         path.chmod(0o755)
 
-    def bundle(self, *, version="9.8.7-rc.1", helper=4, executable=True, missing=None, manifest_version=None, wrong_arch=False):
+    def bundle(self, *, version="9.8.7-rc.1", helper=5, executable=True, missing=None, manifest_version=None, wrong_arch=False):
         manifest = (ROOT / "herdr-plugin.toml").read_text()
         manifest = manifest.replace('version = "0.3.0"', f'version = "{manifest_version or version}"')
         # Fixtures model the released manifest, including before the source fix exists.
@@ -205,7 +205,7 @@ def stage_release(dist):
         assert subprocess.check_output(command, env=env, text=True).strip() == installed
         binary = str(Path(installed) / "bin/parley")
         info = json.loads(subprocess.check_output([binary, "version"], env=env))
-        assert info["version"] == tag[1:] and info["herdr_helper_version"] == 4, info
+        assert info["version"] == tag[1:] and info["herdr_helper_version"] == 5, info
         skill = str(Path(installed) / "skills/parley/scripts/ensure-parley")
         assert subprocess.check_output([skill], env={**env, "PARLEY_BIN": binary}, text=True).strip() == binary
         (dist / "test-plugin-root.txt").write_text(installed + "\n")

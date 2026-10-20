@@ -98,8 +98,8 @@ func (s *Store) locked(fn func() error) error {
 
 // WithBinding holds a host transaction lock across processes, never the short data lock across external operations.
 func (s *Store) WithBinding(ctx context.Context, key string, fn func() error) error {
-	if (!strings.HasPrefix(key, "route:") && !strings.HasPrefix(key, "join:") && !strings.HasPrefix(key, "terminal:")) || strings.HasSuffix(key, ":") {
-		return fmt.Errorf("binding lock requires route:, join:, or terminal: key")
+	if (!strings.HasPrefix(key, "route:") && !strings.HasPrefix(key, "join:") && !strings.HasPrefix(key, "terminal:") && !strings.HasPrefix(key, "notification:")) || strings.HasSuffix(key, ":") {
+		return fmt.Errorf("binding lock requires route:, join:, terminal:, or notification: key")
 	}
 	if err := privateDir(s.dir); err != nil {
 		return err

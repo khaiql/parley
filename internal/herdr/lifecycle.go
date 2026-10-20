@@ -318,6 +318,7 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 		}
 	})
 	local := Peer{Machine: Machine{ID: owner.MachineID}, Config: owner}
+	workers.Go(func() { broker.RunNotifications(ctx, local) })
 	workers.Go(func() {
 		if err := watchLocal(ctx, c.HerdrSocket, func(ctx context.Context) error {
 			if err := broker.Drain(ctx, local); err != nil {
@@ -387,6 +388,7 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 			}
 			streamCtx, stop := context.WithCancel(ctx)
 			subscriptions[m.ID] = subscription{p, stop}
+			workers.Go(func() { broker.RunNotifications(streamCtx, p) })
 			workers.Go(func() {
 				e := c.WatchRequests(streamCtx, p, func(ctx context.Context, peer Peer) error {
 					if err := broker.Drain(ctx, peer); err != nil {

@@ -60,6 +60,11 @@ func (h *HostOperations) withHandoff(ctx context.Context, result Response, err e
 		}
 		handoff := h.Handoff(ctx, binding, false)
 		result.Handoff = &handoff
+		result.NotificationStatus = "identity_unavailable"
+		if err := h.EnrollNotifications(ctx, binding); err == nil {
+			result.NotificationStatus = "enrolled"
+			_ = h.Client.SignalRequest(ctx, binding.Target, binding.JoinRequestID)
+		}
 	}
 	return result, err
 }
