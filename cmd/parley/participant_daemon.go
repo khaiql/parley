@@ -25,8 +25,9 @@ type participantAdapterRuntime struct {
 	conn   net.Conn
 	reader *bufio.Reader
 
-	writeMu sync.Mutex
-	notify  chan struct{}
+	writeMu  sync.Mutex
+	notifyMu sync.Mutex
+	notify   chan struct{}
 }
 
 func runParticipantAdapter(cfg participantDaemonConfig) error {
@@ -46,7 +47,7 @@ func runParticipantAdapter(cfg participantDaemonConfig) error {
 		store:  store,
 		conn:   conn,
 		reader: bufio.NewReader(conn),
-		notify: make(chan struct{}, 1),
+		notify: make(chan struct{}),
 	}
 	if err := rt.join(); err != nil {
 		return err
@@ -274,6 +275,7 @@ func (rt *participantAdapterRuntime) wait(rawTimeout string) ([]model.Event, boo
 	defer timer.Stop()
 
 	for {
+		changed := rt.changed()
 		events, err := rt.store.WaitReadyBatch(rt.cfg.Name)
 		if err != nil {
 			return nil, false, err
@@ -282,7 +284,7 @@ func (rt *participantAdapterRuntime) wait(rawTimeout string) ([]model.Event, boo
 			return events, false, nil
 		}
 		select {
-		case <-rt.notify:
+		case <-changed:
 		case <-timer.C:
 			return nil, true, nil
 		}
@@ -314,6 +316,7 @@ func (rt *participantAdapterRuntime) waitForEvent(afterSeq int64, timeout time.D
 	defer timer.Stop()
 
 	for {
+		changed := rt.changed()
 		events, err := rt.store.EventsAfterSeq(afterSeq, 0)
 		if err != nil {
 			return model.Event{}, err
@@ -324,7 +327,7 @@ func (rt *participantAdapterRuntime) waitForEvent(afterSeq int64, timeout time.D
 			}
 		}
 		select {
-		case <-rt.notify:
+		case <-changed:
 		case <-timer.C:
 			return model.Event{}, fmt.Errorf("timed out waiting for server acknowledgement")
 		}
@@ -337,6 +340,7 @@ func (rt *participantAdapterRuntime) takeUnseenThrough(seq int64, timeout time.D
 
 	var out []model.Event
 	for {
+		changed := rt.changed()
 		events, err := rt.store.TakeUnseenThrough(seq)
 		if err != nil {
 			return nil, err
@@ -355,7 +359,7 @@ func (rt *participantAdapterRuntime) takeUnseenThrough(seq int64, timeout time.D
 			return out, nil
 		}
 		select {
-		case <-rt.notify:
+		case <-changed:
 		case <-timer.C:
 			return nil, fmt.Errorf("timed out waiting for contiguous events through seq %d", seq)
 		}
@@ -392,10 +396,22 @@ func (rt *participantAdapterRuntime) markDisconnectedUnlessLeft() error {
 }
 
 func (rt *participantAdapterRuntime) signal() {
-	select {
-	case rt.notify <- struct{}{}:
-	default:
+	rt.notifyMu.Lock()
+	defer rt.notifyMu.Unlock()
+	if rt.notify != nil {
+		close(rt.notify)
 	}
+	rt.notify = make(chan struct{})
+}
+
+// Subscribe before reading the store so publication cannot fall between the read and wait.
+func (rt *participantAdapterRuntime) changed() <-chan struct{} {
+	rt.notifyMu.Lock()
+	defer rt.notifyMu.Unlock()
+	if rt.notify == nil {
+		rt.notify = make(chan struct{})
+	}
+	return rt.notify
 }
 
 func boolRef(v bool) *bool {
