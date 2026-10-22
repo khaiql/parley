@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Check acceptance assertions
+        run: python3 -B -m unittest scripts.herdr_e2e.test_assertions -v
       - name: Install disposable test prerequisites
         shell: bash
         run: |

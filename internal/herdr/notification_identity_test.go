@@ -14,12 +14,13 @@ import (
 )
 
 type notificationNativeFixture struct {
-	mu      sync.Mutex
-	agents  []notificationAgent
-	prompts []string
-	mode    string
-	streams []net.Conn
-	done    chan struct{}
+	mu         sync.Mutex
+	agents     []notificationAgent
+	prompts    []string
+	mode       string
+	streams    []net.Conn
+	done       chan struct{}
+	beforeList func()
 }
 
 func notificationFixture(t *testing.T) (*HostOperations, Binding, *notificationNativeFixture) {
@@ -62,6 +63,12 @@ func notificationFixture(t *testing.T) (*HostOperations, Binding, *notificationN
 					_, _ = conn.Write([]byte(testEventAck))
 					<-f.done
 					return
+				}
+				f.mu.Lock()
+				beforeList := f.beforeList
+				f.mu.Unlock()
+				if req.Method == "agent.list" && beforeList != nil {
+					beforeList()
 				}
 				f.mu.Lock()
 				defer f.mu.Unlock()

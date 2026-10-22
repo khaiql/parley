@@ -54,6 +54,8 @@ Existing terminal-and-agent-kind checks are insufficient for this feature. The s
 
 Use the local coordinator described by the routing design. One coordinator owns fallback state and submission scheduling for its configured Herdr server session and managed remote sessions. Reuse the existing controller ownership rules; do not introduce a second independent controller.
 
+On a managed host, serialize notification input with controller release and claim under the existing ownership lock. A request that authenticated before release cannot submit input after release completes. Read-only observations and bounded waits do not retain that lock.
+
 | Data or work | Owner and location |
 | --- | --- |
 | Room transcript and room sequence | Room server on the room host |
@@ -95,6 +97,8 @@ This enumerates existing plugin bindings, not rooms or unrelated Parley sessions
 ## Per-binding state
 
 Persist attempts under `notifications/attempts/`, cursor high-water records under `notifications/cursors/`, and derived host diagnostics under `notifications/status/` within the local coordinator's session namespace. The participant host keeps its immutable native enrollment under `notifications/enrollments/`; it does not run a second scheduler or maintain a competing attempt journal. Reuse the routing design's private directories, locked atomic writes, schema validation, and controller ownership. Do not mix records from different Herdr sessions.
+
+Validate the complete attempt archive on recovery, new enrollment and submission. Between those boundaries, retain accepted high-water marks and only outstanding intents for active bindings. Periodic reconciliation rereads mutable outstanding intents to observe explicit CLI retries and late acknowledgements from a canceled generation; it must not reopen every historical attempt on every five-second tick. Consumption and supersession remove intents from this active view without deleting their durable records.
 
 Durable state contains:
 

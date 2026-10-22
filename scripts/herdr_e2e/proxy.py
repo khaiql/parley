@@ -24,6 +24,9 @@ class SocketProxy:
         self.hold_prompt = False
         self.accepted_held = threading.Event()
         self.release_held = threading.Event()
+        self.hold_subscription = False
+        self.subscription_held = threading.Event()
+        self.release_subscription = threading.Event()
         os.rename(self.path, self.backend)
         self.listener = socket.socket(socket.AF_UNIX)
         self.listener.bind(self.path)
@@ -32,6 +35,10 @@ class SocketProxy:
         self.listener.settimeout(.2)
         self.thread = threading.Thread(target=self.accept, daemon=True)
         self.thread.start()
+
+    def calls(self, method):
+        with self.lock:
+            return sum(count for (name, _), count in self.counts.items() if name == method)
 
     def accept(self):
         while not self.stopped.is_set():
@@ -70,6 +77,11 @@ class SocketProxy:
                 hold = self.hold_prompt and method == "agent.prompt"
                 if hold:
                     self.hold_prompt = False
+                hold_subscription = self.hold_subscription and method == "events.subscribe" and any(
+                    subscription.get("type") == "pane.agent_status_changed"
+                    for subscription in request.get("params", {}).get("subscriptions", []))
+                if hold_subscription:
+                    self.hold_subscription = False
             if reject:
                 client.sendall((json.dumps({"id": request["id"], "error": {
                     "code": "unavailable", "message": "injected registration failure"}}) + "\n").encode())
@@ -84,14 +96,22 @@ class SocketProxy:
                     data = source.recv(65536)
                     if not data:
                         return
-                    if source is backend and (drop or hold):
-                        # Read and validate the complete native acceptance before losing its reply.
+                    if source is backend and (drop or hold or hold_subscription):
+                        # Faults act only after the complete native acknowledgement arrives.
                         while b"\n" not in data:
                             part = backend.recv(65536)
                             if not part:
                                 return
                             data += part
                         result = json.loads(data.split(b"\n", 1)[0])
+                        if hold_subscription and result.get("id") == request["id"] and \
+                                result.get("result", {}).get("type") == "subscription_started":
+                            self.subscription_held.set()
+                            self.host.lab.record("subscription_ack_held", host=self.host.name, response=result)
+                            while not self.release_subscription.wait(.1):
+                                if self.stopped.is_set():
+                                    return
+                            hold_subscription = False
                         if result.get("result", {}).get("type") == "agent_prompted":
                             if hold:
                                 self.accepted_held.set()

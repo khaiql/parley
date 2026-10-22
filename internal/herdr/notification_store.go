@@ -70,20 +70,35 @@ func (s *Store) NotificationAttempts() ([]NotificationAttempt, error) {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		var a NotificationAttempt
-		if err = readJSON(filepath.Join(dir, entry.Name()), &a); err != nil {
+		a, err := s.notificationAttempt(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
 			return nil, err
-		}
-		if err = a.validate(); err != nil {
-			return nil, err
-		}
-		if entry.Name() != a.ID+".json" {
-			return nil, fmt.Errorf("notification attempt filename mismatch")
 		}
 		out = append(out, a)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
+}
+
+func (s *Store) notificationAttempt(id string) (NotificationAttempt, error) {
+	var a NotificationAttempt
+	if safeID(id) != nil {
+		return a, fmt.Errorf("invalid attempt id")
+	}
+	dir, err := s.notificationDir("attempts")
+	if err != nil {
+		return a, err
+	}
+	if err = readJSON(filepath.Join(dir, id+".json"), &a); err != nil {
+		return a, err
+	}
+	if err = a.validate(); err != nil {
+		return a, err
+	}
+	if a.ID != id {
+		return a, fmt.Errorf("notification attempt filename mismatch")
+	}
+	return a, nil
 }
 
 func notificationReplaced(attempts []NotificationAttempt) map[string]bool {

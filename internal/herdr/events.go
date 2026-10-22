@@ -121,7 +121,10 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 			} `json:"result"`
 			Event string `json:"event"`
 			Data  struct {
-				Type string `json:"type"`
+				Type        string `json:"type"`
+				PaneID      string `json:"pane_id"`
+				WorkspaceID string `json:"workspace_id"`
+				AgentStatus string `json:"agent_status"`
 			} `json:"data"`
 			Error *apiError `json:"error"`
 		}
@@ -159,11 +162,17 @@ func ReadEvents(ctx context.Context, stream io.Reader, started func() error, wak
 			}
 			return fmt.Errorf("unexpected subscription response")
 		}
-		if f.Data.Type != f.Event {
+		// Herdr 0.9.3 status subscriptions use a dotted name and untagged
+		// payload. Treat it only as an invalidation; callers reread native state.
+		if f.Event == "pane.agent_status_changed" {
+			if f.Data.Type != "" || safeID(f.Data.PaneID) != nil || safeID(f.Data.WorkspaceID) != nil || safeID(f.Data.AgentStatus) != nil {
+				return fmt.Errorf("malformed event frame: invalid agent status event")
+			}
+		} else if f.Data.Type != f.Event {
 			return fmt.Errorf("malformed event frame: event data mismatch")
 		}
 		switch f.Event {
-		case "workspace_metadata_updated", "workspace_closed", "tab_closed", "pane_closed", "pane_exited", "pane_moved", "pane_updated", "pane_agent_detected", "pane_agent_status_changed":
+		case "workspace_metadata_updated", "workspace_closed", "tab_closed", "pane_closed", "pane_exited", "pane_moved", "pane_updated", "pane_agent_detected", "pane_agent_status_changed", "pane.agent_status_changed":
 			select {
 			case ticks <- false:
 			default:
@@ -314,7 +323,9 @@ func relayEvents(ctx context.Context, socket string, out io.Writer, params any, 
 			if f.Error != nil {
 				return f.Error
 			}
-			if restartTopology && f.Event != "" && f.Event != "pane_agent_status_changed" {
+			// Title/status presentation updates need authoritative reconciliation,
+			// but do not invalidate the connection generation or its grace timers.
+			if restartTopology && f.Event != "" && f.Event != "pane_updated" && f.Event != "pane_agent_status_changed" && f.Event != "pane.agent_status_changed" {
 				return io.EOF
 			}
 			if acked && timer == nil {

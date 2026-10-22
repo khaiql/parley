@@ -419,7 +419,9 @@ func (h HostSession) Dispatch(ctx context.Context, r RPCRequest) (any, error) {
 	if r.SessionKey != h.Config.SessionKey {
 		return nil, fmt.Errorf("session_mismatch")
 	}
-	if strings.HasPrefix(r.Operation, "notification-") {
+	// Read-only observations and long waits do not hold controller ownership.
+	// Prompting mutates the terminal and must serialize with release/claim.
+	if strings.HasPrefix(r.Operation, "notification-") && r.Operation != "notification-prompt" {
 		var owner SessionConfig
 		if err := h.controller(ctx, func(c *SessionConfig) error {
 			if c.ControllerID != r.ControllerID {
@@ -465,6 +467,8 @@ func (h HostSession) Dispatch(ctx context.Context, r RPCRequest) (any, error) {
 }
 func (h HostSession) dispatchOwned(ctx context.Context, r RPCRequest, owner SessionConfig) (any, error) {
 	switch r.Operation {
+	case "notification-prompt":
+		return h.dispatchNotification(ctx, r, owner)
 	case "probe":
 		c := Client{LocalMachineID: owner.MachineID, HerdrSocket: h.Config.HerdrSocket}
 		target := AgentTarget{MachineID: owner.MachineID, HerdrSocket: h.Config.HerdrSocket, PaneID: r.Target}

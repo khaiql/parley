@@ -10,6 +10,21 @@ import threading
 from .environment import Agent, REMINDER, eventually, private_write, require, terminate
 
 
+def require_delivery_window(reminders, count, ready_at_ns, within=None):
+    # Recorder timestamps measure delivery even when observing pending state took longer than grace.
+    elapsed = (reminders[count - 1]["at"] - ready_at_ns) / 1_000_000_000
+    require(elapsed >= 29, f"production grace was bypassed: input after {elapsed:.3f}s")
+    if within is not None:
+        require(elapsed <= within, f"delivery exceeded {within}s from original readiness: {elapsed:.3f}s")
+
+
+def fresh_recipient_missing(observation, after_ns, resolution_calls, baseline_calls):
+    return bool(observation and observation["status"] == "suspended" and
+                "recipient_missing" in observation.get("message", "") and
+                observation["observed_file_mtime_ns"] > after_ns and
+                resolution_calls > baseline_calls)
+
+
 class Fixture:
     def __init__(self, lab):
         self.lab = lab
@@ -53,8 +68,10 @@ class Fixture:
                           self.c.notification(binding)["through_seq"] > self.c.notification(binding)["seen_seq"],
                           f"unread observation {binding['session_id']}", timeout=75)
 
-    def accepted(self, agent, binding, count):
+    def accepted(self, agent, binding, count, ready_at_ns=None, within=None):
         eventually(lambda: len(agent.reminders()) == count, f"exactly {count} reminders at {agent.name}", timeout=95)
+        if ready_at_ns is not None:
+            require_delivery_window(agent.reminders(), count, ready_at_ns, within)
         attempt = eventually(lambda: next((a for a in self.c.attempts() if a["id"] not in self.checked_attempts and a["outcome"] == "accepted" and
                           a["conversation"]["value"] == agent.native and
                           any(c["session_id"] == binding["session_id"] for c in a["coverage"])), None),
@@ -62,9 +79,10 @@ class Fixture:
         self.checked_attempts.add(attempt["id"])
         return attempt
 
-    def quiet(self, seconds, agents=None):
+    def quiet(self, seconds, agents=None, counts=None):
         agents = agents or [self.b]
-        before = [len(a.reminders()) for a in agents]
+        before = counts if counts is not None else [len(a.reminders()) for a in agents]
+        require(len(before) == len(agents), "negative assertion needs one pre-action count per agent")
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             require(self.c.broker.poll() is None, "coordinator died during negative assertion")
@@ -81,12 +99,11 @@ class Fixture:
 def remote_reminder(f):
     before = f.r.parley("status", "--session", f.joined["session_id"])["state"]["last_seen_seq"]
     count = len(f.b.reminders())
-    sent = time.monotonic()
+    sent, sent_ns = time.monotonic(), time.time_ns()
     f.send(text="actual SSH fallback message")
     f.pending()
-    f.quiet(max(0, 28 - (time.monotonic() - sent)))
-    f.accepted(f.b, f.joined, count + 1)
-    require(time.monotonic() - sent >= 29, "production grace was bypassed")
+    f.quiet(max(0, 28 - (time.monotonic() - sent)), counts=[count])
+    f.accepted(f.b, f.joined, count + 1, ready_at_ns=sent_ns)
     after = f.r.parley("status", "--session", f.joined["session_id"])["state"]["last_seen_seq"]
     require(before == after, "fallback consumed original participant cursor")
     require("herdr rpc" in (f.lab.root / "remote-commands.log").read_text(), "SSH helper was bypassed")
@@ -195,13 +212,14 @@ def eligibility(f):
     f.passed("working-blocked-unknown-never-prompt")
     count = len(f.b.reminders())
     f.b.state("idle")
-    f.quiet(12)
+    f.quiet(12, counts=[count])
     f.b.state("working")
+    ready_at_ns = time.time_ns()
     f.b.state("idle")
-    f.quiet(18)
+    f.quiet(18, counts=[count])
     f.r.api("agent.focus", {"target": f.b.pane})
-    f.quiet(10)
-    f.accepted(f.b, f.joined, count + 1)
+    f.quiet(10, counts=[count])
+    f.accepted(f.b, f.joined, count + 1, ready_at_ns=ready_at_ns, within=43)
     f.passed("busy-resets-grace-focus-does-not")
     f.drain()
     # Own messages and lifecycle events do not independently trigger a reminder.
@@ -226,16 +244,15 @@ def eligibility(f):
     count = len(f.b.reminders())
     source = f.c.root / "file-only.bin"
     source.write_bytes(b"file-only\x00\xff")
-    sent = time.monotonic()
+    sent, sent_ns = time.monotonic(), time.time_ns()
     f.send(text="", files=[source])
     f.pending()
-    f.quiet(max(0, 10 - (time.monotonic() - sent)))
+    f.quiet(max(0, 10 - (time.monotonic() - sent)), counts=[count])
     f.send(text="burst message one")
-    f.quiet(10)
+    f.quiet(10, counts=[count])
     f.send(text="burst message two")
-    f.quiet(max(0, 28 - (time.monotonic() - sent)))
-    f.accepted(f.b, f.joined, count + 1)
-    require(time.monotonic() - sent <= 43, "message bursts postponed the original unread grace")
+    f.quiet(max(0, 28 - (time.monotonic() - sent)), counts=[count])
+    f.accepted(f.b, f.joined, count + 1, ready_at_ns=sent_ns, within=43)
     f.passed("file-only-message-and-new-batch")
     f.drain()
 
@@ -336,12 +353,21 @@ def recovery(f):
     count = len(f.b.reminders())
     f.send(text="a helper connection interruption must restart grace")
     f.pending()
-    f.quiet(12)
+    f.quiet(12, counts=[count])
+    f.r.proxy.subscription_held.clear()
+    f.r.proxy.release_subscription.clear()
+    f.r.proxy.hold_subscription = True
     f.lab.interrupt_remote_helpers()
     eventually(lambda: f.c.notification(f.joined)["status"] == "unavailable", "lost helper generation")
-    eventually(lambda: f.c.notification(f.joined)["status"] == "waiting", "fresh helper generation", timeout=75)
-    f.quiet(28)
-    f.accepted(f.b, f.joined, count + 1)
+    eventually(f.r.proxy.subscription_held.is_set, "new helper notification subscription held", timeout=75)
+    # Hold past the old grace so reconnect delay cannot conceal a missing generation reset.
+    f.quiet(32, counts=[count])
+    reconnect_at, reconnect_at_ns = time.monotonic(), time.time_ns()
+    f.r.proxy.release_subscription.set()
+    eventually(lambda: (o := f.c.notification(f.joined)) and o["status"] == "waiting" and
+               o["observed_file_mtime_ns"] > reconnect_at_ns, "fresh helper generation", timeout=75)
+    f.quiet(max(0, 28 - (time.monotonic() - reconnect_at)), counts=[count])
+    f.accepted(f.b, f.joined, count + 1, ready_at_ns=reconnect_at_ns)
     f.passed("real-ssh-helper-disconnect-and-fresh-grace")
     f.drain()
     count = len(f.b.reminders())
@@ -353,9 +379,10 @@ def recovery(f):
     require(len(f.b.reminders()) == count + 1, "fault did not follow actual terminal delivery")
     f.quiet(32)
     # Retry uses the actual CLI and must wait through another grace period.
+    retry_at, retry_at_ns = time.monotonic(), time.time_ns()
     f.c.parley("herdr", "notification-retry", "--attempt", uncertain["id"])
-    f.quiet(28)
-    f.accepted(f.b, f.joined, count + 2)
+    f.quiet(max(0, 28 - (time.monotonic() - retry_at)), counts=[count + 1])
+    f.accepted(f.b, f.joined, count + 2, ready_at_ns=retry_at_ns)
     f.passed("lost-ack-suppression-and-explicit-retry", original_attempt=uncertain["id"])
     f.drain()
     # Coordinator restart affects SSH routes, so use an original same-host participant here.
@@ -364,11 +391,18 @@ def recovery(f):
     f.c.parley("inbox", "--session", same["session_id"])
     f.send(text="pending before coordinator process restart")
     f.pending(same)
-    f.quiet(12, [local])
+    f.quiet(12, [local], counts=[0])
+    f.c.proxy.subscription_held.clear()
+    f.c.proxy.release_subscription.clear()
+    f.c.proxy.hold_subscription = True
     f.c.restart_coordinator()
-    eventually(lambda: f.c.notification(same)["status"] == "waiting", "post-restart observation", timeout=30)
-    f.quiet(28, [local])
-    f.accepted(local, same, 1)
+    eventually(f.c.proxy.subscription_held.is_set, "restarted coordinator notification subscription held", timeout=75)
+    restart_at, restart_at_ns = time.monotonic(), time.time_ns()
+    f.c.proxy.release_subscription.set()
+    eventually(lambda: (o := f.c.notification(same)) and o["status"] == "waiting" and
+               o["observed_file_mtime_ns"] > restart_at_ns, "post-restart observation", timeout=75)
+    f.quiet(max(0, 28 - (time.monotonic() - restart_at)), [local], counts=[0])
+    f.accepted(local, same, 1, ready_at_ns=restart_at_ns)
     f.c.parley("inbox", "--session", same["session_id"])
     f.c.proxy.hold_prompt = True
     f.send(text="crash after native acceptance but before journal completion")
@@ -382,9 +416,10 @@ def recovery(f):
     f.c.restart_coordinator()
     f.quiet(32, [local])
     require(len(local.reminders()) == 2, "prepared ambiguous reminder repeated after crash")
+    retry_at, retry_at_ns = time.monotonic(), time.time_ns()
     f.c.parley("herdr", "notification-retry", "--attempt", prepared["id"])
-    f.quiet(28, [local])
-    f.accepted(local, same, 3)
+    f.quiet(max(0, 28 - (time.monotonic() - retry_at)), [local], counts=[2])
+    f.accepted(local, same, 3, ready_at_ns=retry_at_ns)
     f.c.restart_coordinator()
     f.quiet(32, [local])
     f.passed("coordinator-restart-grace-prepared-crash-and-durable-suppression", prepared_attempt=prepared["id"])
@@ -403,13 +438,18 @@ def shutdown(f):
     require(any(e["type"] == "message" and e["actor"] != f.joined["participant_name"] for e in unread),
             "offline/reboot test needs buffered incoming messages")
     sessions_before = {p.name for p in (Path(f.r.env["PARLEY_STATE_DIR"]) / "sessions").glob("*.json")}
+    count = len(f.b.reminders())
+    prompt_count = f.r.proxy.calls("agent.prompt")
+    disconnect_at_ns = time.time_ns()
     f.lab.disconnect()
     f.lab.ssh_start()
-    eventually(lambda: f.c.notification(f.joined)["status"] in {"suspended", "unavailable"},
-               "offline original participant suspended", timeout=40)
-    count = len(f.b.reminders())
-    f.quiet(32)
-    require(len(f.b.reminders()) == count, "SSH reconnection silently replaced disconnected participant")
+    eventually(lambda: (o := f.c.notification(f.joined)) and
+               o["observed_file_mtime_ns"] > disconnect_at_ns and
+               "participant_disconnected" in o.get("message", ""),
+               "reconnected helper observes offline original participant", timeout=75)
+    f.quiet(32, counts=[count])
+    require(f.r.proxy.calls("agent.prompt") == prompt_count,
+            "fallback attempted native input while original participant was offline")
     f.passed("ssh-endpoint-loss-and-reconnect-offline-adapter")
     # Stop only the disposable remote Herdr server; its persisted layout restores shell panes.
     old_pane = f.b.pane
@@ -417,6 +457,8 @@ def shutdown(f):
     f.lab.stop_host_adapters(f.r)
     terminate(f.r.process)
     f.r.proxy.close()
+    require(f.r.proxy.calls("agent.prompt") == prompt_count,
+            "fallback attempted native input while original participant was offline")
     f.r.proxy = None
     f.r.start()
     f.lab.ssh_start()
@@ -424,20 +466,28 @@ def shutdown(f):
     agents = f.r.api("agent.list").get("agents", [])
     require(not any(a.get("agent_session", {}).get("value") == f.b.native for a in agents),
             "test did not restore an agent-free layout")
-    f.quiet(32)
-    require(len(f.b.reminders()) == count, "restored shell received old room input")
-    require(sum(value for (method, _), value in f.r.proxy.counts.items() if method == "agent.prompt") == 0,
+    # The new proxy belongs to the restarted endpoint; exclude this test's inventory calls.
+    resolution_calls = f.r.proxy.calls("agent.list")
+    observed_after_ns = time.time_ns()
+    eventually(lambda: fresh_recipient_missing(f.c.notification(f.joined), observed_after_ns,
+                             f.r.proxy.calls("agent.list"), resolution_calls),
+                             "restarted endpoint freshly observes missing recipient", timeout=75)
+    f.lab.record("restored_shell_observed", session_id=f.joined["session_id"],
+                 after_ns=observed_after_ns, resolution_calls=f.r.proxy.calls("agent.list"))
+    f.quiet(32, counts=[count])
+    require(f.r.proxy.calls("agent.prompt") == 0,
             "fallback attempted native input into the restored shell layout")
     f.passed("remote-process-restart-restored-shell", previous_pane=old_pane,
              snapshot_workspaces=len(snapshot.get("workspaces", [])))
     # Resume the original native conversation without reviving its disconnected Parley adapter.
+    resume_at_ns = time.time_ns()
     resumed = Agent(f.r, "resumed-offline", native=f.b.native)
-    eventually(lambda: f.c.notification(f.joined) and
-               "participant_disconnected" in f.c.notification(f.joined).get("message", ""),
+    eventually(lambda: (o := f.c.notification(f.joined)) and
+               o["observed_file_mtime_ns"] > resume_at_ns and
+               "participant_disconnected" in o.get("message", ""),
                "resumed identity rejected because original adapter is offline", timeout=75)
-    f.quiet(32, [resumed])
-    require(not resumed.reminders(), "resumed conversation got input through an offline participant")
-    require(sum(value for (method, _), value in f.r.proxy.counts.items() if method == "agent.prompt") == 0,
+    f.quiet(32, [resumed], counts=[0])
+    require(f.r.proxy.calls("agent.prompt") == 0,
             "offline original participant reached native input submission")
     after = json.loads(metadata_path.read_text())
     require(after["last_seen_seq"] == before["last_seen_seq"], "recovery changed the original inbox cursor")

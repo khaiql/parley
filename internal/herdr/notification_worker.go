@@ -125,17 +125,20 @@ type notificationWaitResult struct {
 }
 
 type notificationGeneration struct {
-	broker      *Broker
-	peer        Peer
-	ctx         context.Context
-	now         func() time.Time
-	schedule    *notificationSchedule
-	bindings    map[string]NotificationBinding
-	pending     map[string]bool
-	waits       map[string]context.CancelFunc
-	waited      chan notificationWaitResult
-	workers     sync.WaitGroup
-	diagnostics []NotificationDiagnostic
+	broker        *Broker
+	peer          Peer
+	ctx           context.Context
+	now           func() time.Time
+	schedule      *notificationSchedule
+	bindings      map[string]NotificationBinding
+	pending       map[string]bool
+	waits         map[string]context.CancelFunc
+	waited        chan notificationWaitResult
+	workers       sync.WaitGroup
+	diagnostics   []NotificationDiagnostic
+	attempts      []NotificationAttempt
+	lastNotified  map[string]int64
+	journalLoaded bool
 }
 
 func (b *Broker) runNotificationGeneration(parent context.Context, p Peer, stream io.ReadCloser, now func() time.Time) error {
@@ -232,6 +235,7 @@ func (g *notificationGeneration) refresh(all bool) error {
 	if err := g.ctx.Err(); err != nil {
 		return err
 	}
+	reloadJournal := false
 	if all {
 		data, err := g.broker.notificationCall(g.ctx, g.peer, RPCRequest{Operation: "notification-bindings"})
 		if err != nil {
@@ -247,6 +251,10 @@ func (g *notificationGeneration) refresh(all bool) error {
 				return fmt.Errorf("invalid notification binding response")
 			}
 			current[n.Key] = n
+			previous, exists := g.bindings[n.Key]
+			if !exists || previous.Binding.SessionID != n.Binding.SessionID || previous.Conversation != n.Conversation {
+				reloadJournal = true
+			}
 		}
 		for key := range g.bindings {
 			if _, exists := current[key]; !exists {
@@ -256,15 +264,15 @@ func (g *notificationGeneration) refresh(all bool) error {
 				}
 				delete(g.schedule.bindings, key)
 				delete(g.pending, key)
+				delete(g.lastNotified, key)
 			}
 		}
 		g.bindings = current
 	}
-	attempts, err := g.broker.Store.NotificationAttempts()
-	if err != nil {
+	if err := g.refreshJournal(reloadJournal); err != nil {
 		return err
 	}
-	attempts = notificationHostAttempts(attempts, g.peer.Machine.ID, g.peer.Config.HerdrSocket)
+	attempts := g.attempts
 	g.diagnostics = nil
 	keys := make([]string, 0, len(g.bindings))
 	for key := range g.bindings {
@@ -314,21 +322,79 @@ func (g *notificationGeneration) refresh(all bool) error {
 				g.pending[key] = true
 			}
 		}
-		for _, a := range attempts {
-			if a.Outcome == "accepted" && a.MachineID == g.peer.Machine.ID && a.HerdrSocket == g.peer.Config.HerdrSocket {
+		d.LastNotifiedSeq = g.lastNotified[key]
+		g.diagnostics = append(g.diagnostics, d)
+	}
+	if err := g.broker.Store.saveNotificationStatus(g.peer, g.diagnostics); err != nil {
+		return err
+	}
+	return g.submitDue(attempts)
+}
+
+// Reread outstanding mutable intents for CLI retries and late acknowledgements
+// from a canceled generation. Full archive validation remains mandatory on
+// recovery, enrollment and send.
+func (g *notificationGeneration) refreshJournal(reload bool) error {
+	if len(g.bindings) == 0 {
+		g.attempts = nil
+		return nil
+	}
+	if reload || !g.journalLoaded {
+		attempts, err := g.broker.Store.NotificationAttempts()
+		if err != nil {
+			return err
+		}
+		g.attempts = notificationHostAttempts(attempts, g.peer.Machine.ID, g.peer.Config.HerdrSocket)
+		g.lastNotified = map[string]int64{}
+		for _, a := range g.attempts {
+			if a.Outcome == "accepted" {
 				for _, c := range a.Coverage {
-					if c.Key == key && c.ThroughSeq > d.LastNotifiedSeq {
-						d.LastNotifiedSeq = c.ThroughSeq
+					if _, active := g.bindings[c.Key]; active && c.ThroughSeq > g.lastNotified[c.Key] {
+						g.lastNotified[c.Key] = c.ThroughSeq
 					}
 				}
 			}
 		}
-		g.diagnostics = append(g.diagnostics, d)
+		g.journalLoaded = true
 	}
-	if err = g.broker.Store.saveNotificationStatus(g.peer, g.diagnostics); err != nil {
-		return err
+	replaced := notificationReplaced(g.attempts)
+	active := make([]NotificationAttempt, 0)
+	for _, a := range g.attempts {
+		if replaced[a.ID] || (a.Outcome == "rejected" && a.Replaces == "") {
+			continue
+		}
+		outstanding := false
+		for _, c := range a.Coverage {
+			n, exists := g.bindings[c.Key]
+			o := g.schedule.bindings[c.Key]
+			if exists && n.Binding.SessionID == c.SessionID && (o == nil || o.observation.SeenSeq < c.ThroughSeq) {
+				outstanding = true
+			}
+		}
+		if a.Outcome != "accepted" {
+			fresh, err := g.broker.Store.notificationAttempt(a.ID)
+			if err != nil {
+				return err
+			}
+			if fresh.MachineID != g.peer.Machine.ID || fresh.HerdrSocket != g.peer.Config.HerdrSocket {
+				return fmt.Errorf("notification_origin_mismatch")
+			}
+			a = fresh
+			if a.Outcome == "accepted" {
+				for _, c := range a.Coverage {
+					if c.ThroughSeq > g.lastNotified[c.Key] {
+						g.lastNotified[c.Key] = c.ThroughSeq
+					}
+				}
+			}
+		}
+		if !outstanding {
+			continue
+		}
+		active = append(active, a)
 	}
-	return g.submitDue(attempts)
+	g.attempts = active
+	return nil
 }
 
 func (g *notificationGeneration) submitDue(attempts []NotificationAttempt) error {
@@ -394,11 +460,10 @@ func (g *notificationGeneration) submitDue(attempts []NotificationAttempt) error
 			}
 			g.pending[o.Key] = true
 		}
-		attempts, err = g.broker.Store.NotificationAttempts()
-		if err != nil {
+		if err = g.refreshJournal(true); err != nil {
 			return err
 		}
-		attempts = notificationHostAttempts(attempts, g.peer.Machine.ID, g.peer.Config.HerdrSocket)
+		attempts = g.attempts
 	}
 	return nil
 }
