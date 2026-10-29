@@ -1,6 +1,7 @@
 package herdr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -97,6 +98,50 @@ func TestIntegrationNativeFormsAndActivation(t *testing.T) {
 	raw, err := host.Dispatch(ctx, RPCRequest{Operation: "room", Session: "native", SessionKey: participant.SessionKey, ControllerID: participant.ControllerID, RoomID: room.ID})
 	if err != nil || raw.(Room).Host.MachineID != participant.MachineID {
 		t.Fatal(raw, err)
+	}
+
+	// Create through the same form path after remote participant activation, then browse from the controller.
+	remoteStart := start
+	remoteStart.ID, remoteStart.Topic = "remote-start", "Created on remote participant"
+	created, err := host.SubmitForm(ctx, operations.Client, remoteStart)
+	if err != nil || created.Status != "started" || created.Room == nil || created.Binding == nil {
+		t.Fatalf("remote start: %+v, %v", created, err)
+	}
+	t.Cleanup(func() { run("stop", "--session", created.Binding.SessionID) })
+	controller, browse, _ := brokerFixture(t)
+	peer := Peer{Machine: Machine{ID: participant.MachineID, Target: "work-alias", Session: "native", Enabled: true}, Config: participant, Binary: binary}
+	if err := controller.Store.Update(func(state *State) error { state.Peers[peer.Machine.ID] = peer; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	controller.Client.Run = func(ctx context.Context, command string, args []string, data []byte) ([]byte, error) {
+		if command != "ssh" {
+			if len(args) > 0 && args[0] == "machine" {
+				return json.Marshal([]Machine{peer.Machine})
+			}
+			return json.Marshal(map[string]any{"result": map[string]any{"plugins": []map[string]any{{"plugin_id": "parley", "enabled": true, "plugin_root": filepath.Dir(filepath.Dir(binary))}}}})
+		}
+		request, err := DecodeRPC(bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		result, err := host.Dispatch(ctx, request)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(result)
+	}
+	catalog, err := (&Broker{Store: controller.Store, Client: controller.Client}).RoomChoices(ctx, browse.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, choice := range catalog.Rooms {
+		if choice.Room.ID == created.Room.ID && choice.Room.Host.MachineID == participant.MachineID && choice.Status == "open" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("remote-created room missing from controller: %+v", catalog)
 	}
 	join := start
 	join.ID = "original-host-join"

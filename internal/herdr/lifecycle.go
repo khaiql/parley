@@ -272,6 +272,50 @@ type subscription struct {
 	cancel context.CancelFunc
 }
 
+// Report once per failure until recovery, while retrying notifications Herdr could not show.
+func reportPeerFailure(ctx context.Context, c *Client, failures map[string]string, machine Machine, cause error) {
+	if cause == nil {
+		delete(failures, machine.ID)
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	label := machine.Label
+	if label == "" {
+		label = machine.ID
+	}
+	message := fmt.Sprintf("%s (SSH %s, session %s): remote rooms unavailable: %v. Check SSH access and Parley setup on this host/session.", label, machine.Target, machine.Session, cause)
+	fmt.Fprintln(os.Stderr, message)
+	if failures[machine.ID] == message {
+		return
+	}
+	notify, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := c.Notify(notify, "Parley remote unavailable", message); err != nil {
+		fmt.Fprintln(os.Stderr, "notification_failed:", err)
+		return
+	}
+	failures[machine.ID] = message
+}
+
+func reportStreamFailure(ctx context.Context, c *Client, machine Machine, cause error) {
+	failures := map[string]string{}
+	retry := time.NewTicker(2 * time.Second)
+	defer retry.Stop()
+	for {
+		reportPeerFailure(ctx, c, failures, machine, cause)
+		if len(failures) != 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-retry.C:
+		}
+	}
+}
+
 // Coordinate owns its streams and masters for the whole detached process lifetime.
 func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 	owner, err := h.CoordinatorConfig()
@@ -362,6 +406,7 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 			fmt.Fprintln(os.Stderr, err)
 		}
 	}
+	peerFailures := map[string]string{}
 	refresh := func() {
 		machines, e := c.Machines(ctx)
 		if e != nil {
@@ -376,9 +421,10 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 			wanted[m.ID] = true
 			p, e := ManagePeer(ctx, c, h.Store, m)
 			if e != nil {
-				fmt.Fprintln(os.Stderr, "peer", m.ID, e)
+				reportPeerFailure(ctx, c, peerFailures, m, e)
 				continue
 			}
+			reportPeerFailure(ctx, c, peerFailures, m, nil)
 			prior, ok := subscriptions[m.ID]
 			if ok && prior.peer == p {
 				continue
@@ -400,7 +446,7 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 					return nil
 				})
 				if e != nil && streamCtx.Err() == nil {
-					fmt.Fprintln(os.Stderr, "peer", p.Machine.ID, e)
+					reportStreamFailure(streamCtx, c, p.Machine, e)
 				}
 			})
 		}
