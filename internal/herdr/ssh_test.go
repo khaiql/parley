@@ -436,3 +436,15 @@ func TestTunnelDisableOnlyOwnedPeerSession(t *testing.T) {
 		t.Fatal(closedA, closedB, manager.Status())
 	}
 }
+
+func TestMasterFailureIncludesSSHDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\necho 'Permission denied (publickey).' >&2\nexit 255\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	_, err := StartMaster(context.Background(), Peer{Machine: Machine{ID: "peer", Target: "work-alias", Session: "default"}})
+	if err == nil || !strings.Contains(err.Error(), "Permission denied (publickey).") || !strings.Contains(err.Error(), "work-alias") {
+		t.Fatalf("missing SSH diagnostic: %v", err)
+	}
+}

@@ -15,6 +15,10 @@ func TestRunProcessChild(t *testing.T) {
 	}
 	b, _ := io.ReadAll(os.Stdin)
 	switch string(b) {
+	case "helper-error":
+		io.WriteString(os.Stdout, `{"status":"error","error":{"code":"herdr_failed","message":"controller_conflict: remote session owned by another controller"}}`)
+		io.WriteString(os.Stderr, "helper diagnostic")
+		os.Exit(1)
 	case "overflow":
 		os.Stdout.Write([]byte(strings.Repeat("x", outputLimit+1)))
 		time.Sleep(time.Minute)
@@ -40,6 +44,18 @@ func TestRunProcessBounded(t *testing.T) {
 		}
 		if time.Since(started) > 5*time.Second {
 			t.Fatal("child not reaped promptly")
+		}
+	}
+}
+
+func TestRunProcessPreservesHelperError(t *testing.T) {
+	_, err := RunProcess(context.Background(), os.Args[0], []string{"-test.run=^TestRunProcessChild$", "herdr-child"}, []byte("helper-error"))
+	if err == nil {
+		t.Fatal("helper failure lost")
+	}
+	for _, want := range []string{"herdr_failed", "controller_conflict: remote session owned by another controller", "helper diagnostic", "exit status 1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("missing %q: %v", want, err)
 		}
 	}
 }

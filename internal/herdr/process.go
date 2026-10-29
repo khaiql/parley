@@ -3,6 +3,7 @@ package herdr
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -58,6 +59,13 @@ func runProcessEnv(ctx context.Context, binary string, args []string, stdin []by
 		return nil, fmt.Errorf("process output exceeds limit")
 	}
 	if err != nil {
+		// CLI helpers return structured failures on stdout, even when SSH succeeds.
+		var reply struct {
+			Error *apiError `json:"error"`
+		}
+		if json.Unmarshal(out.Bytes(), &reply) == nil && reply.Error != nil && reply.Error.Message != "" {
+			return nil, fmt.Errorf("host process: %w: %s: %s", err, reply.Error, stderr.String())
+		}
 		return nil, fmt.Errorf("host process: %w: %s", err, stderr.String())
 	}
 	return out.Bytes(), nil
