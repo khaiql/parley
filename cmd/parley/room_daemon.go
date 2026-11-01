@@ -86,11 +86,9 @@ func runRoomDaemon(cfg roomDaemonConfig) error {
 			case "status":
 				return adapter.ControlResponse{OK: true}
 			case "stop":
-				stopOnce.Do(func() { close(stopCh) })
-				// Cleanup runs after the stop request is accepted by the room
-				// daemon select loop, so this synchronous control response can
-				// only report that artifact shutdown/cleanup has been requested.
+				// Send the response before shutdown can exit the daemon process.
 				return adapter.ControlResponse{
+					AfterWrite:       func() { stopOnce.Do(func() { close(stopCh) }) },
 					OK:               true,
 					Status:           "stopping",
 					ArtifactShutdown: "requested",
