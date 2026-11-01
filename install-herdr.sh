@@ -68,7 +68,7 @@ validate() {
   actual=$(printf '%s\n' "$info" | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p')
   [ "$actual" = "$version" ] || fail "binary release mismatch: expected $version, got $actual"
   helper=$(printf '%s\n' "$info" | sed -n 's/.*"herdr_helper_version": *\([0-9][0-9]*\).*/\1/p')
-  [ "$helper" = 4 ] || fail "incompatible Herdr helper: protocol 4 required"
+  [ "$helper" = 5 ] || fail "incompatible Herdr helper: protocol 5 required"
 }
 validate "$stage/bundle"
 target="$base/$tag/${os}_${arch}"

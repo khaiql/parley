@@ -245,6 +245,7 @@ func TestHerdrControllerRoleClaimOrders(t *testing.T) {
 }
 
 func TestCoordinateDisableDuringRemoteRefresh(t *testing.T) {
+	t.Parallel()
 	root, err := os.MkdirTemp("/tmp", "hc-")
 	if err != nil {
 		t.Fatal(err)

@@ -157,3 +157,7 @@ Message send/receive hooks, automatic prompting, readiness gating, notification 
 - [Herdr plugin paths](https://github.com/herdrdev/herdr/blob/v0.9.3/src/plugin_paths.rs#L13-L23) and [injected directories](https://github.com/herdrdev/herdr/blob/v0.9.3/src/app/api/plugins/env.rs#L13-L25): per-user/plugin roots require explicit session namespaces.
 - [OpenSSH ssh(1)](https://man.openbsd.org/ssh) and [ssh_config(5)](https://man.openbsd.org/ssh_config): forwarding, owned masters and bind/failure behavior.
 - Repository: `cmd/parley/join.go`, `daemon_commands.go`, `daemon_process.go`, `participant_daemon.go`, `participant_artifacts.go`; `internal/runtime/runtime.go` for existing session reconciliation.
+
+## Receive-notification follow-up
+
+The separate [idle message fallback design](2026-10-20-herdr-idle-message-fallback-design.md) specifies agent-owned listening with delayed plugin reminders. It does not expand the original routing phase.

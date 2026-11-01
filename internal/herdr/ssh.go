@@ -46,7 +46,8 @@ func StartMaster(ctx context.Context, p Peer) (*Master, error) {
 	m := &Master{ControlPath: filepath.Join(dir, "master"), Target: p.Machine.Target, cancel: cancel, done: make(chan struct{}), dir: dir}
 	// #nosec G204 -- The saved target is validated and passed as argv after --; the control path is privately allocated.
 	m.Command = exec.CommandContext(ctx, "ssh", "-M", "-S", m.ControlPath, "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ControlPersist=no", "-o", "ClearAllForwardings=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "--", m.Target)
-	m.Command.Stderr = &boundedBuffer{limit: 64 * 1024}
+	stderr := &boundedBuffer{limit: 64 * 1024}
+	m.Command.Stderr = stderr
 	m.Command.WaitDelay = processWaitDelay
 	if e = m.Command.Start(); e != nil {
 		cancel()
@@ -65,10 +66,10 @@ func StartMaster(ctx context.Context, p Peer) (*Master, error) {
 			return nil, ctx.Err()
 		case <-m.done:
 			m.Close()
-			return nil, fmt.Errorf("SSH master exited: %w", m.err)
+			return nil, fmt.Errorf("SSH master %s exited: %w: %s", m.Target, m.err, strings.TrimSpace(stderr.String()))
 		case <-deadline.C:
 			m.Close()
-			return nil, fmt.Errorf("SSH master readiness timeout")
+			return nil, fmt.Errorf("SSH master %s readiness timeout: %s", m.Target, strings.TrimSpace(stderr.String()))
 		case <-tick.C:
 			check, stop := context.WithTimeout(ctx, time.Second)
 			_, e := RunProcess(check, "ssh", muxArgs(m, "check", nil), nil)

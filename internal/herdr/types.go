@@ -91,14 +91,15 @@ func RoomHostReference(room Room, localMachine string) RoomHostRef {
 }
 
 type Response struct {
-	Catalog *RoomCatalog   `json:"catalog,omitempty"`
-	Version int            `json:"version,omitempty"`
-	Status  string         `json:"status"`
-	Code    string         `json:"code,omitempty"`
-	Message string         `json:"message,omitempty"`
-	Room    *Room          `json:"room,omitempty"`
-	Binding *Binding       `json:"binding,omitempty"`
-	Handoff *HandoffResult `json:"handoff,omitempty"`
+	NotificationStatus string         `json:"notification_status,omitempty"`
+	Catalog            *RoomCatalog   `json:"catalog,omitempty"`
+	Version            int            `json:"version,omitempty"`
+	Status             string         `json:"status"`
+	Code               string         `json:"code,omitempty"`
+	Message            string         `json:"message,omitempty"`
+	Room               *Room          `json:"room,omitempty"`
+	Binding            *Binding       `json:"binding,omitempty"`
+	Handoff            *HandoffResult `json:"handoff,omitempty"`
 }
 type Outcome struct {
 	Digest       string   `json:"digest"`

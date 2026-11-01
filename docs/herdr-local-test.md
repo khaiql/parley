@@ -149,3 +149,47 @@ Run only with fresh, disposable Herdr workspaces, agent terminals, rooms, and pa
 5. Inspect `cleanup_status` and `cleanup_error` after any failed leave or stop. Do not report cleanup successful until Parley's leave acknowledgement or room-stopped record and socket shutdown are confirmed.
 
 This checkout has automated lifecycle regressions but no live terminal-close proof yet. Report local and SSH coverage separately; catalog discovery evidence above does not prove cleanup.
+
+
+## Remote-hosted Start and controller discovery
+
+Use the saved SSH profile and selected Herdr session that fail at work. Direct `ssh <alias>` success only proves shell access: Parley also needs the helper installed and enabled in that profile's session, controller activation, and noninteractive SSH access.
+
+1. Focus a supported agent on the remote machine. Use the Parley Start hotkey and enter a unique disposable topic. Record the final `started`, room ID, and session ID from the popup. An `opened` action result does not prove creation.
+2. Focus a controller agent and use the Join hotkey. Refresh the picker and require that topic under the remote host with `open` status. Join by number, then verify both message/artifact directions with the SSH transport procedure. A local `herdr status` room cache is not the authoritative remote room list.
+3. If creation fails, preserve the popup diagnostic and Herdr notification. If discovery fails, preserve picker warnings and the controller's `Parley remote unavailable` notification. Peer activation failures include the saved host, SSH target, Herdr session, and underlying error. Identical activation failures notify once until recovery; undelivered notifications retry on the next refresh. Request-stream failures also notify; undelivered stream notifications retry every two seconds until delivery succeeds or the subscription is canceled. SSH tunnel failures include SSH stderr instead of only `exit status 255`. Structured helper failures retain their error code and message instead of only `exit status 1`.
+4. Confirm `[ui.toast] delivery = "herdr"` on the host displaying the notification. A native API acknowledgement proves delivery was accepted; visually confirm the notification in Herdr. Inspect the coordinator's `broker.log` if native notification delivery itself fails.
+
+Automated integration coverage creates a real isolated room through `SubmitForm` after participant activation, then checks that the controller picker discovers it as open through the helper RPC boundary. SSH and native Herdr APIs are fixtures in that test; it does not prove the work host's actual hotkey, SSH connection, or toast configuration.
+
+
+### Actual Ubuntu-to-Mac check — 2026-10-29
+
+Tested the existing installed `parley-catalog-preview-ufwpdcoa` builds, without deploying this checkout's diagnostic changes. Remote is saved profile `ubuntu-server`, session `default`; local is the Mac default session. Created disposable genuine Codex agents on both machines.
+
+Invoked the installed remote `parley.start` action with the remote agent focused. The action returned `opened`. Because the popup is not included in the headless pane inventory, opened the same installed `form` entrypoint as a split, with the original agent's native terminal/socket identity. Submitted topic `parley-remote-repro-20261029`. This exercises the actual form process and SSH hosts, but does not prove physical hotkey dispatch or popup rendering.
+
+Observed remote form output:
+
+```text
+Request: b750ec4f3ed5765ded59420a3050c43d
+Room: room-26c43bb33cd4ab4ab753
+Session: psn_a6c2e525ed8ff19070e3
+started
+Agent instructions: submitted. Instructions submitted through Herdr.
+```
+
+Opened the installed local Join form for the disposable local Codex agent. The picker listed the topic as row 2, `ubuntu-server | open`, with the same room ID. Selected `2` and submitted; no room ID was copied into Join.
+
+Observed local form output:
+
+```text
+Request: 62b7148b4cf48ab8f2d12d972f2857cc
+Session: psn_2f090b473bbb77c6fbbd
+joined
+Agent instructions: submitted. Instructions submitted through Herdr.
+```
+
+Read-only session status then reported both participants `online`, both adapters running, and `last_received_seq: 3`. The remote host reported `server_running: true`, protocol port 40315 and artifact port 33073. The local participant reported `server_running: false`, forwarded protocol port 57818 and artifact port 57819. Therefore real remote creation, controller discovery, numbered Join, and SSH route establishment succeeded on these hosts. The work-laptop missing-room symptom was not reproduced. Message/artifact payload exchange and visible notification rendering were not tested in this run.
+
+Stopped both disposable Parley sessions and closed only the test panes afterward. Existing plugin installations, saved SSH profiles, and pre-existing rooms were preserved.
