@@ -39,7 +39,7 @@ func TestHandoffDeliveryAndReplay(t *testing.T) {
 			}
 			t.Cleanup(func() { listener.Close() })
 			var prompts atomic.Int32
-			serveHandoffFixture(t, listener, mode, kind, &prompts)
+			serveHandoffFixture(t, listener, mode, kind, &prompts, nil)
 			client := &Client{LocalMachineID: "local", HerdrSocket: socket, ParleyBinary: filepath.Join(root, "bin", "parley")}
 			operations := HostOperations{Store: NewStore(filepath.Join(root, "state")), Client: client}
 			binding := Binding{RoomID: "room-a", SessionID: "psn_here", ParticipantName: "agent-a", StateDir: root, Target: AgentTarget{MachineID: "local", HerdrSocket: socket, TerminalID: "term_a", Kind: kind}}
@@ -135,7 +135,88 @@ func TestCompletedFormReadsCurrentHandoffReceipt(t *testing.T) {
 	}
 }
 
-func serveHandoffFixture(t *testing.T, listener net.Listener, mode, kind string, prompts *atomic.Int32) {
+func TestHandoffCorruptReceiptDoesNotBlockReconcile(t *testing.T) {
+	operations, req, root := brokerFixture(t)
+	binding := Binding{RoomID: req.RoomID, SessionID: "psn_original", ParticipantName: "owned", StateDir: root, JoinPhase: "complete", JoinRequestID: req.ID, Target: req.Target}
+	originalFixture(t, root, binding, true)
+	if err := operations.saveBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := operations.Store.recordDir("handoffs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, handoffKey(binding)+".json"), []byte("{broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	broker := &Broker{Store: operations.Store, Client: operations.Client}
+	if err := broker.Reconcile(context.Background()); err != nil {
+		t.Fatal("handoff receipt blocked participant recovery:", err)
+	}
+}
+
+func TestHandoffWaitsUntilReady(t *testing.T) {
+	for _, busy := range []string{"working", "blocked", "unknown", ""} {
+		for _, ready := range []string{"idle", "done"} {
+			t.Run(busy+"/"+ready, func(t *testing.T) {
+				root, err := os.MkdirTemp("/tmp", "hq-")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.RemoveAll(root) })
+				skill := filepath.Join(root, "skills", "parley", "SKILL.md")
+				if err := os.MkdirAll(filepath.Dir(skill), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(skill, []byte("Parley skill"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				socket := filepath.Join(root, "h")
+				listener, err := net.Listen("unix", socket)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { listener.Close() })
+				var status atomic.Value
+				status.Store(busy)
+				var prompts atomic.Int32
+				serveHandoffFixture(t, listener, "submitted", "codex", &prompts, &status)
+				client := &Client{LocalMachineID: "local", HerdrSocket: socket, RuntimeRoot: root, ParleyBinary: filepath.Join(root, "bin", "parley")}
+				operations := &HostOperations{Store: NewStore(filepath.Join(root, "state")), Client: client}
+				binding := Binding{RoomID: "room-a", SessionID: "psn_original", ParticipantName: "agent-a", StateDir: root, JoinPhase: "complete", JoinRequestID: "join-request", Target: AgentTarget{MachineID: "local", HerdrSocket: socket, TerminalID: "term_a", Kind: "codex"}}
+				originalFixture(t, root, binding, true)
+				if err := operations.saveBinding(binding); err != nil {
+					t.Fatal(err)
+				}
+				binding.Topic = "Keep queued room context"
+				first := operations.Handoff(context.Background(), binding, false)
+				if first.Status != "pending" || prompts.Load() != 0 {
+					t.Fatalf("busy agent received input: result=%+v prompts=%d", first, prompts.Load())
+				}
+				// Recreate the host to prove delivery survives popup closure and restart.
+				broker := &Broker{Store: NewStore(operations.Store.dir), Client: client}
+				if err := broker.Reconcile(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				if prompts.Load() != 0 {
+					t.Fatal("reconciliation interrupted busy agent")
+				}
+				status.Store(ready)
+				for range 2 {
+					if err := broker.Reconcile(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				receipts, err := broker.Store.HandoffStatuses()
+				if err != nil || receipts[binding.SessionID].Status != "submitted" || prompts.Load() != 1 {
+					t.Fatalf("pending handoff not submitted once: receipts=%+v prompts=%d err=%v", receipts, prompts.Load(), err)
+				}
+			})
+		}
+	}
+}
+
+func serveHandoffFixture(t *testing.T, listener net.Listener, mode, kind string, prompts *atomic.Int32, status *atomic.Value) {
 	t.Helper()
 	go func() {
 		for {
@@ -157,7 +238,11 @@ func serveHandoffFixture(t *testing.T, listener net.Listener, mode, kind string,
 				case "agent.list":
 					reply = `{"result":{"agents":[{"terminal_id":"term_a","pane_id":"w2:p9"}]}}`
 				case "agent.get":
-					reply = fmt.Sprintf(`{"result":{"agent":{"terminal_id":"term_a","pane_id":"w2:p9","workspace_id":"w2","agent":%q,"agent_status":"working"}}}`, kind)
+					state := "idle"
+					if status != nil {
+						state = status.Load().(string)
+					}
+					reply = fmt.Sprintf(`{"result":{"agent":{"terminal_id":"term_a","pane_id":"w2:p9","workspace_id":"w2","agent":%q,"agent_status":%q}}}`, kind, state)
 					if mode == "replaced" {
 						reply = `{"result":{"agent":{"terminal_id":"different","pane_id":"w2:p9","agent":"codex"}}}`
 					}
@@ -165,8 +250,15 @@ func serveHandoffFixture(t *testing.T, listener net.Listener, mode, kind string,
 					reply = fmt.Sprintf(`{"result":{"type":"agent_prompted","agent":{"terminal_id":"term_a","agent":%q}}}`, kind)
 					prompts.Add(1)
 					text, _ := frame.Params["text"].(string)
-					if frame.Params["target"] != "w2:p9" || !strings.Contains(text, "room-a") || !strings.Contains(text, "psn_here") || !strings.Contains(text, "skills/parley/SKILL.md") || !strings.Contains(text, "PARLEY_STATE_DIR") || !strings.Contains(text, "PARLEY_BIN") {
+					session := "psn_here"
+					if status != nil {
+						session = "psn_original"
+					}
+					if frame.Params["target"] != "w2:p9" || !strings.Contains(text, "room-a") || !strings.Contains(text, session) || !strings.Contains(text, "skills/parley/SKILL.md") || !strings.Contains(text, "PARLEY_STATE_DIR") || !strings.Contains(text, "PARLEY_BIN") {
 						t.Errorf("wrong handoff %+v", frame.Params)
+					}
+					if status != nil && !strings.Contains(text, "Keep queued room context") {
+						t.Error("queued handoff lost room topic")
 					}
 					if strings.Contains(text, "presence message") || strings.Contains(text, "every participant command") || strings.Contains(text, "Do not start or join") {
 						t.Error("handoff repeats skill instructions or requests automatic chatter")

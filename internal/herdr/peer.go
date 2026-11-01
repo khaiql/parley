@@ -654,7 +654,11 @@ func (h HostSession) readBinding(ctx context.Context, r RPCRequest, owner Sessio
 	if _, e = h.Store.pinnedPaths(); e != nil {
 		return nil, fmt.Errorf("runtime_root_unpinned: %w", e)
 	}
-	operations := &HostOperations{h.Store, &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket}}
+	binary, e := os.Executable()
+	if e != nil {
+		return nil, e
+	}
+	operations := &HostOperations{h.Store, &Client{LocalMachineID: owner.MachineID, HerdrSocket: owner.HerdrSocket, ParleyBinary: binary}}
 	e = h.Store.WithBinding(ctx, "join:"+terminalBindingKey(binding.RoomID, binding.Target), func() error {
 		current, e := h.Store.Binding(r.BindingKey)
 		if e != nil {
@@ -665,7 +669,11 @@ func (h HostSession) readBinding(ctx context.Context, r RPCRequest, owner Sessio
 		switch code {
 		case "":
 			binding = original
-			return operations.saveBinding(original)
+			if err := operations.saveBinding(original); err != nil {
+				return err
+			}
+			operations.resumeHandoff(ctx, original)
+			return nil
 		case "participant_disconnected":
 			binding = current
 			binding.Status = "offline"

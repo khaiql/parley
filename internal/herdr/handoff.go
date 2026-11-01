@@ -13,6 +13,7 @@ import (
 type HandoffResult struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
+	Topic   string `json:"topic,omitempty"`
 }
 
 func handoffKey(binding Binding) string {
@@ -22,10 +23,18 @@ func handoffKey(binding Binding) string {
 func (s *Store) readHandoff(binding Binding) (HandoffResult, error) {
 	var result HandoffResult
 	err := readJSON(filepath.Join(s.dir, "handoffs", handoffKey(binding)+".json"), &result)
-	if err == nil && result.Status != "submitted" && result.Status != "failed" && result.Status != "uncertain" {
+	if err == nil && result.Status != "pending" && result.Status != "submitted" && result.Status != "failed" && result.Status != "uncertain" {
 		return HandoffResult{Status: "uncertain", Message: "Invalid handoff receipt; not retried"}, nil
 	}
 	return result, err
+}
+
+func (h *HostOperations) resumeHandoff(ctx context.Context, binding Binding) {
+	previous, err := h.Store.readHandoff(binding)
+	// Missing or corrupt receipts must not prompt again or block participant recovery.
+	if err == nil && previous.Status == "pending" {
+		_, _ = h.withHandoff(ctx, Response{Status: "joined", Binding: &binding}, nil)
+	}
 }
 
 // HandoffStatuses exposes durable receipts even after the originating popup closes.
@@ -77,9 +86,12 @@ func (h *HostOperations) Handoff(ctx context.Context, binding Binding, retry boo
 	defer cancel()
 	err = lockFile(ctx, path+".lock", func() error {
 		if previous, err := h.Store.readHandoff(binding); err == nil {
-			if previous.Status != "failed" || !retry {
+			if previous.Status != "pending" && (previous.Status != "failed" || !retry) {
 				result = previous
 				return nil
+			}
+			if binding.Topic == "" {
+				binding.Topic = previous.Topic
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
@@ -87,9 +99,13 @@ func (h *HostOperations) Handoff(ctx context.Context, binding Binding, retry boo
 		if safeID(binding.RoomID) != nil || safeID(binding.SessionID) != nil {
 			return fmt.Errorf("invalid participant handoff")
 		}
-		target, _, err := h.Client.Agent(ctx, binding.Target)
+		target, status, err := h.Client.Agent(ctx, binding.Target)
 		if err != nil {
 			result = HandoffResult{Status: "failed", Message: err.Error()}
+			return writeJSON(path, result)
+		}
+		if status != "idle" && status != "done" {
+			result = HandoffResult{Status: "pending", Message: "Waiting for agent to be idle or done.", Topic: binding.Topic}
 			return writeJSON(path, result)
 		}
 		binary := h.Client.ParleyBinary

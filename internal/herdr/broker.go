@@ -1172,7 +1172,11 @@ func (b *Broker) Reconcile(ctx context.Context) error {
 				}
 				if code == "" {
 					original.Target.MachineID = current.Target.MachineID
-					return b.Store.saveBinding(original)
+					if err := b.Store.saveBinding(original); err != nil {
+						return err
+					}
+					(&HostOperations{b.Store, b.Client}).resumeHandoff(ctx, original)
+					return nil
 				}
 				return nil
 			})
