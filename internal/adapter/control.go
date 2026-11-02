@@ -29,6 +29,8 @@ type ControlRequest struct {
 }
 
 type ControlResponse struct {
+	// AfterWrite runs after the response write attempt, including write failures.
+	AfterWrite       func()                 `json:"-"`
 	OK               bool                   `json:"ok"`
 	Status           string                 `json:"status,omitempty"`
 	Events           []model.Event          `json:"events,omitempty"`
@@ -130,6 +132,9 @@ func serveControlConn(conn net.Conn, handler func(ControlRequest) ControlRespons
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(controlDefaultTimeout))
 	_ = json.NewEncoder(conn).Encode(resp)
+	if resp.AfterWrite != nil {
+		resp.AfterWrite()
+	}
 }
 
 func removeStaleControlSocket(socketPath string) error {
