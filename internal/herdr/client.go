@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -318,9 +319,52 @@ func installedHelper(b []byte) (string, error) {
 }
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// A login shell restores PATH for Herdr installed in ~/.local/bin on SSH hosts.
+// The helper runs without a login shell: a remote profile that aborts under sh
+// (e.g. bash-only /etc/profile.d scripts with dash) would otherwise stop it before
+// it starts. The helper finds Herdr itself; see LocateHerdr.
 func helperCommand(binary string) string {
-	return "sh -lc " + shellQuote(shellQuote(binary)+" herdr rpc")
+	return "sh -c " + shellQuote(shellQuote(binary)+" herdr rpc")
+}
+
+// LocateHerdr finds Herdr for native actions and for SSH helpers, whose
+// non-login PATH usually omits Herdr's default ~/.local/bin install location.
+func LocateHerdr(ctx context.Context) (string, error) {
+	return locateHerdr(ctx, os.Getenv, exec.LookPath, loginHerdrPath)
+}
+
+func locateHerdr(ctx context.Context, getenv func(string) string, lookPath func(string) (string, error), login func(context.Context) string) (string, error) {
+	if injected := getenv("HERDR_BIN_PATH"); injected != "" {
+		return injected, nil
+	}
+	if found, err := lookPath("herdr"); err == nil {
+		return found, nil
+	}
+	if home := getenv("HOME"); home != "" {
+		if installed := filepath.Join(home, ".local", "bin", "herdr"); isExecutable(installed) {
+			return installed, nil
+		}
+	}
+	if found := login(ctx); filepath.IsAbs(found) && isExecutable(found) {
+		return found, nil
+	}
+	return "", fmt.Errorf("herdr: %w", exec.ErrNotFound)
+}
+
+// loginHerdrPath asks the login shell, tolerating profiles that fail or print banners.
+func loginHerdrPath(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "sh", "-lc", "command -v herdr").Output()
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+func isExecutable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0
 }
 func (c *Client) Call(ctx context.Context, p Peer, r RPCRequest) ([]byte, error) {
 	if e := validateMachine(p.Machine); e != nil {

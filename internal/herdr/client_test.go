@@ -3,10 +3,12 @@ package herdr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -264,10 +266,88 @@ func TestNativeTerminalIdentityFollowsPane(t *testing.T) {
 	}
 }
 
-func TestRemoteHelperUsesLoginEnvironment(t *testing.T) {
-	command := helperCommand("/opt/parley/bin/parley")
-	if !strings.HasPrefix(command, "sh -lc ") {
-		t.Fatal("remote helper cannot see Herdr installed through the user's login PATH", command)
+// A remote login profile that aborts (e.g. bash-only /etc/profile.d scripts under dash)
+// must not prevent the helper from starting.
+func TestRemoteHelperIgnoresBrokenLoginProfile(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".profile"), []byte("exit 3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	helper := filepath.Join(home, "parley")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\necho \"helper $*\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", helperCommand(helper))
+	cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin"}
+	out, err := cmd.CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "helper herdr rpc" {
+		t.Fatalf("helper did not start past the login profile: %q, %v", out, err)
+	}
+}
+
+func TestLocateHerdr(t *testing.T) {
+	executable := func(t *testing.T, path string) string {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	missing := func(string) (string, error) { return "", exec.ErrNotFound }
+	noLogin := func(context.Context) string { return "" }
+	t.Run("injected path wins", func(t *testing.T) {
+		env := map[string]string{"HERDR_BIN_PATH": "/injected/herdr", "HOME": t.TempDir()}
+		got, err := locateHerdr(context.Background(), func(k string) string { return env[k] }, func(string) (string, error) { return "/path/herdr", nil }, noLogin)
+		if err != nil || got != "/injected/herdr" {
+			t.Fatal(got, err)
+		}
+	})
+	t.Run("process PATH", func(t *testing.T) {
+		got, err := locateHerdr(context.Background(), func(string) string { return "" }, func(string) (string, error) { return "/path/herdr", nil }, noLogin)
+		if err != nil || got != "/path/herdr" {
+			t.Fatal(got, err)
+		}
+	})
+	t.Run("default install outside non-login PATH", func(t *testing.T) {
+		home := t.TempDir()
+		want := executable(t, filepath.Join(home, ".local", "bin", "herdr"))
+		login := func(context.Context) string { t.Fatal("login shell probed before default install"); return "" }
+		got, err := locateHerdr(context.Background(), func(k string) string { return map[string]string{"HOME": home}[k] }, missing, login)
+		if err != nil || got != want {
+			t.Fatal(got, err)
+		}
+	})
+	t.Run("login PATH fallback", func(t *testing.T) {
+		home := t.TempDir()
+		want := executable(t, filepath.Join(home, "elsewhere", "herdr"))
+		got, err := locateHerdr(context.Background(), func(k string) string { return map[string]string{"HOME": home}[k] }, missing, func(context.Context) string { return want })
+		if err != nil || got != want {
+			t.Fatal(got, err)
+		}
+	})
+	t.Run("not installed", func(t *testing.T) {
+		home := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(home, ".local", "bin", "herdr"), 0o700); err != nil {
+			t.Fatal(err) // A directory is not an executable.
+		}
+		got, err := locateHerdr(context.Background(), func(k string) string { return map[string]string{"HOME": home}[k] }, missing, func(context.Context) string { return "relative/herdr" })
+		if !errors.Is(err, exec.ErrNotFound) {
+			t.Fatal(got, err)
+		}
+	})
+}
+
+func TestLoginHerdrPathToleratesBrokenProfile(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".profile"), []byte("exit 3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if got := loginHerdrPath(context.Background()); got != "" {
+		t.Fatal(got)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -272,9 +273,50 @@ type subscription struct {
 	cancel context.CancelFunc
 }
 
+// changeLog writes a recurring failure only when it starts, changes, or recovers,
+// so the coordinator's 2s/30s reconcile loops cannot flood broker.log.
+type changeLog struct {
+	w    io.Writer
+	mu   sync.Mutex
+	last map[string]string
+}
+
+func (l *changeLog) report(key string, err error) {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last[key] == message {
+		return
+	}
+	if l.last == nil {
+		l.last = map[string]string{}
+	}
+	if message == "" {
+		delete(l.last, key)
+		fmt.Fprintln(l.w, key+": recovered")
+		return
+	}
+	l.last[key] = message
+	fmt.Fprintln(l.w, key+":", message)
+}
+
+// forget drops a failure without logging recovery, for failures that became moot.
+func (l *changeLog) forget(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.last, key)
+}
+
 // Report once per failure until recovery, while retrying notifications Herdr could not show.
-func reportPeerFailure(ctx context.Context, c *Client, failures map[string]string, machine Machine, cause error) {
+func reportPeerFailure(ctx context.Context, c *Client, logs *changeLog, failures map[string]string, machine Machine, cause error) {
+	key := "peer " + machine.ID
 	if cause == nil {
+		logs.report(key, nil)
+		// The outage notification is moot once the peer is back; a later outage logs its own.
+		logs.forget("notification " + key)
 		delete(failures, machine.ID)
 		return
 	}
@@ -286,25 +328,26 @@ func reportPeerFailure(ctx context.Context, c *Client, failures map[string]strin
 		label = machine.ID
 	}
 	message := fmt.Sprintf("%s (SSH %s, session %s): remote rooms unavailable: %v. Check SSH access and Parley setup on this host/session.", label, machine.Target, machine.Session, cause)
-	fmt.Fprintln(os.Stderr, message)
+	logs.report(key, errors.New(message))
 	if failures[machine.ID] == message {
 		return
 	}
 	notify, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if err := c.Notify(notify, "Parley remote unavailable", message); err != nil {
-		fmt.Fprintln(os.Stderr, "notification_failed:", err)
+	err := c.Notify(notify, "Parley remote unavailable", message)
+	logs.report("notification "+key, err)
+	if err != nil {
 		return
 	}
 	failures[machine.ID] = message
 }
 
-func reportStreamFailure(ctx context.Context, c *Client, machine Machine, cause error) {
+func reportStreamFailure(ctx context.Context, c *Client, logs *changeLog, machine Machine, cause error) {
 	failures := map[string]string{}
 	retry := time.NewTicker(2 * time.Second)
 	defer retry.Stop()
 	for {
-		reportPeerFailure(ctx, c, failures, machine, cause)
+		reportPeerFailure(ctx, c, logs, failures, machine, cause)
 		if len(failures) != 0 {
 			return
 		}
@@ -331,6 +374,7 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 	defer cancel()
 	var workers sync.WaitGroup
 	defer workers.Wait()
+	logs := &changeLog{w: os.Stderr}
 	subscriptions := map[string]subscription{}
 	defer func() {
 		for _, s := range subscriptions {
@@ -348,10 +392,10 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 				return
 			case <-ticker.C:
 				enabled, err := c.pluginEnabled(ctx)
+				if ctx.Err() == nil {
+					logs.report("plugin status", err)
+				}
 				if err != nil {
-					if ctx.Err() == nil {
-						fmt.Fprintln(os.Stderr, err)
-					}
 					continue
 				}
 				if !enabled {
@@ -368,9 +412,7 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 			if err := broker.Drain(ctx, local); err != nil {
 				return err
 			}
-			if err := (&HostOperations{Store: h.Store, Client: c}).ReconcileTerminal(ctx); err != nil {
-				fmt.Fprintln(os.Stderr, "terminal cleanup:", err)
-			}
+			logs.report("terminal cleanup", (&HostOperations{Store: h.Store, Client: c}).ReconcileTerminal(ctx))
 			return nil
 		}); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -409,8 +451,8 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 	peerFailures := map[string]string{}
 	refresh := func() {
 		machines, e := c.Machines(ctx)
+		logs.report("machine list", e)
 		if e != nil {
-			fmt.Fprintln(os.Stderr, e)
 			return
 		}
 		wanted := map[string]bool{}
@@ -421,10 +463,10 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 			wanted[m.ID] = true
 			p, e := ManagePeer(ctx, c, h.Store, m)
 			if e != nil {
-				reportPeerFailure(ctx, c, peerFailures, m, e)
+				reportPeerFailure(ctx, c, logs, peerFailures, m, e)
 				continue
 			}
-			reportPeerFailure(ctx, c, peerFailures, m, nil)
+			reportPeerFailure(ctx, c, logs, peerFailures, m, nil)
 			prior, ok := subscriptions[m.ID]
 			if ok && prior.peer == p {
 				continue
@@ -440,13 +482,11 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 					if err := broker.Drain(ctx, peer); err != nil {
 						return err
 					}
-					if err := broker.reconcileTerminalPeer(ctx, peer); err != nil {
-						fmt.Fprintln(os.Stderr, "peer", peer.Machine.ID, "terminal cleanup:", err)
-					}
+					logs.report("peer "+peer.Machine.ID+" terminal cleanup", broker.reconcileTerminalPeer(ctx, peer))
 					return nil
 				})
 				if e != nil && streamCtx.Err() == nil {
-					reportStreamFailure(streamCtx, c, p.Machine, e)
+					reportStreamFailure(streamCtx, c, logs, p.Machine, e)
 				}
 			})
 		}
@@ -479,12 +519,8 @@ func (h HostSession) Coordinate(ctx context.Context, c *Client) error {
 					delete(subscriptions, id)
 				}
 			}
-			if e := broker.ReconcileTerminals(ctx); e != nil {
-				fmt.Fprintln(os.Stderr, e)
-			}
-			if e := broker.Reconcile(ctx); e != nil {
-				fmt.Fprintln(os.Stderr, e)
-			}
+			logs.report("terminal reconcile", broker.ReconcileTerminals(ctx))
+			logs.report("route reconcile", broker.Reconcile(ctx))
 		}
 	}
 }

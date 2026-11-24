@@ -1,6 +1,7 @@
 package herdr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -165,10 +166,12 @@ func TestPeerFailureNotification(t *testing.T) {
 	}()
 	client := &Client{HerdrSocket: socket}
 	failures := map[string]string{}
+	var logged bytes.Buffer
+	logs := &changeLog{w: &logged}
 	machine := Machine{ID: "peer", Label: "Work", Target: "work-alias", Session: "default"}
 	report := func(cause error) {
 		t.Helper()
-		reportPeerFailure(context.Background(), client, failures, machine, cause)
+		reportPeerFailure(context.Background(), client, logs, failures, machine, cause)
 	}
 	report(fmt.Errorf("Permission denied (publickey)."))
 	select {
@@ -184,6 +187,9 @@ func TestPeerFailureNotification(t *testing.T) {
 	report(fmt.Errorf("Permission denied (publickey)."))
 	if len(bodies) != 0 {
 		t.Fatal("duplicate notification")
+	}
+	if n := strings.Count(logged.String(), "Permission denied"); n != 1 {
+		t.Fatalf("repeated peer failure logged %d times:\n%s", n, logged.String())
 	}
 	report(nil)
 	report(fmt.Errorf("Permission denied (publickey)."))
@@ -275,7 +281,7 @@ func TestStreamFailureNotificationRetriesUntilShown(t *testing.T) {
 	defer cancel()
 	done := make(chan struct{})
 	go func() {
-		reportStreamFailure(ctx, &Client{HerdrSocket: filepath.Join(root, "h")}, Machine{ID: "peer", Target: "work-alias", Session: "default"}, fmt.Errorf("stream rejected"))
+		reportStreamFailure(ctx, &Client{HerdrSocket: filepath.Join(root, "h")}, &changeLog{w: io.Discard}, Machine{ID: "peer", Target: "work-alias", Session: "default"}, fmt.Errorf("stream rejected"))
 		close(done)
 	}()
 	defer func() {
@@ -305,7 +311,7 @@ func TestStreamFailureNotificationRetriesUntilShown(t *testing.T) {
 	canceled, stop := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
 	go func() {
-		reportStreamFailure(canceled, &Client{HerdrSocket: filepath.Join(root, "h")}, Machine{ID: "peer"}, fmt.Errorf("stream rejected"))
+		reportStreamFailure(canceled, &Client{HerdrSocket: filepath.Join(root, "h")}, &changeLog{w: io.Discard}, Machine{ID: "peer"}, fmt.Errorf("stream rejected"))
 		close(stopped)
 	}()
 	select {
@@ -319,5 +325,45 @@ func TestStreamFailureNotificationRetriesUntilShown(t *testing.T) {
 	case <-stopped:
 	case <-time.After(time.Second):
 		t.Fatal("retry ignored cancellation")
+	}
+}
+
+func TestChangeLogReportsOnlyTransitions(t *testing.T) {
+	var out bytes.Buffer
+	logs := &changeLog{w: &out}
+	stuck := fmt.Errorf("adapter_not_running")
+	logs.report("terminal cleanup", nil)
+	logs.report("terminal cleanup", stuck)
+	logs.report("terminal cleanup", stuck)
+	logs.report("peer a", stuck)
+	logs.report("terminal cleanup", fmt.Errorf("server_not_running"))
+	logs.report("terminal cleanup", nil)
+	logs.report("terminal cleanup", nil)
+	logs.report("terminal cleanup", stuck)
+	want := "terminal cleanup: adapter_not_running\n" +
+		"peer a: adapter_not_running\n" +
+		"terminal cleanup: server_not_running\n" +
+		"terminal cleanup: recovered\n" +
+		"terminal cleanup: adapter_not_running\n"
+	if out.String() != want {
+		t.Fatalf("log =\n%s\nwant\n%s", out.String(), want)
+	}
+}
+
+func TestPeerRecoveryForgetsUndeliveredNotification(t *testing.T) {
+	var out bytes.Buffer
+	logs := &changeLog{w: &out}
+	client := &Client{HerdrSocket: filepath.Join(t.TempDir(), "missing.sock")}
+	machine := Machine{ID: "peer", Target: "work-alias", Session: "default"}
+	failures := map[string]string{}
+	cause := fmt.Errorf("Permission denied (publickey).")
+	reportPeerFailure(context.Background(), client, logs, failures, machine, cause)
+	reportPeerFailure(context.Background(), client, logs, failures, machine, nil)
+	reportPeerFailure(context.Background(), client, logs, failures, machine, cause)
+	if n := strings.Count(out.String(), "notification peer peer:"); n != 2 {
+		t.Fatalf("undelivered notification logged %d times across two outages:\n%s", n, out.String())
+	}
+	if strings.Contains(out.String(), "notification peer peer: recovered") {
+		t.Fatalf("notification reported recovered though it was never shown:\n%s", out.String())
 	}
 }
