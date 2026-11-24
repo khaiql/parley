@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/khaiql/parley/internal/eventlog"
@@ -80,7 +83,9 @@ func (h *HostOperations) ReconcileTerminal(ctx context.Context) error {
 		}
 	}
 	var failures []error
-	for key, target := range targets {
+	// Sorted so a recurring joined failure reads identically each pass (see changeLog).
+	for _, key := range slices.Sorted(maps.Keys(targets)) {
+		target := targets[key]
 		if err = h.Store.WithBinding(ctx, key, func() error {
 			present, err := terminalPresent(ctx, h.Client.HerdrSocket, target.TerminalID)
 			if err != nil || present {
@@ -168,7 +173,8 @@ func (h *HostOperations) leaveBinding(ctx context.Context, binding Binding) erro
 		}
 		return fail(err)
 	}
-	if meta.Status == "left" {
+	// An exited adapter (e.g. after its room stopped) removes its socket; leave can never succeed.
+	if _, err := os.Stat(runtime.ParticipantSocketPath(p, binding.RoomID, binding.ParticipantName)); meta.Status == "left" || errors.Is(err, os.ErrNotExist) {
 		binding.Status, binding.CleanupStatus, binding.CleanupError = "left", "complete", ""
 		return h.Store.saveBinding(binding)
 	}
@@ -324,7 +330,8 @@ func (b *Broker) ReconcileTerminals(ctx context.Context) error {
 	if err != nil {
 		return errors.Join(append(failures, err)...)
 	}
-	for _, peer := range state.Peers {
+	for _, id := range slices.Sorted(maps.Keys(state.Peers)) {
+		peer := state.Peers[id]
 		if !peer.Machine.Enabled {
 			continue
 		}

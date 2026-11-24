@@ -93,7 +93,8 @@ func TestReconcileTerminalIgnoresForeignRecords(t *testing.T) {
 func TestReconcileTerminalLeavesOnlyGoneTerminalParticipant(t *testing.T) {
 	h, req, root := brokerFixture(t)
 	binding := Binding{RoomID: req.RoomID, Target: req.Target, SessionID: "psn_original", ParticipantName: "owned", StateDir: root, JoinPhase: "complete", JoinRequestID: req.ID, Status: "online"}
-	originalFixture(t, root, binding, false)
+	originalFixture(t, root, binding, true)
+	left := false
 	if err := h.Store.saveBinding(binding); err != nil {
 		t.Fatal(err)
 	}
@@ -121,14 +122,15 @@ func TestReconcileTerminalLeavesOnlyGoneTerminalParticipant(t *testing.T) {
 		if err = store.SaveMeta(meta); err != nil {
 			return nil, err
 		}
+		left = true
 		return []byte(`{"status":"left"}`), nil
 	}
 	if err := h.ReconcileTerminal(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	got, err := h.Store.Binding(HostBindingKey(binding.RoomID, binding.Target))
-	if err != nil || got.Status != "left" || got.CleanupError != "" {
-		t.Fatalf("binding after cleanup = %#v, %v", got, err)
+	if err != nil || got.Status != "left" || got.CleanupError != "" || !left {
+		t.Fatalf("binding after cleanup = %#v, left=%v, %v", got, left, err)
 	}
 	got, err = h.Store.Binding(HostBindingKey(foreign.RoomID, foreign.Target))
 	if err != nil || got != foreign {
@@ -160,6 +162,29 @@ func TestReconcileTerminalAcceptsManualLeave(t *testing.T) {
 	got, err := h.Store.Binding(HostBindingKey(binding.RoomID, binding.Target))
 	if err != nil || got.Status != "left" || got.CleanupError != "" || calls != 0 {
 		t.Fatalf("manual leave not reconciled: %#v, calls=%d, err=%v", got, calls, err)
+	}
+}
+
+// A participant whose adapter already exited (e.g. its room stopped) has nothing
+// left to leave; cleanup must complete instead of retrying forever.
+func TestReconcileTerminalCompletesExitedAdapter(t *testing.T) {
+	h, req, root := brokerFixture(t)
+	binding := Binding{RoomID: req.RoomID, Target: req.Target, SessionID: "psn_original", ParticipantName: "owned", StateDir: root, JoinPhase: "complete", JoinRequestID: req.ID, Status: "online"}
+	originalFixture(t, root, binding, false)
+	if err := h.Store.saveBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) {
+		calls++
+		return nil, fmt.Errorf("host process: exit status 1: adapter_not_running: participant adapter socket is not available")
+	}
+	if err := h.ReconcileTerminal(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := h.Store.Binding(HostBindingKey(binding.RoomID, binding.Target))
+	if err != nil || got.Status != "left" || got.CleanupStatus != "complete" || got.CleanupError != "" || calls != 0 {
+		t.Fatalf("exited adapter cleanup = %#v, calls=%d, err=%v", got, calls, err)
 	}
 }
 
