@@ -165,13 +165,16 @@ func TestReconcileTerminalAcceptsManualLeave(t *testing.T) {
 	}
 }
 
-// A participant whose adapter already exited (e.g. its room stopped) has nothing
-// left to leave; cleanup must complete instead of retrying forever.
-func TestReconcileTerminalCompletesExitedAdapter(t *testing.T) {
+// A participant of a stopped room has nothing left to leave; cleanup must complete
+// instead of retrying forever.
+func TestReconcileTerminalCompletesParticipantOfClosedRoom(t *testing.T) {
 	h, req, root := brokerFixture(t)
-	binding := Binding{RoomID: req.RoomID, Target: req.Target, SessionID: "psn_original", ParticipantName: "owned", StateDir: root, JoinPhase: "complete", JoinRequestID: req.ID, Status: "online"}
+	binding := Binding{RoomID: req.RoomID, RoomHost: &RoomHostRef{HostSessionID: "psn_host", MachineID: "local"}, Target: req.Target, SessionID: "psn_original", ParticipantName: "owned", StateDir: root, JoinPhase: "complete", JoinRequestID: req.ID, Status: "online"}
 	originalFixture(t, root, binding, false)
 	if err := h.Store.saveBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Store.saveRoom(Room{ID: req.RoomID, HostSessionID: "psn_host", Closed: true}); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
@@ -184,7 +187,46 @@ func TestReconcileTerminalCompletesExitedAdapter(t *testing.T) {
 	}
 	got, err := h.Store.Binding(HostBindingKey(binding.RoomID, binding.Target))
 	if err != nil || got.Status != "left" || got.CleanupStatus != "complete" || got.CleanupError != "" || calls != 0 {
-		t.Fatalf("exited adapter cleanup = %#v, calls=%d, err=%v", got, calls, err)
+		t.Fatalf("closed-room participant cleanup = %#v, calls=%d, err=%v", got, calls, err)
+	}
+}
+
+// An offline adapter (SSH loss, reboot) in a live room keeps its binding so the
+// original participant identity and cursor survive for recovery.
+func TestReconcileTerminalPreservesOfflineParticipantOfLiveRoom(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		room *Room
+	}{
+		{"no room record", nil},
+		{"open room", &Room{ID: "room-a", HostSessionID: "psn_host"}},
+		{"closed replacement room", &Room{ID: "room-a", HostSessionID: "psn_other", Closed: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, req, root := brokerFixture(t)
+			binding := Binding{RoomID: req.RoomID, RoomHost: &RoomHostRef{HostSessionID: "psn_host", MachineID: "local"}, Target: req.Target, SessionID: "psn_original", ParticipantName: "owned", StateDir: root, JoinPhase: "complete", JoinRequestID: req.ID, Status: "online"}
+			originalFixture(t, root, binding, false)
+			if err := h.Store.saveBinding(binding); err != nil {
+				t.Fatal(err)
+			}
+			if tc.room != nil {
+				room := *tc.room
+				room.ID = req.RoomID
+				if err := h.Store.saveRoom(room); err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) {
+				return nil, fmt.Errorf("host process: exit status 1: adapter_not_running: participant adapter socket is not available")
+			}
+			if err := h.ReconcileTerminal(context.Background()); err == nil {
+				t.Fatal("offline participant cleanup reported success")
+			}
+			got, err := h.Store.Binding(HostBindingKey(binding.RoomID, binding.Target))
+			if err != nil || got.Status != "online" || got.CleanupStatus != "pending" {
+				t.Fatalf("offline participant binding = %#v, %v", got, err)
+			}
+		})
 	}
 }
 

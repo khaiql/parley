@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"path/filepath"
 	"slices"
 	"time"
@@ -173,8 +172,7 @@ func (h *HostOperations) leaveBinding(ctx context.Context, binding Binding) erro
 		}
 		return fail(err)
 	}
-	// An exited adapter (e.g. after its room stopped) removes its socket; leave can never succeed.
-	if _, err := os.Stat(runtime.ParticipantSocketPath(p, binding.RoomID, binding.ParticipantName)); meta.Status == "left" || errors.Is(err, os.ErrNotExist) {
+	if meta.Status == "left" || h.hostedRoomClosed(binding) {
 		binding.Status, binding.CleanupStatus, binding.CleanupError = "left", "complete", ""
 		return h.Store.saveBinding(binding)
 	}
@@ -197,6 +195,17 @@ func (h *HostOperations) leaveBinding(ctx context.Context, binding Binding) erro
 		runErr = errors.Join(runErr, decodeErr)
 	}
 	return fail(runErr)
+}
+
+// hostedRoomClosed reports whether this host's own record of the binding's room
+// incarnation is closed. A stopped room can never be left or rejoined, unlike an
+// adapter that is merely offline after SSH loss or a reboot.
+func (h *HostOperations) hostedRoomClosed(binding Binding) bool {
+	if binding.RoomHost == nil || binding.RoomHost.HostSessionID == "" {
+		return false
+	}
+	room, err := h.Store.Room(binding.RoomID)
+	return err == nil && room.Closed && room.HostSessionID == binding.RoomHost.HostSessionID
 }
 
 func (h *HostOperations) stopRoom(ctx context.Context, room Room) error {
