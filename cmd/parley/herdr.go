@@ -18,13 +18,9 @@ import (
 )
 
 func nativeClient() (*herdr.Client, error) {
-	binary := os.Getenv("HERDR_BIN_PATH")
-	if binary == "" {
-		var err error
-		binary, err = exec.LookPath("herdr")
-		if err != nil {
-			return nil, err
-		}
+	binary, err := herdr.LocateHerdr(context.Background())
+	if err != nil {
+		return nil, err
 	}
 	parley, err := os.Executable()
 	if err != nil {

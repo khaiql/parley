@@ -264,6 +264,7 @@ func nativeActionFixture(t *testing.T, mode string) <-chan nativeActionFrame {
 	if mode == "helper" {
 		t.Setenv("HERDR_BIN_PATH", "")
 		t.Setenv("PATH", root+"/missing")
+		t.Setenv("HOME", root) // Hide a real ~/.local/bin/herdr from the fallback lookup.
 	}
 	return frames
 }
