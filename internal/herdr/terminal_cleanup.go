@@ -172,7 +172,7 @@ func (h *HostOperations) leaveBinding(ctx context.Context, binding Binding) erro
 		}
 		return fail(err)
 	}
-	if meta.Status == "left" || h.hostedRoomClosed(binding) {
+	if meta.Status == "left" {
 		binding.Status, binding.CleanupStatus, binding.CleanupError = "left", "complete", ""
 		return h.Store.saveBinding(binding)
 	}
@@ -182,7 +182,10 @@ func (h *HostOperations) leaveBinding(ctx context.Context, binding Binding) erro
 		Error  *apiError `json:"error"`
 	}
 	decodeErr := json.Unmarshal(data, &result)
-	if runErr == nil && decodeErr == nil && result.Error == nil && result.Status == "left" {
+	// A failed leave still completes cleanup when the room is closed: it can never be
+	// left or rejoined, so retrying would loop forever.
+	left := runErr == nil && decodeErr == nil && result.Error == nil && result.Status == "left"
+	if left || h.hostedRoomClosed(binding) {
 		binding.Status, binding.CleanupStatus, binding.CleanupError = "left", "complete", ""
 		return h.Store.saveBinding(binding)
 	}

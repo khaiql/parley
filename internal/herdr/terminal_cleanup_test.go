@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/khaiql/parley/internal/eventlog"
@@ -177,17 +178,21 @@ func TestReconcileTerminalCompletesParticipantOfClosedRoom(t *testing.T) {
 	if err := h.Store.saveRoom(Room{ID: req.RoomID, HostSessionID: "psn_host", Closed: true}); err != nil {
 		t.Fatal(err)
 	}
-	calls := 0
-	h.Client.Run = func(context.Context, string, []string, []byte) ([]byte, error) {
-		calls++
+	var leaves []string
+	h.Client.Run = func(_ context.Context, _ string, args []string, _ []byte) ([]byte, error) {
+		leaves = append(leaves, strings.Join(args, " "))
 		return nil, fmt.Errorf("host process: exit status 1: adapter_not_running: participant adapter socket is not available")
 	}
 	if err := h.ReconcileTerminal(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	got, err := h.Store.Binding(HostBindingKey(binding.RoomID, binding.Target))
-	if err != nil || got.Status != "left" || got.CleanupStatus != "complete" || got.CleanupError != "" || calls != 0 {
-		t.Fatalf("closed-room participant cleanup = %#v, calls=%d, err=%v", got, calls, err)
+	if err != nil || got.Status != "left" || got.CleanupStatus != "complete" || got.CleanupError != "" {
+		t.Fatalf("closed-room participant cleanup = %#v, err=%v", got, err)
+	}
+	// Leave is still tried first so an adapter that is somehow alive is stopped, not orphaned.
+	if len(leaves) != 1 || !strings.Contains(leaves[0], "leave --session psn_original") {
+		t.Fatalf("closed-room cleanup leave attempts = %q", leaves)
 	}
 }
 
