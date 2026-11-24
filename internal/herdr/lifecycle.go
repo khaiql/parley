@@ -303,11 +303,20 @@ func (l *changeLog) report(key string, err error) {
 	fmt.Fprintln(l.w, key+":", message)
 }
 
+// forget drops a failure without logging recovery, for failures that became moot.
+func (l *changeLog) forget(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.last, key)
+}
+
 // Report once per failure until recovery, while retrying notifications Herdr could not show.
 func reportPeerFailure(ctx context.Context, c *Client, logs *changeLog, failures map[string]string, machine Machine, cause error) {
 	key := "peer " + machine.ID
 	if cause == nil {
 		logs.report(key, nil)
+		// The outage notification is moot once the peer is back; a later outage logs its own.
+		logs.forget("notification " + key)
 		delete(failures, machine.ID)
 		return
 	}

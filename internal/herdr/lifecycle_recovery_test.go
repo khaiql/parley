@@ -349,3 +349,21 @@ func TestChangeLogReportsOnlyTransitions(t *testing.T) {
 		t.Fatalf("log =\n%s\nwant\n%s", out.String(), want)
 	}
 }
+
+func TestPeerRecoveryForgetsUndeliveredNotification(t *testing.T) {
+	var out bytes.Buffer
+	logs := &changeLog{w: &out}
+	client := &Client{HerdrSocket: filepath.Join(t.TempDir(), "missing.sock")}
+	machine := Machine{ID: "peer", Target: "work-alias", Session: "default"}
+	failures := map[string]string{}
+	cause := fmt.Errorf("Permission denied (publickey).")
+	reportPeerFailure(context.Background(), client, logs, failures, machine, cause)
+	reportPeerFailure(context.Background(), client, logs, failures, machine, nil)
+	reportPeerFailure(context.Background(), client, logs, failures, machine, cause)
+	if n := strings.Count(out.String(), "notification peer peer:"); n != 2 {
+		t.Fatalf("undelivered notification logged %d times across two outages:\n%s", n, out.String())
+	}
+	if strings.Contains(out.String(), "notification peer peer: recovered") {
+		t.Fatalf("notification reported recovered though it was never shown:\n%s", out.String())
+	}
+}
